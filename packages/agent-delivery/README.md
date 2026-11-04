@@ -124,75 +124,75 @@ receipt. Exact runtime evidence and platform limits are in `VALIDATION.md`.
 
 ### Codex hook + Stop queue
 
-The independent hook leaf is `@astrosheep/agent-delivery/codex-hook`:
+The independent leaf is `@astrosheep/agent-delivery/codex-hook`:
 
 ```js
-import { createCodexBoundaryStore, handleCodexHook } from '@astrosheep/agent-delivery/codex-hook'
+import { createCodexBoundaryStore, handleCodexHook, codexIdleAtStop } from '@astrosheep/agent-delivery/codex-hook'
 
 const boundaries = createCodexBoundaryStore('/private/your-host/codex-boundaries.json')
 const result = await handleCodexHook(inputFromCodex, {
   boundaries,
-  pull: async (sessionId, signal) => takePendingText(sessionId, signal),
-  sweep: async (cwd, deadline, signal) => dispatchPending(deadline, signal),
+  pull: async (sessionId, signal, event) => takePendingText(sessionId, signal, event),
+  interrupt: async (sessionId, signal) => cancelCapturedBatch(sessionId, signal),
 })
-// Write result as one JSON line to the hook's stdout only when defined.
+// Write a defined result as one JSON line. A host with its own output sink must
+// accept that output before it records presentation evidence.
 ```
 
-`inputFromCodex`, `takePendingText` and `dispatchPending` belong to the host:
-the package does not create an inbox, invent message text, or acknowledge host
-business records. Install the host's command for `SessionStart`, `SessionResume`,
-`UserPromptSubmit`, `SessionEnd`, `PostToolUse` and `Stop`. Only `PostToolUse`
-pulls text into `additionalContext`; Stop records queue eligibility and asks the
-host to sweep. Start/resume/new prompts clear Stop eligibility; end records an
-ended marker, blocking queue even if a late Stop/tool callback arrives. Only a
-new start/resume reopens it. The hook's cancellation budget defaults to 4.5 seconds;
-callbacks receive its abort signal. Before presenting or sending, hosts must honor
-cancellation and release uncommitted claims. `pull` is cooperatively awaited, not
-raced against that budget: once a host has presented, it must finish any
-cancellation-independent evidence settlement and return the associated text even
-if the signal aborts meanwhile. Otherwise it should resolve `undefined` or reject
-after cancelling its uncommitted work. A `pull` that ignores cancellation can hold
-the hook open; hosts must leave enough time for settlement within the harness's
-external hook timeout. The handler never abandons an in-flight pull and discards
-its committed output. Sweeps remain bounded by the hook budget, are skipped after
-expiry, and cannot erase a successful pull's response.
+Install synchronous SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop,
+Interrupt and SessionEnd handlers. Only the three active prompt/tool boundaries
+pull text into event-correct `additionalContext`. Stop requires `turn_id` and
+records a unique `{token, turnId}` epoch; it never sweeps or sends. Active and
+lifecycle events disarm. End blocks late callbacks until a new SessionStart.
+SessionResume is not a verified 0.166.0 hook and is not supported as coverage.
+Old or malformed boundary files cannot authorize a queue.
 
-For still-pending work, bind that lifecycle source at connection time:
+The host owns pending cards, attachment generation, claims, cancellation,
+observation and any native async Stop watcher. The package invents no session,
+inbox or daemon. The synchronous handler defaults to a 4.5-second cooperative
+budget. `pull` is awaited through post-effect settlement even if cancellation
+arrives later; do not discard a real presentation or rewrite it as unsent.
+
+For idle delivery, capture the current epoch and use
+`codexIdleAtStop({harness:'codex',sessionId,endpoint,codexHome,signal,timeoutMs}, epoch.turnId)`.
+It uses the existing app-server connection and live `thread/read(includeTurns:true)`
+to require idle plus the exact newest completed turn. Newest-last ordering is
+verified for native 0.166.0 only; an unsupported server version, unavailable
+endpoint or unverifiable history returns false. This is a read, never a turn
+start, resume or queue operation. Recheck after acquiring custody, then exact
+epoch equality via `boundaries.queueEligible(sessionId, epoch)` and the host's
+final generation/cancellation/suppression fence immediately before invoking queue.
 
 ```js
 import { connect } from '@astrosheep/agent-delivery'
 const agent = await connect({
-  harness: 'codex', transport: 'cli', sessionId: threadId, boundaries,
-  codexHome: '/recipient/.codex',
+  harness: 'codex', transport: 'cli', sessionId: threadId,
+  boundaries: { queueEligible: async id =>
+    await codexIdleAtStop({ harness: 'codex', sessionId: id, endpoint }, epoch.turnId) &&
+    await boundaries.queueEligible(id, epoch) && await claimStillCurrent() },
+  codexHome: '/recipient/.codex', endpoint,
 })
 await agent.queue('Exact input', { timeoutMs: 5000 })
 ```
 
-`boundaries` can be the shared file store or a host-owned object implementing
-`queueEligible(sessionId): Promise<boolean>`. The client binds it once and checks
-it exactly once inside each `queue()`, before launching a child. The host still
-owns its business currentness/claim gate; it does not manually repeat the
-lifecycle check. An ended, unknown or non-Stop session rejects with
-`DeliveryError('session_inactive')`, known-unsent. `connect()` only binds CLI
-coordinates locally; unlike app-server connect it does not probe thread existence
-or launch a process. The hook source establishes lifecycle eligibility, not
-proof of current native ownership.
+The CLI binds `queueEligible` once and calls it just before each child launch.
+Hosts must provide their final custody fence there; a boundary boolean alone
+cannot prove native idle. `connect()` only binds CLI coordinates locally. An
+ineligible source rejects known-unsent with `DeliveryError('session_inactive')`.
+By default this standalone CLI leaf permits normal native connection/startup;
+only explicit `endpoint` adds `--remote`. Receiver watchers should specify the
+already-hosting endpoint. `codexHome`, `bin`, `args` and `env` are captured at
+connection time. CLI has queue only; receipt ids are local correlation, not
+native message ids or idempotency keys.
 
-By default the CLI uses its normal connection/startup behavior; only explicit
-`endpoint` adds `--remote`. `codexHome` (otherwise captured `CODEX_HOME`/home),
-`bin`, `args` and `env` configure the bound child. CLI clients expose `queue`
-only. Successful queue returns `{ id, proof: 'admitted' }`; its id is local attempt
-correlation, not a native message id or idempotency key. A post-launch timeout,
-abort or unexplained exit is `DeliveryError` with `maybeDelivered: true`, never an
-automatic retry. The CLI runs asynchronously so abort can terminate a pending
-child. A previously launched input cannot be retracted by a later SessionEnd.
-The low-level CLI sender is internal, not another public sending interface.
-
-Use one host-owned pending/claim path for pull and queue, rather than submitting
-the same work through both. Without a tool boundary, a busy receiver must wait
-until Stop; this mechanism is not immediate native steer. Square uses these same
-leaves and retains only its activity selection, rendering, cancellation and
-membership policy. No Square dependency is required by another host.
+A successful queue proves admission, never presentation. After child launch,
+timeout, abort and unexplained exit are unknown and cannot be blindly retried.
+Cancellation can terminate the child but cannot recall an admitted input. Native
+idle reads and external queue are not atomic: a new turn may begin between the
+last check and RPC. A host-owned watcher also needs explicit recovery policy:
+Square starts observation at first Stop with a finite 86400-second native async
+budget, and after crash/timeout while otherwise idle cards wait for another
+native boundary. No producer fallback restores that coverage.
 
 ### OpenCode
 

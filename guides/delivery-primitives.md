@@ -32,10 +32,14 @@ corresponding ledger card where possible. Cancellation suppresses outstanding wo
 recall an external send already past its final check. The ledger has no metadata matching or deferral
 API; producer-owned leases and exact ACK are described in [square-api.md](square-api.md).
 
-Square posting, the Codex sweep and OpenCode receivers retain their original ledger connection while
+Square posting, the Codex Stop watcher and OpenCode receivers retain their original ledger connection while
 an already-invoked handoff has a pending `lateSettlement`. Timeout or cancellation returns promptly;
 the connection closes after the last captured effect settles. It holds no open SQLite transaction and
 grants no further send authority after the caller stops. An effect that never settles may retain an
 idle connection until process exit. Late persistence failures produce redacted diagnostics rather than
 reopening the ledger or retrying the effect. Pi presentation and Claude's independent exact-reference
 confirmation callbacks retain their existing lifetimes.
+
+Codex producers only post. Its native async Stop receiver observes the ledger without holding claims
+while waiting; active UserPromptSubmit, PreToolUse and PostToolUse boundaries present synchronously.
+See [Codex delivery](codex-delivery.md) for exact idle-epoch fencing, cancellation and recovery limits.

@@ -20,11 +20,16 @@ test('generated release artifacts expose the current identity and supported host
   const claudeMcp = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'claude', '.mcp.json'), 'utf8'));
   const codexPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', '.codex-plugin', 'plugin.json'), 'utf8'));
   const codexHooks = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', 'hooks', 'hooks.json'), 'utf8'));
-  for (const event of ['SessionStart', 'SessionResume', 'UserPromptSubmit', 'SessionEnd', 'PostToolUse', 'Stop']) {
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'SessionEnd', 'PostToolUse', 'Stop']) {
     const hook = codexHooks.hooks[event][0].hooks[0];
     assert.equal(hook.command, 'square codex-hook');
     assert.equal(hook.statusMessage, 'Square');
   }
+  const watch = codexHooks.hooks.Stop[0].hooks[1];
+  assert.equal(watch.command, 'square codex-watch');
+  assert.equal(watch.async, true);
+  assert.equal(watch.timeout, 86400);
+  assert.equal(codexHooks.hooks.Interrupt[0].hooks[0].command, 'square codex-interrupt');
   const paseoPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'paseo', 'paseo-plugin.json'), 'utf8'));
   const squareSkill = fs.readFileSync(path.join(root, 'skills', 'square', 'SKILL.md'), 'utf8');
   const claudeSkill = fs.readFileSync(path.join(root, 'plugins', 'claude', 'skills', 'square', 'SKILL.md'), 'utf8');
@@ -133,6 +138,7 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
     'plugins/codex/.codex-plugin/plugin.json',
     'plugins/codex/hooks/hooks.json',
     'dist/codex-hook.js',
+    'dist/codex-watch.js',
     'dist/delivery-ledger.js',
     'dist/delivery-ledger.d.ts',
     'dist/codex-queue.js',
@@ -214,11 +220,11 @@ console.log(JSON.stringify(await sendNativeText(target,'packed native',{inputId:
   fs.writeFileSync(path.join(fixture, 'codex.mjs'), `import {connect} from './package/${entryPath}';
 import {createCodexBoundaryStore,handleCodexHook} from './package/dist/packages/agent-delivery/src/codex-hook.js';
 const boundaries=createCodexBoundaryStore('./codex-boundaries.json');
-await handleCodexHook({session_id:'root-packed-codex',hook_event_name:'Stop'},{boundaries});
+await handleCodexHook({session_id:'root-packed-codex',hook_event_name:'Stop',turn_id:'first'},{boundaries});
 const eligible=await boundaries.queueEligible('root-packed-codex');
 const hook=await handleCodexHook({session_id:'root-packed-codex',hook_event_name:'PostToolUse'},{boundaries,pull:async()=>'/packed Codex 字'});
 const stillEligible=await boundaries.queueEligible('root-packed-codex');
-await handleCodexHook({session_id:'root-packed-codex',hook_event_name:'Stop'},{boundaries});
+await handleCodexHook({session_id:'root-packed-codex',hook_event_name:'Stop',turn_id:'second'},{boundaries});
 const cli=await connect({harness:'codex',transport:'cli',sessionId:'root-packed-codex',boundaries,bin:process.execPath,args:['./queue.cjs'],codexHome:process.cwd()});
 const receipt=await cli.queue('/packed CLI 字');
 await handleCodexHook({session_id:'root-packed-codex',hook_event_name:'SessionEnd'},{boundaries});

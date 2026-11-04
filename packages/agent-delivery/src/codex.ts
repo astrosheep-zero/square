@@ -129,6 +129,7 @@ class Peer {
       !isIdentity(result.platformFamily) || !isIdentity(result.platformOs)) throw new Fault('invalid_response')
     scope.check()
     this.socket.send(JSON.stringify({ method: 'initialized' }))
+    return result.userAgent
   }
 
   call(method: string, params: unknown, scope: Scope, dispatch?: () => void): Promise<unknown> {
@@ -216,9 +217,7 @@ async function discoverTurn(peer: Peer, metadata: Record<string, unknown>, sessi
   }
 }
 
-/** Address an existing thread on an already running app-server. Never starts a
- * service, resumes a thread, or claims ownership of a standalone CLI session. */
-export async function connectCodex(options: CodexAppServerConnectOptions): Promise<CodexTarget> {
+function validatedConnection(options: CodexAppServerConnectOptions): Connection {
   if (!isRecord(options) || options.harness !== 'codex' ||
     (options.transport !== undefined && options.transport !== 'app-server') || !isIdentity(options.sessionId) ||
     !validTimeout(options.timeoutMs) || !validSignal(options.signal) ||
@@ -227,7 +226,37 @@ export async function connectCodex(options: CodexAppServerConnectOptions): Promi
     (options.token !== undefined && (!isIdentity(options.token) || /[\r\n]/.test(options.token)))) {
     throw new ConnectionError('invalid_arguments')
   }
-  const connection = resolveConnection(options)
+  return resolveConnection(options)
+}
+
+/** Newest-last live history is verified for Codex 0.166.0 only. A sampled read
+ * cannot make a later external queue atomic with native turn starts. */
+export async function codexIdleAtStop(options: CodexAppServerConnectOptions, turnId: string): Promise<boolean> {
+  const connection = validatedConnection(options)
+  if (!isIdentity(turnId)) return false
+  const scope = deadline(options.timeoutMs, options.signal)
+  let peer: Peer | undefined
+  try {
+    peer = await open(connection, scope)
+    const version = await peer.initialize(scope)
+    // The app-server's originator prefix belongs to the hosting client, which
+    // may have initialized before this connection. Fence the native version.
+    if (!/^[A-Za-z0-9._-]+\/0\.166\.0(?:\s|$)/.test(version)) return false
+    const thread = await readThread(peer, options.sessionId, scope, true)
+    if (!isRecord(thread.status) || thread.status.type !== 'idle' || !Array.isArray(thread.turns) || !thread.turns.length) return false
+    // Validate the whole live list, including absence of an active turn; never
+    // fall back to persisted pages or a boolean boundary for missing history.
+    if (activeTurn(thread.turns) !== undefined || new Set(thread.turns.map(turn => turn.id)).size !== thread.turns.length) return false
+    const newest = thread.turns.at(-1)
+    return newest.id === turnId && newest.status === 'completed'
+  } catch { return false }
+  finally { scope.close(); await peer?.close() }
+}
+
+/** Address an existing thread on an already running app-server. Never starts a
+ * service, resumes a thread, or claims ownership of a standalone CLI session. */
+export async function connectCodex(options: CodexAppServerConnectOptions): Promise<CodexTarget> {
+  const connection = validatedConnection(options)
   const scope = deadline(options.timeoutMs, options.signal)
   let peer: Peer | undefined
   try {

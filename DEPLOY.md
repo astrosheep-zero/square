@@ -9,6 +9,7 @@ an existing local Square package is already configured; that source is preserved
 - For Claude native inbox delivery: macOS Claude Code, with the
   Square mod actually loaded in a trusted/approved interactive terminal
 - OpenCode 1.x uses the separate legacy plugin; native proactive delivery requires 1.15.11 or newer and a runtime supporting Square's SQLite API. OpenCode 2.x uses the separate v2 server plugin.
+- Codex proactive delivery: native 0.166.0 with hooks enabled and an accessible hosting app-server endpoint. Active prompt/tool boundaries present synchronously; one native async Stop hook observes idle cards. See [Codex delivery](guides/codex-delivery.md) for finite observation, interruption and recovery limits.
 - Node.js 22.16.0 or later within the 22.x line, or 24.0.0 or later
 
 ## Steps

@@ -77,12 +77,16 @@ import { createPiReceiver, sendPiMessage, type PiReceiverAPI } from '@astrosheep
 const pi = {} as PiReceiverAPI;
 createPiReceiver(pi, { endpoint: '/private/p.sock' });
 sendPiMessage(pi, { customType: 'caller', content: 'exact', display: false }, { deliverAs: 'nextTurn' });
-import { createCodexBoundaryStore, handleCodexHook } from '@astrosheep/agent-delivery/codex-hook';
+import { createCodexBoundaryStore, handleCodexHook, codexIdleAtStop, type CodexStopEpoch } from '@astrosheep/agent-delivery/codex-hook';
 const boundaries = createCodexBoundaryStore('/private/host/codex-boundaries.json');
-await handleCodexHook({ session_id: 'existing-thread', hook_event_name: 'PostToolUse' }, {
-  boundaries, pull: async (id, signal) => 'host-owned pending input',
-  sweep: async (cwd, deadline, signal) => {},
+await handleCodexHook({ session_id: 'existing-thread', hook_event_name: 'PreToolUse' }, {
+  boundaries, pull: async (id, signal, event) => 'host-owned pending input',
 });
+const epoch: CodexStopEpoch | undefined = (await boundaries.read('existing-thread'))?.stop;
+if (epoch) {
+  await boundaries.queueEligible('existing-thread', epoch);
+  await codexIdleAtStop({ harness: 'codex', sessionId: 'existing-thread', endpoint: '/private/codex.sock' }, epoch.turnId);
+}
 const cli: CodexCliAgent = await connect({ harness: 'codex', transport: 'cli', sessionId: 'existing-thread', boundaries, codexHome: '/private/codex' });
 await cli.queue('text', { signal: AbortSignal.timeout(1000) });
 const either: CodexAgent = cli;
@@ -93,9 +97,9 @@ await cli.queue('text', { id: 'caller-id' });
 // @ts-expect-error CLI must bind its lifecycle source at connect time
 await connect({ harness: 'codex', transport: 'cli', sessionId: 'existing-thread' });
 `)
-  await exec(process.execPath, [join(packageRoot, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict',
+  await exec(process.execPath, [fileURLToPath(import.meta.resolve('typescript/bin/tsc')), '--noEmit', '--strict',
     '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2023',
-    '--typeRoots', join(packageRoot, 'node_modules/@types'), 'consumer.mts'], { ...options, cwd: consumer })
+    '--typeRoots', dirname(dirname(fileURLToPath(import.meta.resolve('@types/node/package.json')))), 'consumer.mts'], { ...options, cwd: consumer })
 
   const f = await fixture(t)
   await writeFile(join(consumer, 'consumer.mjs'), `import { connect, DeliveryError } from '@astrosheep/agent-delivery';
@@ -180,12 +184,12 @@ const agent = await connect({ harness: 'codex', sessionId: 'external-codex', end
 const steered = await agent.steer('/packed native 字');
 const queued = await agent.queue('packed queue');
 const boundaries = createCodexBoundaryStore('./boundaries.json');
-await handleCodexHook({ session_id: 'external-codex', hook_event_name: 'Stop' }, { boundaries });
+await handleCodexHook({ session_id: 'external-codex', hook_event_name: 'Stop', turn_id: 'first' }, { boundaries });
 const eligible = await boundaries.queueEligible('external-codex');
 const hook = await handleCodexHook({ session_id: 'external-codex', hook_event_name: 'PostToolUse' }, {
   boundaries, pull: async () => 'packed host input',
 });
-await handleCodexHook({ session_id: 'external-codex', hook_event_name: 'Stop' }, { boundaries });
+await handleCodexHook({ session_id: 'external-codex', hook_event_name: 'Stop', turn_id: 'second' }, { boundaries });
 const cli = await connect({ harness: 'codex', transport: 'cli', sessionId: 'external-codex', boundaries,
   bin: process.execPath, args: ['./queue.cjs'], codexHome: process.cwd() });
 const cliReceipt = await cli.queue('packed CLI 字');

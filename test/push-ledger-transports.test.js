@@ -11,9 +11,6 @@ import { renderDeliveryReminder } from '../dist/delivery-frame.js';
 import { attachDeliverySession, attachDeliverySessionRoutes, detachDeliverySession, markDeliverySessionDeleted } from '../dist/session-lifecycle.js';
 import { HttpWakeTransport } from '../dist/http-delivery.js';
 import { createClaudeWakeTransport, hashPayload } from '../dist/claude-transport.js';
-import { CodexQueueTransport } from '../dist/codex-queue.js';
-import { recordCodexBoundary } from '../dist/codex-boundary-state.js';
-import { connect } from '../dist/packages/agent-delivery/src/index.js';
 import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
 
 const owner = 'test:push';
@@ -49,38 +46,6 @@ test('HTTP accepted is custody only and card fields are producer-neutral', async
   assert.equal(result.outcome, 'accepted');
   assert.deepEqual(body, { owner, key: card.key, text: card.text });
   assert.deepEqual(await ledger.receipts(owner), []);
-});
-
-test('Codex only queues at a Stop boundary and acceptance is custody, not a receipt', async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'push-codex-'));
-  const ledger = await DeliveryLedger.open({ location: path.join(dir, 'ledger.sqlite') });
-  t.after(async () => { await ledger.close(); await fs.rm(dir, { recursive: true, force: true }); });
-  const env = { ...process.env, SQUARE_CODEX_BOUNDARIES: path.join(dir, 'boundaries.json') };
-  const output = path.join(dir, 'queue.json');
-  const script = path.join(dir, 'queue.cjs');
-  await fs.writeFile(script, `require('node:fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify(process.argv.slice(2)))`);
-  const route = { kind: 'codex-queue', address: { threadId: 'thread-a' } };
-  const session = await ledger.attach({ owner, expectedGeneration: null, routes: [route] });
-  await ledger.post({ owner, key: card.key, text: card.text });
-  const transport = new CodexQueueTransport({ env, connect: options => connect({ ...options, bin: process.execPath, args: [script] }) });
-  const dispatch = () => ledger.dispatchHandoff(owner, card.key, transport, { generation: session.generation, timeoutMs: 2000 });
-  assert.equal((await dispatch()).outcome, 'failed');
-  await assert.rejects(fs.access(output));
-  await recordCodexBoundary('thread-a', 'Stop', env);
-  assert.equal((await dispatch()).outcome, 'accepted');
-  assert.deepEqual(JSON.parse(await fs.readFile(output, 'utf8')), ['queue', '--thread', 'thread-a', '--message', renderDeliveryReminder([card.text], { tagged: true })]);
-  assert.deepEqual(await ledger.receipts(owner), []);
-  await fs.unlink(output);
-  await ledger.post({ owner, key: 'producer:two', text: card.text });
-  const detachedDuringBoundary = new CodexQueueTransport({ env, connect: options => connect({ ...options,
-    bin: process.execPath, args: [script], boundaries: { queueEligible: async id => {
-      await ledger.detach({ owner, generation: session.generation });
-      return options.boundaries.queueEligible(id);
-    } },
-  }) });
-  const fenced = await ledger.dispatchHandoff(owner, 'producer:two', detachedDuringBoundary, { generation: session.generation, timeoutMs: 2000 });
-  assert.notEqual(fenced.outcome, 'accepted');
-  await assert.rejects(fs.access(output));
 });
 
 test('HTTP unknown after a lost acknowledgement never automatically replays', async t => {

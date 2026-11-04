@@ -69,6 +69,8 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Options:', '  --for-owner <id>    Required opaque owner.', '  --limit <N>         Snapshot memberships (default 20, maximum 100).'],
   },
   { names: ['codex-hook'], usage: '{command}', summary: 'Present pending attention at one native agent boundary.', hiddenFromIndex: true },
+  { names: ['codex-watch'], usage: '{command}', summary: 'Observe pending attention from a native async Stop hook.', hiddenFromIndex: true },
+  { names: ['codex-interrupt'], usage: '{command}', summary: 'Cancel pending attention at a native Interrupt boundary.', hiddenFromIndex: true },
   { names: ['claude-mod'], usage: '{command}', summary: 'Receive a structured operation from the loaded Claude mod.', hiddenFromIndex: true },
   {
     names: ['history'], usage: 'history [filters] [output]', usesSquare: true, group: 'participant',

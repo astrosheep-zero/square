@@ -61,7 +61,7 @@ test('CLI connects once and exposes only queue, with one lifecycle check per sen
 test('the bound hook lifecycle blocks SessionEnd and late Stop without caller-side checks', async () => {
   const f = await fixture()
   const agent = await connect(f.options)
-  const hook = (event) => handleCodexHook({ session_id: 'target', hook_event_name: event }, { boundaries: f.boundaries })
+  const hook = (event) => handleCodexHook({ session_id: 'target', hook_event_name: event, turn_id: 'turn-1' }, { boundaries: f.boundaries })
   await assert.rejects(agent.queue('not stopped'), rejected('session_inactive'))
   await hook('Stop')
   await agent.queue('first')
@@ -70,7 +70,7 @@ test('the bound hook lifecycle blocks SessionEnd and late Stop without caller-si
   await hook('Stop')
   await assert.rejects(agent.queue('late Stop'), rejected('session_inactive'))
   assert.equal((await f.calls()).length, 1)
-  await hook('SessionResume')
+  await hook('SessionStart')
   await hook('Stop')
   await agent.queue('resumed')
   assert.equal((await f.calls()).length, 2)
@@ -101,7 +101,7 @@ test('lifecycle waits are bounded and fail known-unsent; a dead executable is al
   await assert.rejects(stalled.queue('private', { timeoutMs: 40 }), rejected('timeout'))
   const broken = await connect({ ...f.options, boundaries: { queueEligible: async () => { throw new Error('secret path') } } })
   await assert.rejects(broken.queue('private'), rejected('unavailable'))
-  await f.boundaries.record('target', 'Stop')
+  await f.boundaries.record('target', 'Stop', { turnId: 'turn-1' })
   const absent = await connect({ ...f.options, bin: join(f.root, 'absent') })
   await assert.rejects(absent.queue('private'), rejected('unavailable'))
   assert.deepEqual(await f.calls(), [])
@@ -109,7 +109,7 @@ test('lifecycle waits are bounded and fail known-unsent; a dead executable is al
 
 test('postlaunch timeout and abort are unknown, terminate the child and never retry', async () => {
   const f = await fixture()
-  await f.boundaries.record('target', 'Stop')
+  await f.boundaries.record('target', 'Stop', { turnId: 'turn-1' })
   await writeFile(f.child, "require('node:fs').appendFileSync(process.env.CAPTURE,'{}\\n');setInterval(()=>{},1000)")
   const agent = await connect(f.options)
   await assert.rejects(agent.queue('private', { timeoutMs: 500 }), rejected('timeout', true))

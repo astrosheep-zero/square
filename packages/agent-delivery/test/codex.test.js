@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { WebSocketServer } from 'ws'
-import { connectCodex, sendCodexText } from '../dist/codex.js'
+import { connectCodex, sendCodexText, codexIdleAtStop } from '../dist/codex.js'
 import { ConnectionError } from '../dist/errors.js'
 import { sandbox } from './sandbox-env.js'
 
@@ -364,6 +364,40 @@ test('unfinished WebSocket handshakes are bounded and destroyed on timeout or ab
       assert.equal(sockets.size, 0)
     })
   }
+})
+
+test('idle authorization requires the verified version and exact newest completed live turn', async t => {
+  let version = 'agent-delivery/0.166.0', malformed = false
+  const f = await fixture(t, { turns: [{ id: 'old', status: 'completed' }, { id: 'stop', status: 'completed' }],
+    onRequest(request, socket) {
+      if (request.method === 'initialize') {
+        result(socket, request, { ...initializeResult, userAgent: version }); return true
+      }
+      if (malformed && request.method === 'thread/read') {
+        result(socket, request, { thread: { id: sessionId, status: { type: 'idle' }, turns: [{ id: 'stop' }] } }); return true
+      }
+    },
+  })
+  const idle = id => codexIdleAtStop({ harness: 'codex', sessionId, endpoint: f.endpoint }, id)
+  assert.equal(await idle('stop'), true)
+  version = 'hosting-client/0.166.0 (Mac OS; arm64)'
+  assert.equal(await idle('stop'), true)
+  assert.equal(await idle('old'), false)
+  for (const status of ['active', 'notLoaded']) {
+    f.state.status = { type: status }
+    assert.equal(await idle('stop'), false)
+  }
+  f.state.status = { type: 'idle' }
+  f.state.turns.at(-1).status = 'interrupted'
+  assert.equal(await idle('stop'), false)
+  f.state.turns.at(-1).status = 'completed'
+  malformed = true
+  assert.equal(await idle('stop'), false)
+  malformed = false
+  version = 'agent-delivery/0.167.0'
+  assert.equal(await idle('stop'), false)
+  assert.equal(mutations(f.state).length, 0)
+  await f.drained()
 })
 
 test('one-shot caller exits without lingering WebSocket, close, or deadline timers', async (t) => {

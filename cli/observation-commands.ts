@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { once } from 'node:events';
 import { runClaudeMod } from '../claude-mod.js';
-import { runCodexHook } from '../codex-hook.js';
+import { runCodexHook, runCodexInterrupt } from '../codex-hook.js';
+import { runCodexWatch } from '../codex-watch.js';
 import { isSquareError } from '../model.js';
 import type { ActivityId, OperationError, ArchiveRecord, CatchOptions, DiscoveryResult, DiscoveryOptions, HistoryQuery, StreamStart } from '../square-facade.js';
 import {
@@ -507,3 +508,5 @@ export const codexHookCommand: CommandSpec<undefined, string> = {
   })),
   present: () => {},
 };
+export const codexWatchCommand = hookCommand(input => runCodexWatch(input, process.env));
+export const codexInterruptCommand = hookCommand(input => runCodexInterrupt(input, process.env));

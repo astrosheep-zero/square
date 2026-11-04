@@ -280,7 +280,8 @@ function moduleEdges(file, source) {
 const integrationEdges = new Map([
   ['cli/harness-command.ts -> harness.ts', ['executeHarnessTarget', 'harnessTargets']],
   ['cli/observation-commands.ts -> claude-mod.ts', ['runClaudeMod']],
-  ['cli/observation-commands.ts -> codex-hook.ts', ['runCodexHook']],
+  ['cli/observation-commands.ts -> codex-hook.ts', ['runCodexHook', 'runCodexInterrupt']],
+  ['cli/observation-commands.ts -> codex-watch.ts', ['runCodexWatch']],
   ['mcp.ts -> claude-mcp-context.ts', ['readClaudeMcpCall']],
   ['cli/ledger-command.ts -> ledger-maintenance.ts', ['gcHostLedger']],
 ]);
