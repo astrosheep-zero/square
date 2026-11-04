@@ -203,12 +203,49 @@ test('OpenCode installation adds globally once and updates even a cached fresh i
   assert.equal(fs.readFileSync(target, 'utf8'), installed);
 });
 
-test('OpenCode installation creates its global config when absent', (t) => {
+test('OpenCode installation selects the CLI major from bare and prefixed version output', (t) => {
   const { home, config } = openCodeHome(t);
-  const calls = [];
-  installOpenCodePlugin(home, false, (_home, args) => { calls.push(args); return { status: 0, stdout: args[0] === '--version' ? '2.0.20' : '', stderr: '' }; });
-  assert.deepEqual(calls, [['--version'], ['plugin', 'add', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square']]);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(config, 'opencode.json'), 'utf8')), { plugins: ['@astrosheep/square'] });
+  const target = path.join(config, 'opencode.json');
+  for (const [version, major] of [
+    ['1.19.5', 1], ['opencode v1.19.5', 1],
+    ['2.0.20', 2], ['v2.0.20', 2], ['opencode 2.0.20', 2],
+    ['opencode v2.0.20\n', 2], ['opencode v2.1.0-rc.1+build.2', 2],
+  ]) {
+    const calls = [];
+    installOpenCodePlugin(home, false, (_home, args) => {
+      calls.push(args);
+      return { status: 0, stdout: args[0] === '--version' ? version : '', stderr: '' };
+    });
+    assert.deepEqual(calls, major === 1 ? [['--version']]
+      : [['--version'], ['plugin', 'add', '@astrosheep/square'], ['plugin', 'update', '@astrosheep/square']], version);
+    assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), major === 1
+      ? { plugin: [new URL('../dist/plugins/opencode-v1/index.js', import.meta.url).href] }
+      : { plugins: ['@astrosheep/square'] }, version);
+    fs.rmSync(target);
+  }
+});
+
+test('OpenCode installation distinguishes unknown output from an unsupported major before changing configuration', (t) => {
+  const { home, config } = openCodeHome(t);
+  const target = path.join(config, 'opencode.json');
+  const source = '{"plugins":["other"],"model":"provider/model"}';
+  fs.writeFileSync(target, source);
+  for (const [version, diagnostic] of [
+    ['', /Could not determine OpenCode version/],
+    ['nightly', /Could not determine OpenCode version/],
+    ['other v2.0.20', /Could not determine OpenCode version/],
+    ['warning: requires 2.0.20', /Could not determine OpenCode version/],
+    ['opencode v2.0.20\nupdate available', /Could not determine OpenCode version/],
+    ['opencode v3.0.0', /Unsupported OpenCode version/],
+  ]) {
+    const calls = [];
+    assert.throws(() => installOpenCodePlugin(home, false, (_home, args) => {
+      calls.push(args);
+      return { status: 0, stdout: version, stderr: '' };
+    }), diagnostic, version);
+    assert.deepEqual(calls, [['--version']]);
+    assert.equal(fs.readFileSync(target, 'utf8'), source);
+  }
 });
 
 test('OpenCode install converges legacy duplicates and old pins to one unpinned current entry, retaining options', (t) => {

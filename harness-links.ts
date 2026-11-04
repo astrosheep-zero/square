@@ -33,8 +33,9 @@ export function installOpenCodePlugin(homeDir: string, force = false, run: OpenC
   // current-field entry; updating an exact old pin otherwise succeeds unchanged.
   void force;
   const version = openCodeCommand(homeDir, ['--version'], run, 'version check').trim();
-  const match = /^(\d+)\.\d+\.\d+(?:[-+][\w.-]+)?$/.exec(version);
-  const major = match && Number(match[1]);
+  const match = /^(?:opencode[ \t]+)?v?(\d+)\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.exec(version);
+  if (!match) throw new Error(`Could not determine OpenCode version from ${JSON.stringify(version)}; check opencode --version output.`);
+  const major = Number(match[1]);
   if (major !== 1 && major !== 2) throw new Error(`Unsupported OpenCode version ${JSON.stringify(version)}; install OpenCode 1.x or 2.x and retry.`);
   const configs = readOpenCodeConfigs(homeDir);
   const entries = configs.flatMap((config) => config.entries);
