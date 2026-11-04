@@ -27,7 +27,7 @@ instead; both outcomes are reported as `admitted`.
 ## Install and connect
 
 ```sh
-npm install @astrosheep/agent-delivery@0.1.1
+npm install @astrosheep/agent-delivery@0.1.2
 ```
 
 For local development, run `npm ci`, `npm test` and `npm pack` in
