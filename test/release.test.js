@@ -20,12 +20,14 @@ test('generated release artifacts expose the current identity and supported host
   const claudeMcp = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'claude', '.mcp.json'), 'utf8'));
   const codexPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', '.codex-plugin', 'plugin.json'), 'utf8'));
   const codexHooks = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', 'hooks', 'hooks.json'), 'utf8'));
-  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'SessionEnd', 'PostToolUse', 'Stop']) {
+  assert.deepEqual(Object.keys(codexHooks.hooks).sort(), ['Interrupt', 'PostToolUse', 'SessionEnd', 'SessionStart', 'Stop']);
+  for (const event of ['SessionStart', 'SessionEnd', 'PostToolUse']) {
     const hook = codexHooks.hooks[event][0].hooks[0];
     assert.equal(hook.command, 'square codex-hook');
     assert.equal(hook.statusMessage, 'Square');
   }
-  const watch = codexHooks.hooks.Stop[0].hooks[1];
+  assert.equal(codexHooks.hooks.Stop[0].hooks.length, 1);
+  const watch = codexHooks.hooks.Stop[0].hooks[0];
   assert.equal(watch.command, 'square codex-watch');
   assert.equal(watch.async, true);
   assert.equal(watch.timeout, 86400);
@@ -70,6 +72,9 @@ test('generated release artifacts expose the current identity and supported host
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', 'hooks')), false);
   for (const event of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'])
     assert.equal(claudeHooks.hooks[event][0].hooks[0].command, 'square claude-hook');
+  for (const event of ['PreToolUse', 'PostToolUseFailure'])
+    assert.equal(claudeHooks.hooks[event][0].matcher, '^mcp__plugin_square_square__.*');
+  assert.equal(claudeHooks.hooks.PostToolUse[0].matcher, undefined);
   const claudeStop = claudeHooks.hooks.Stop[0].hooks[0];
   assert.equal(claudeStop.command, 'square claude-watch');
   assert.equal(claudeStop.asyncRewake, true);

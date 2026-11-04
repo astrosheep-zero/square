@@ -43,6 +43,7 @@ idle connection until process exit. Late persistence failures produce redacted d
 reopening the ledger or retrying the effect. Pi presentation and Claude's independent exact-reference
 confirmation callbacks retain their existing lifetimes.
 
-Codex producers only post. Its native async Stop receiver observes the ledger without holding claims
-while waiting; active UserPromptSubmit, PreToolUse and PostToolUse boundaries present synchronously.
-See [Codex delivery](codex-delivery.md) for exact idle-epoch fencing, cancellation and recovery limits.
+Codex producers only post. Each native async Stop receiver waits without holding claims, attempts one
+idle queue handoff, then exits; PostToolUse presents synchronously during execution. Idle queueing
+requires a reachable hosting app-server endpoint, not private stdio alone. See
+[Codex delivery](codex-delivery.md) for native turn fencing, cancellation and recovery limits.

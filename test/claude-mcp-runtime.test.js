@@ -68,10 +68,12 @@ test('native Claude MCP hooks preserve main/child call attribution and clean exa
       harnessOwner({ channel: 'claude-code', session: identities.child.session_id, agent: identities.child.agent_id }));
   } finally { await artifact.close(); }
   const bridges = fs.readFileSync(path.join(root, 'bridge.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  const presented = bridges.find(row => row.input.hook_event_name === 'PreToolUse'
+  assert.equal(pre.has('toolu_fixture_agent'), false, 'Ordinary tools must not start the MCP identity hook');
+  assert.equal(post.has('toolu_fixture_agent'), true, 'Ordinary tool completion remains a delivery boundary');
+  const presented = bridges.find(row => row.input.hook_event_name === 'PostToolUse'
     && row.input.tool_use_id === 'toolu_fixture_agent' && row.stdout.includes('NATIVE_DURING_TURN_TOOL_NOTICE'));
   assert.ok(presented, 'The next legitimate native tool boundary must present a card posted during the turn');
-  assert.equal(JSON.parse(presented.stdout).hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.equal(JSON.parse(presented.stdout).hookSpecificOutput.hookEventName, 'PostToolUse');
   assert.ok(api.some(row => JSON.stringify(row.data.messages).includes('NATIVE_DURING_TURN_TOOL_NOTICE')),
     'Native tool additionalContext must reach a provider request');
   const maps = fs.readdirSync(path.join(root, 'claude-mcp-calls'));

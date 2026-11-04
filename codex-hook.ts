@@ -1,22 +1,21 @@
-import { handleCodexHook, parseCodexHook, type CodexHookInput } from './packages/agent-delivery/src/codex-hook.js';
+import { parseCodexHook, type CodexHookInput } from './packages/agent-delivery/src/codex-hook.js';
 import { presentPendingAtBoundary } from './boundary-presentation.js';
 import { DeliveryLedger } from './delivery-ledger.js';
 import { harnessOwner } from './owner.js';
 import { attachDeliverySessionRoutes, detachDeliverySession } from './session-lifecycle.js';
-import { codexBoundaryStore } from './codex-boundary-state.js';
 import { codexWakeAddress } from './codex-address.js';
 
 export type HookTrace = (line: string) => void;
 export const CODEX_HOOK_BUDGET_MS = 4500;
 const defaultTrace: HookTrace = line => { process.stderr.write(`${line}\n`); };
 
-/** sink resolves only after stdout has accepted the complete hook response. */
+/** Active delivery uses PostToolUse only; each async Stop owns its own wait. */
 export async function codexHookResponse(
   value: unknown,
   sink: ((text: string) => void | Promise<void>) | undefined,
   env: NodeJS.ProcessEnv = process.env,
   trace: HookTrace = defaultTrace,
-): Promise<object | undefined> {
+): Promise<void> {
   const input = parseCodexHook(value);
   if (!input) return;
   const configured = Number(env.SQUARE_CODEX_HOOK_BUDGET_MS ?? CODEX_HOOK_BUDGET_MS);
@@ -24,34 +23,26 @@ export async function codexHookResponse(
     Number.isFinite(configured) && configured > 0 ? configured : CODEX_HOOK_BUDGET_MS);
   const signal = AbortSignal.timeout(timeoutMs);
   const owner = harnessOwner({ channel: 'codex', session: input.session_id });
-  // Capture before any asynchronous boundary update; a replacement attachment
-  // must never inherit this callback's cancellation or detachment.
-  let generation: string | undefined;
-  if (input.hook_event_name === 'SessionEnd' || input.hook_event_name === 'Interrupt') {
-    const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
-    try { generation = (await ledger.session(owner))?.generation; } finally { await ledger.close(); }
-  }
-  const result = await handleCodexHook(input, {
-    boundaries: codexBoundaryStore(env), timeoutMs, signal,
-    pull: async (_sessionId, pullSignal, event) => {
-      if (!sink) return;
-      return presentPendingAtBoundary(owner, async context => {
-        await sink(`${JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } })}\n`);
-        return context;
-      }, env, pullSignal);
-    },
-    end: async () => { if (generation) await detachDeliverySession(owner, generation, env); },
-    interrupt: async () => {
-      if (!generation || signal.aborted) return;
-      const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
-      try { await ledger.cancel({ owner, generation }); } finally { await ledger.close(); }
-    },
-    trace: name => trace(`square-codex-hook: stage=${name}`),
-  });
-  // Disarm before rotating the native attachment, even if there is no old session.
-  if (input.hook_event_name === 'SessionStart' && !signal.aborted)
+  if (input.hook_event_name === 'SessionStart') {
     await attachDeliverySessionRoutes(owner, env, [codexWakeAddress(input.session_id, env)], signal);
-  return result;
+  } else if (input.hook_event_name === 'SessionEnd' || input.hook_event_name === 'Interrupt') {
+    const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+    try {
+      const captured = await ledger.session(owner);
+      if (!captured || signal.aborted) return;
+      if (input.hook_event_name === 'SessionEnd') await detachDeliverySession(owner, captured.generation, env);
+      else await ledger.cancel({ owner, generation: captured.generation });
+    } finally { await ledger.close(); }
+  } else if (input.hook_event_name === 'PostToolUse' && sink) {
+    try {
+      await presentPendingAtBoundary(owner, async context => {
+        await sink(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } })}\n`);
+      }, env, signal);
+      trace('square-codex-hook: stage=presentation');
+    } catch (error) {
+      trace(`square-codex-hook: stage=presentation error=${error instanceof Error ? error.name : 'Error'}`);
+    }
+  }
 }
 
 export function parseCodexHookText(text: string): CodexHookInput | undefined {

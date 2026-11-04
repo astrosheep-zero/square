@@ -8,7 +8,7 @@ an existing local Square package is already configured; that source is preserved
 
 - Claude proactive delivery: install the Square plugin on Claude Code with native hooks enabled. Active prompt boundaries present synchronously; one native `asyncRewake` Stop observer waits up to 86,400 seconds. See [Claude delivery](guides/claude-native.md) for prompt fencing, exact frame evidence and Escape/timeout limits.
 - OpenCode 1.x uses the separate legacy plugin; native proactive delivery requires 1.15.11 or newer and a runtime supporting Square's SQLite API. OpenCode 2.x uses the separate v2 server plugin.
-- Codex proactive delivery: native 0.166.0 with hooks enabled and an accessible hosting app-server endpoint. Active prompt/tool boundaries present synchronously; one native async Stop hook observes idle cards. See [Codex delivery](guides/codex-delivery.md) for finite observation, interruption and recovery limits.
+- Codex delivery: native 0.166.0 with five hooks (SessionStart, SessionEnd, PostToolUse, async Stop, Interrupt). PostToolUse presents synchronously; each async Stop waits for one idle handoff, then exits. Idle queueing requires an accessible hosting app-server endpoint; private stdio-only hosts without a control endpoint retain PostToolUse delivery only. See [Codex delivery](guides/codex-delivery.md) for finite observation, interruption and recovery limits.
 - Node.js 22.16.0 or later within the 22.x line, or 24.0.0 or later
 
 ## Steps

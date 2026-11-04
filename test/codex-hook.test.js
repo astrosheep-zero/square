@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/delivery-frame.js';
 import { codexHookResponse, runCodexHook } from '../dist/codex-hook.js';
-import { codexBoundaryStore } from '../dist/codex-boundary-state.js';
 import { harnessOwner } from '../dist/owner.js';
 
 async function fixture(t) {
@@ -58,24 +57,21 @@ test('the actual CLI writes one hook response before recording its receipt', asy
   assert.equal(second.stdout, '');
 });
 
-test('actual active commands disarm and present event-correct context exactly once', async t => {
+test('actual PostToolUse presents event-correct context exactly once', async t => {
   const { env, ledger, owner } = await fixture(t);
   const cli = fileURLToPath(new URL('../dist/square.js', import.meta.url));
-  for (const event of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse']) {
-    await ledger.post({ owner, key: event, text: `card for ${event}` });
-    await codexBoundaryStore(env).record('thread', 'Stop', { turnId: 'turn' });
-    const input = JSON.stringify({ session_id: 'thread', hook_event_name: event, turn_id: 'turn' });
-    const first = spawnSync(process.execPath, [cli, 'codex-hook'], { input, encoding: 'utf8', env });
-    assert.equal(first.status, 0, first.stderr);
-    const response = JSON.parse(first.stdout).hookSpecificOutput;
-    assert.equal(response.hookEventName, event);
-    assert.match(response.additionalContext, new RegExp(`card for ${event}`));
-    assert.equal(await codexBoundaryStore(env).queueEligible('thread'), false);
-    const second = spawnSync(process.execPath, [cli, 'codex-hook'], { input, encoding: 'utf8', env });
-    assert.equal(second.status, 0, second.stderr);
-    assert.equal(second.stdout, '');
-    assert.equal((await ledger.receipts(owner, { keys: [event] })).length, 1);
-  }
+  const event = 'PostToolUse';
+  await ledger.post({ owner, key: event, text: `card for ${event}` });
+  const input = JSON.stringify({ session_id: 'thread', hook_event_name: event, turn_id: 'turn' });
+  const first = spawnSync(process.execPath, [cli, 'codex-hook'], { input, encoding: 'utf8', env });
+  assert.equal(first.status, 0, first.stderr);
+  const response = JSON.parse(first.stdout).hookSpecificOutput;
+  assert.equal(response.hookEventName, event);
+  assert.match(response.additionalContext, new RegExp(`card for ${event}`));
+  const second = spawnSync(process.execPath, [cli, 'codex-hook'], { input, encoding: 'utf8', env });
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(second.stdout, '');
+  assert.equal((await ledger.receipts(owner, { keys: [event] })).length, 1);
 });
 
 test('suppression after the sink effect preserves truthful presentation and its tombstone', async t => {

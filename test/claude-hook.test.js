@@ -89,6 +89,37 @@ test('prompt without native id disarms its prior Stop and stale Stop fails close
   finally { await ledger.close(); }
 });
 
+test('tool hooks separate MCP identity from PostToolUse delivery, including failure cleanup', async t => {
+  const { env, sessionId, owner } = await fixture(t);
+  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+  t.after(() => ledger.close());
+  const tool = { session_id: sessionId, cwd: '/native cwd',
+    tool_name: 'mcp__plugin_square_square__join', tool_use_id: 'toolu-success' };
+  const hook = (event, input = tool, sink = () => assert.fail('identity hooks must not present cards')) =>
+    runClaudeHook(JSON.stringify({ ...input, hook_event_name: event }), env, sink);
+  await ledger.post({ owner, key: 'success', text: 'deliver after the tool finishes' });
+  await hook('PreToolUse');
+  assert.equal((await readClaudeMcpCall(tool.tool_use_id, env)).sessionId, sessionId);
+  let output;
+  await hook('PostToolUse', tool, async text => {
+    await assert.rejects(readClaudeMcpCall(tool.tool_use_id, env), { code: 'unavailable' });
+    assert.deepEqual(await ledger.receipts(owner), []);
+    output = JSON.parse(text);
+  });
+  assert.match(output.hookSpecificOutput.additionalContext, /deliver after the tool finishes/);
+  assert.equal((await ledger.receipts(owner)).length, 1);
+
+  const failed = { ...tool, tool_use_id: 'toolu-failure' };
+  await ledger.post({ owner, key: 'failure', text: 'wait for a successful boundary' });
+  await hook('PreToolUse', failed);
+  await hook('PostToolUseFailure', failed);
+  await assert.rejects(readClaudeMcpCall(failed.tool_use_id, env), { code: 'unavailable' });
+  const generation = (await ledger.session(owner)).generation;
+  assert.deepEqual((await ledger.pending(owner, { generation })).map(card => card.key), ['failure']);
+  await hook('PostToolUse', { session_id: sessionId, tool_name: 'Bash' }, () => {});
+  assert.equal((await ledger.receipts(owner)).length, 2);
+});
+
 test('MCP identity collision is denied through the hook sink and foreign terminal event cannot clear it', async t => {
   const { env, sessionId } = await fixture(t);
   const input = { hook_event_name: 'PreToolUse', session_id: sessionId, cwd: '/native cwd',

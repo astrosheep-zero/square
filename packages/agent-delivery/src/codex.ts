@@ -229,28 +229,36 @@ function validatedConnection(options: CodexAppServerConnectOptions): Connection 
   return resolveConnection(options)
 }
 
+/** A Stop can launch before its native turn has finished settling. Never
+ * mistake that short wait for authority to follow a different turn. */
+export type CodexStopState = 'idle' | 'waiting' | 'stale' | 'unavailable';
+
 /** Newest-last live history is verified for Codex 0.166.0 only. A sampled read
  * cannot make a later external queue atomic with native turn starts. */
-export async function codexIdleAtStop(options: CodexAppServerConnectOptions, turnId: string): Promise<boolean> {
+export async function codexStopState(options: CodexAppServerConnectOptions, turnId: string): Promise<CodexStopState> {
   const connection = validatedConnection(options)
-  if (!isIdentity(turnId)) return false
+  if (!isIdentity(turnId)) return 'unavailable'
   const scope = deadline(options.timeoutMs, options.signal)
   let peer: Peer | undefined
   try {
     peer = await open(connection, scope)
     const version = await peer.initialize(scope)
-    // The app-server's originator prefix belongs to the hosting client, which
-    // may have initialized before this connection. Fence the native version.
-    if (!/^[A-Za-z0-9._-]+\/0\.166\.0(?:\s|$)/.test(version)) return false
+    if (!/^[A-Za-z0-9._-]+\/0\.166\.0(?:\s|$)/.test(version)) return 'unavailable'
     const thread = await readThread(peer, options.sessionId, scope, true)
-    if (!isRecord(thread.status) || thread.status.type !== 'idle' || !Array.isArray(thread.turns) || !thread.turns.length) return false
-    // Validate the whole live list, including absence of an active turn; never
-    // fall back to persisted pages or a boolean boundary for missing history.
-    if (activeTurn(thread.turns) !== undefined || new Set(thread.turns.map(turn => turn.id)).size !== thread.turns.length) return false
+    if (!isRecord(thread.status) || !['idle', 'active'].includes(thread.status.type as string)
+      || !Array.isArray(thread.turns) || !thread.turns.length) return 'unavailable'
+    const active = activeTurn(thread.turns)
+    if (new Set(thread.turns.map(turn => turn.id)).size !== thread.turns.length) return 'unavailable'
     const newest = thread.turns.at(-1)
-    return newest.id === turnId && newest.status === 'completed'
-  } catch { return false }
+    if (newest.id !== turnId || ['interrupted', 'failed'].includes(newest.status)) return 'stale'
+    if (active !== undefined && active !== turnId) return 'unavailable'
+    return newest.status === 'completed' && active === undefined && thread.status.type === 'idle' ? 'idle' : 'waiting'
+  } catch { return 'unavailable' }
   finally { scope.close(); await peer?.close() }
+}
+
+export async function codexIdleAtStop(options: CodexAppServerConnectOptions, turnId: string): Promise<boolean> {
+  return await codexStopState(options, turnId) === 'idle'
 }
 
 /** Address an existing thread on an already running app-server. Never starts a

@@ -13,7 +13,6 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { postAndDispatch } from '../dist/notifications.js';
-import { codexBoundaryStore } from '../dist/codex-boundary-state.js';
 import { codexIdleAtStop } from '../dist/packages/agent-delivery/src/codex.js';
 
 if (process.env.SQUARE_CODEX_NATIVE_SMOKE !== '1') throw new Error('Set SQUARE_CODEX_NATIVE_SMOKE=1 to run the isolated native smoke.');
@@ -39,7 +38,7 @@ const shell = value => `'${value.replaceAll("'", "'\\''")}'`;
 for (const dir of ['home', 'codex', 'work']) await fs.mkdir(path.join(root, dir));
 const env = { ...process.env, HOME: path.join(root, 'home'), CODEX_HOME: path.join(root, 'codex'),
   XDG_CONFIG_HOME: path.join(root, 'home/config'), XDG_CACHE_HOME: path.join(root, 'home/cache'),
-  SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'), SQUARE_CODEX_BOUNDARIES: path.join(root, 'boundaries.json'),
+  SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'),
   SQUARE_DISABLE_PASEO_WAKE: '1', NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' };
 for (const key of Object.keys(env)) if (/TOKEN|API_KEY|PASSWORD|SECRET/.test(key)) delete env[key];
 const endpoint = path.join(root, 'codex/control.sock');
@@ -48,19 +47,25 @@ const hookLog = path.join(root, 'hooks.jsonl'), queueLog = path.join(root, 'queu
 // Capture the original native payload, then run the actual shipped CLI. Children
 // stay in the native hook's process group; no detached helper is introduced.
 const wrapper = path.join(root, 'hook.mjs');
-await fs.writeFile(wrapper, `import fs from 'node:fs';import {spawn} from 'node:child_process';
+await fs.writeFile(wrapper, `import fs from 'node:fs';import os from 'node:os';import {spawn} from 'node:child_process';
 let input='';for await(const chunk of process.stdin)input+=chunk;
 const command=process.argv[2], payload=JSON.parse(input);
 const child=spawn(${JSON.stringify(process.execPath)},[${JSON.stringify(cli)},command],{env:process.env,stdio:['pipe','inherit','inherit']});
 const record=value=>fs.appendFileSync(${JSON.stringify(hookLog)},JSON.stringify({t:Date.now(),command,pid:process.pid,child:child.pid,event:payload.hook_event_name,turn:payload.turn_id,...value})+'\\n');
 record({stage:'start'});child.stdin.end(input);
 for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>child.kill(signal));
-child.on('exit',(code,signal)=>{record({stage:'exit',code,signal});process.exit(code??1)});
+child.on('error',error=>{record({stage:'error',error:String(error)});process.exit(1)});
+child.on('exit',(code,signal)=>{record({stage:'exit',code,signal});process.exit(code??(128+(os.constants.signals[signal]??0)))});
 `);
 const queueWrapper = path.join(root, 'queue');
 await fs.writeFile(queueWrapper, `#!/bin/sh\nprintf '%s\\n' "$$" >> ${shell(queueLog)}\nexec ${shell(binary)} "$@"\n`, { mode: 0o700 });
 env.SQUARE_CODEX_BIN = queueWrapper;
 const hooks = JSON.parse(await fs.readFile(new URL('../plugins/codex/hooks/hooks.json', import.meta.url), 'utf8'));
+assert.deepEqual(Object.keys(hooks.hooks).sort(), ['Interrupt', 'PostToolUse', 'SessionEnd', 'SessionStart', 'Stop'].sort());
+const stopHooks = hooks.hooks.Stop.flatMap(group => group.hooks);
+assert.equal(stopHooks.length, 1);
+assert.equal(stopHooks[0].command, 'square codex-watch');
+assert.equal(stopHooks[0].async, true);
 for (const groups of Object.values(hooks.hooks)) for (const group of groups) for (const hook of group.hooks)
   hook.command = `${shell(process.execPath)} ${shell(wrapper)} ${hook.command.slice('square '.length)}`;
 await fs.writeFile(path.join(root, 'codex/hooks.json'), JSON.stringify(hooks));
@@ -68,11 +73,14 @@ const readHooks = async () => (await fs.readFile(hookLog, 'utf8').catch(() => ''
 const queues = async () => (await fs.readFile(queueLog, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean);
 let holdNext = false;
 const held = new Map();
-function complete(response, n) {
+function complete(response, n, tool = false) {
   response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  const item = tool
+    ? { id: `f${n}`, type: 'function_call', name: 'exec_command', call_id: `call${n}`, arguments: JSON.stringify({ cmd: 'printf native_probe' }), status: 'completed' }
+    : { id: `m${n}`, type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'done', annotations: [] }] };
   const events = [
     { type: 'response.created', response: { id: `r${n}` } },
-    { type: 'response.output_item.done', output_index: 0, item: { id: `m${n}`, type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'done', annotations: [] }] } },
+    { type: 'response.output_item.done', output_index: 0, item },
     { type: 'response.completed', response: { id: `r${n}`, status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
   ];
   response.end(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''));
@@ -129,9 +137,9 @@ try {
   await call('turn/start', { threadId, input: [{ type: 'text', text: 'initial native turn', text_elements: [] }] });
   await until(async () => (await readHooks()).some(row => row.command === 'codex-watch' && row.stage === 'start'), 'native async Stop hook');
   const firstStop = await until(idle, 'first completed native turn');
-  await until(async () => (await codexBoundaryStore(env).read(threadId))?.stop?.turnId === firstStop.id, 'synchronous Stop epoch');
   assert.equal((await ledger.session(owner)).state, 'attached');
   const firstWatcher = (await readHooks()).find(row => row.command === 'codex-watch' && row.stage === 'start');
+  assert.equal(firstWatcher.turn, firstStop.id, 'watcher captured the completed native Stop turn');
   check('native SessionStart attached and async Stop started', { watcher: firstWatcher.child, stop: firstStop.id });
 
   evidence.firstIdle = await nativeRead();
@@ -144,26 +152,27 @@ try {
   assert.equal((await queues()).length, 1);
   assert.match(JSON.stringify(evidence.requests[1].body), /NATIVE_IDLE_CARD_086c/);
   assert.deepEqual(await ledger.receipts(owner), []);
-  check('receiver idle self-queue woke next turn; admission is custody');
-  await until(async () => (await readHooks()).some(row => row.command === 'codex-watch' && row.stage === 'exit' && row.child !== firstWatcher.child), 'duplicate watcher exited');
-  process.kill(firstWatcher.child, 0);
-  check('subsequent native Stop duplicate exited; original singleton remains');
+  await until(async () => (await readHooks()).some(row => row.child === firstWatcher.child && row.stage === 'exit'), 'first watcher exited after queue');
+  const nextWatcher = await until(async () => (await readHooks()).find(row => row.command === 'codex-watch' && row.stage === 'start' && row.child !== firstWatcher.child), 'fresh watcher at next Stop');
+  check('idle queue admitted one card and ended its watcher; next Stop started a fresh watcher', { first: firstWatcher.child, next: nextWatcher.child });
 
   holdNext = true;
   await call('turn/start', { threadId, input: [{ type: 'text', text: 'busy native turn', text_elements: [] }] });
   await until(() => held.has(3), 'busy native model request');
-  await postAndDispatch(ledger, { owner, key: 'busy-card', text: 'NATIVE_BUSY_CARD_086c' }, { env });
-  await pause(1300); // At least one receiver boundary rescan while native busy.
-  assert.equal((await queues()).length, 1);
+  await until(async () => (await readHooks()).some(row => row.child === nextWatcher.child && row.stage === 'exit'), 'prior watcher exited on active turn without pending card');
   assert.equal((await nativeRead()).thread.status.type, 'active');
-  check('busy native turn blocked deliberate watcher enqueue');
+  await postAndDispatch(ledger, { owner, key: 'busy-card', text: 'NATIVE_BUSY_CARD_086c' }, { env });
+  await pause(1300);
+  assert.equal((await queues()).length, 1);
+  check('active native turn ended prior watcher even without pending work and blocked enqueue');
   complete(held.get(3), 3); held.delete(3);
   await until(() => evidence.requests.length >= 4, 'busy card queued after its verified Stop');
   await until(idle, 'later self-queue completed');
   assert.equal((await queues()).length, 2);
   assert.match(JSON.stringify(evidence.requests[3].body), /NATIVE_BUSY_CARD_086c/);
-  process.kill(firstWatcher.child, 0);
-  check('same watcher followed new Stop and delivered busy card exactly once');
+  const busyWatcher = await until(async () => (await readHooks()).find(row => row.command === 'codex-watch' && row.stage === 'start' && row.child !== firstWatcher.child && row.child !== nextWatcher.child), 'busy turn Stop started fresh watcher');
+  await until(async () => (await readHooks()).some(row => row.child === busyWatcher.child && row.stage === 'exit'), 'busy turn watcher exited after queue');
+  check('new Stop queued the busy card once and its watcher exited', { watcher: busyWatcher.child });
 
   holdNext = true;
   const interruptTurn = await call('turn/start', { threadId, input: [{ type: 'text', text: 'interrupt native turn', text_elements: [] }] });
@@ -173,22 +182,43 @@ try {
   await until(async () => (await readHooks()).some(row => row.event === 'Interrupt' && row.stage === 'exit' && row.code === 0), 'synchronous native Interrupt');
   const session = await ledger.session(owner);
   assert.deepEqual(await ledger.pending(owner, { generation: session.generation }), []);
-  assert.equal(await codexBoundaryStore(env).queueEligible(threadId), false);
-  check('native turn/interrupt hook cancelled captured pending batch and disarmed');
+  check('native turn/interrupt hook cancelled captured pending batch');
   await ledger.post({ owner, key: 'future-card', text: 'NATIVE_FUTURE_CARD_086c' });
   await pause(1300);
   assert.equal((await queues()).length, 2);
   await call('turn/start', { threadId, input: [{ type: 'text', text: 'resume after interrupt', text_elements: [] }] });
   await until(() => evidence.requests.length >= 6, 'new prompt after interrupt');
-  assert.match(JSON.stringify(evidence.requests[5].body), /NATIVE_FUTURE_CARD_086c/);
-  assert.doesNotMatch(JSON.stringify(evidence.requests[5].body), /NATIVE_CANCELLED_CARD_086c/);
+  assert.doesNotMatch(JSON.stringify(evidence.requests[5].body), /NATIVE_(?:FUTURE|CANCELLED)_CARD_086c/);
+  await until(() => evidence.requests.length >= 7, 'future card queued after new Stop');
+  assert.match(JSON.stringify(evidence.requests[6].body), /NATIVE_FUTURE_CARD_086c/);
+  assert.doesNotMatch(JSON.stringify(evidence.requests[6].body), /NATIVE_CANCELLED_CARD_086c/);
+  assert.equal((await queues()).length, 3);
   await until(idle, 'last native turn completed');
-  check('future card presented by actual UserPromptSubmit; cancelled card did not revive');
+  check('new Stop queued future card; cancelled card did not revive');
 
+  holdNext = true;
+  const toolTurn = await call('turn/start', { threadId, input: [{ type: 'text', text: 'native tool delivery', text_elements: [] }] });
+  const toolRequest = await until(() => [...held.keys()].find(n => n > 7), 'held native tool request');
+  await postAndDispatch(ledger, { owner, key: 'active-card', text: 'NATIVE_ACTIVE_CARD_086c' }, { env });
+  assert.equal((await queues()).length, 3);
+  complete(held.get(toolRequest), toolRequest, true); held.delete(toolRequest);
+  await until(() => evidence.requests.length > toolRequest, 'model request after native tool result');
+  const afterTool = JSON.stringify(evidence.requests[toolRequest].body);
+  assert.match(afterTool, /native_probe/);
+  assert.match(afterTool, /NATIVE_ACTIVE_CARD_086c/);
+  assert.equal((await ledger.receipts(owner, { keys: ['active-card'] })).length, 1);
+  assert.equal((await queues()).length, 3);
+  assert.ok((await readHooks()).some(row => row.event === 'PostToolUse' && row.stage === 'exit' && row.code === 0));
+  await until(idle, 'native tool turn completed');
+  check('real PostToolUse presented active card and recorded receipt without queue');
+
+  const lastWatcher = await until(async () => (await readHooks()).find(row => row.command === 'codex-watch' && row.stage === 'start' && row.turn === toolTurn.turn.id), 'last idle Stop watcher started');
+  assert.ok(!(await readHooks()).some(row => row.child === lastWatcher.child && row.stage === 'exit'), 'last watcher is still running before shutdown');
+  process.kill(lastWatcher.child, 0);
   const live = (await readHooks()).filter(row => row.command === 'codex-watch' && row.stage === 'start').map(row => row.child);
   socket.close(); app.kill('SIGTERM'); await appExit;
   await until(() => live.every(pid => { try { process.kill(pid, 0); return false; } catch { return true; } }), 'native shutdown ended all watcher processes');
-  check('native app-server shutdown terminated async hook descendants', { pids: live });
+  check('native app-server shutdown terminated async hook descendants', { pids: live, liveBeforeShutdown: lastWatcher.child });
   evidence.hooks = await readHooks(); evidence.queuePids = await queues();
   evidence.ok = true;
 } catch (error) {

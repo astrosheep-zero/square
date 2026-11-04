@@ -10,7 +10,6 @@ import { WebSocketServer } from 'ws';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { postAndDispatch, createDefaultDeliveryTransports } from '../dist/notifications.js';
 import { codexHookResponse } from '../dist/codex-hook.js';
-import { codexBoundaryStore } from '../dist/codex-boundary-state.js';
 import { runCodexWatch } from '../dist/codex-watch.js';
 import { withFileLock } from '../dist/file-lock.js';
 
@@ -22,8 +21,7 @@ async function until(check, description) {
   assert.fail(`timed out: ${description}`);
 }
 
-// Native protocol fixture, not native-success evidence. The separate opt-in
-// codex watcher smoke uses the installed binary and the shipped hooks.
+// Protocol fixture only; native evidence lives in codex-watch-native.mjs.
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-codex-watch-'));
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
@@ -46,37 +44,36 @@ async function fixture(t) {
   const bin = path.join(root, 'queue.mjs'), callsFile = path.join(root, 'calls');
   await fs.writeFile(bin, `#!/usr/bin/env node\nimport fs from 'node:fs';fs.appendFileSync(process.env.QUEUE_CALLS,JSON.stringify(process.argv.slice(2))+'\\n');if(process.env.QUEUE_UNKNOWN)process.exit(1);if(process.env.QUEUE_REFUSED){console.error('Error: unknown thread');process.exit(1);}`, { mode: 0o700 });
   const env = { ...process.env, HOME: root, CODEX_HOME: path.join(root, 'codex'),
-    SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'), SQUARE_CODEX_BOUNDARIES: path.join(root, 'boundaries.json'),
+    SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'),
     SQUARE_CODEX_ENDPOINT: `ws://127.0.0.1:${server.address().port}`, SQUARE_CODEX_BIN: bin, QUEUE_CALLS: callsFile,
     SQUARE_DISABLE_PASEO_WAKE: '1' };
   const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
-  const owner = 'codex:thread', boundaries = codexBoundaryStore(env);
+  const owner = 'codex:thread';
   const hook = (event, turn_id = 'one') => codexHookResponse({ session_id: 'thread', hook_event_name: event, turn_id }, undefined, env, () => {});
   await hook('SessionStart');
   const session = await ledger.session(owner);
-  await hook('Stop');
   const running = [], children = [];
-  const watch = () => {
+  const watch = (turn_id = 'one') => {
     const controller = new AbortController();
-    const promise = runCodexWatch(JSON.stringify({ session_id: 'thread', hook_event_name: 'Stop', turn_id: 'one' }), env, controller.signal);
+    const promise = runCodexWatch(JSON.stringify({ session_id: 'thread', hook_event_name: 'Stop', turn_id }), env, controller.signal);
     running.push({ controller, promise });
     return { controller, promise };
   };
-  const command = () => {
+  const command = (turn_id = 'one') => {
     const child = spawn(process.execPath, [cli, 'codex-watch'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', data => { stdout += data; });
     child.stderr.on('data', data => { stderr += data; });
     const exited = once(child, 'exit');
-    child.stdin.end(JSON.stringify({ session_id: 'thread', hook_event_name: 'Stop', turn_id: 'one' }));
+    child.stdin.end(JSON.stringify({ session_id: 'thread', hook_event_name: 'Stop', turn_id }));
     children.push({ child, exited });
     return { child, exited, output: () => ({ stdout, stderr }) };
   };
   const calls = async () => (await fs.readFile(callsFile, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse);
   const locked = async () => {
     const files = await fs.readdir(path.join(root, 'codex-watchers')).catch(() => []);
-    if (!files.length) return false;
-    return await withFileLock(path.join(root, 'codex-watchers', files[0]), { retryMs: 1, skipIfBusy: true }, () => false) === undefined;
+    for (const file of files) if (await withFileLock(path.join(root, 'codex-watchers', file), { retryMs: 1, skipIfBusy: true }, () => false) === undefined) return true;
+    return false;
   };
   t.after(async () => {
     for (const { controller } of running) controller.abort();
@@ -88,51 +85,60 @@ async function fixture(t) {
     await ledger.close();
     await fs.rm(root, { recursive: true, force: true });
   });
-  return { root, state, env, ledger, owner, session, boundaries, hook, watch, command, calls, locked };
+  return { root, state, env, ledger, owner, session, hook, watch, command, calls, locked };
 }
 
-test('public producers never dispatch Codex; one actual command owns observation and follows later Stops', async t => {
+test('each async Stop queues once and exits; the next Stop starts a fresh watcher', async t => {
   const f = await fixture(t);
   assert.ok((await createDefaultDeliveryTransports(f.env)).every(transport => transport.kind !== 'codex-queue'));
   let producerCalls = 0;
+  const first = f.command();
+  await until(f.locked, 'first Stop watcher');
+  const duplicate = f.command();
+  assert.deepEqual(await duplicate.exited, [0, null]);
   await postAndDispatch(f.ledger, { owner: f.owner, key: 'first', text: 'receiver-owned text' }, { env: f.env,
     transports: [{ kind: 'codex-queue', send: async () => { producerCalls++; return 'accepted'; } }] });
   assert.equal(producerCalls, 0);
-  const first = f.command();
-  await until(f.locked, 'resident watcher');
-  const duplicate = f.command();
-  assert.deepEqual(await duplicate.exited, [0, null]);
-  assert.equal(duplicate.output().stdout, '');
-  await until(async () => (await f.calls()).length === 1, 'receiver queue');
-  await until(async () => (await f.ledger.handoffs(f.owner, { generation: f.session.generation })).some(attempt => attempt.outcome === 'accepted'), 'queue admission settled');
-  assert.equal(first.child.exitCode, null);
-  assert.match((await f.calls())[0].at(-1), /receiver-owned text/);
-  assert.deepEqual(await f.ledger.receipts(f.owner), []); // admission is not presentation
-  assert.equal((await f.ledger.post({ owner: f.owner, key: 'first', text: 'different after admission' })).status, 'duplicate');
-
-  await f.hook('UserPromptSubmit', 'two');
-  f.state.status = 'active'; f.state.turns.push({ id: 'two', status: 'inProgress' });
-  await postAndDispatch(f.ledger, { owner: f.owner, key: 'second', text: 'later epoch' }, { env: f.env });
-  // A delayed old Stop cannot authorize deliberate queue while the native turn is active.
-  const before = f.state.reads;
-  await f.hook('Stop', 'one');
-  await until(() => f.state.reads > before, 'stale Stop native check');
-  assert.equal((await f.calls()).length, 1);
-  f.state.status = 'idle'; f.state.turns.at(-1).status = 'completed';
-  await f.hook('Stop', 'two');
-  await until(async () => (await f.calls()).length === 2, 'existing watcher follows next Stop');
-  await f.hook('SessionEnd');
   assert.deepEqual(await first.exited, [0, null]);
   assert.equal(first.output().stdout, '');
+  assert.match((await f.calls())[0].at(-1), /receiver-owned text/);
+  assert.deepEqual(await f.ledger.receipts(f.owner), []); // queue admission is not presentation
+  assert.equal((await f.calls()).length, 1);
+
+  f.state.status = 'active'; f.state.turns.push({ id: 'two', status: 'inProgress' });
+  const stale = f.command();
+  assert.deepEqual(await stale.exited, [0, null]); // even without pending work
+  await f.ledger.post({ owner: f.owner, key: 'second', text: 'later Stop' });
+  f.state.status = 'idle'; f.state.turns.at(-1).status = 'completed';
+  const second = f.command('two');
+  assert.deepEqual(await second.exited, [0, null]);
+  assert.equal((await f.calls()).length, 2);
+  assert.match((await f.calls())[1].at(-1), /later Stop/);
 });
 
-test('receiver final checks prevent queue across native, epoch, route, attachment and suppression changes', async t => {
-  for (const change of ['epoch', 'route', 'generation', 'detach', 'cancel', 'suppress', 'native-active', 'native-interrupted', 'native-mismatch', 'native-malformed', 'native-unavailable']) await t.test(change, async t => {
+test('waiting Stop settles before delivery, while a new active turn retires an empty watcher', async t => {
+  const f = await fixture(t);
+  f.state.status = 'active'; f.state.turns[0].status = 'inProgress';
+  await f.ledger.post({ owner: f.owner, key: 'waiting', text: 'wait until Stop settles' });
+  const waiting = f.watch();
+  await until(() => f.state.reads > 0, 'native Stop still settling');
+  assert.deepEqual(await f.ledger.handoffs(f.owner, { generation: f.session.generation }), []);
+  f.state.status = 'idle'; f.state.turns[0].status = 'completed';
+  await waiting.promise;
+  assert.equal((await f.calls()).length, 1);
+
+  const empty = f.watch();
+  await until(f.locked, 'empty wait');
+  f.state.status = 'active'; f.state.turns.push({ id: 'two', status: 'inProgress' });
+  await empty.promise;
+  assert.equal((await f.calls()).length, 1);
+});
+
+test('final native, route, attachment and cancellation checks prevent stale queueing', async t => {
+  for (const change of ['route', 'generation', 'detach', 'cancel', 'suppress', 'native-active', 'native-interrupted', 'native-mismatch', 'native-malformed', 'native-unavailable']) await t.test(change, async t => {
     const f = await fixture(t);
-    const changed = Promise.withResolvers();
     f.state.beforeRead = async (count, socket) => {
-      if (count !== 2) return; // after the real ledger claim, at final native read
-      if (change === 'epoch') await f.hook('UserPromptSubmit', 'two');
+      if (count !== 2) return; // final native read after ledger claim
       if (change === 'route') await f.ledger.updateRoutes({ owner: f.owner, generation: f.session.generation,
         routes: [{ kind: 'codex-queue', address: { ...f.session.routes[0].address, endpoint: 'ws://127.0.0.1:1' } }] });
       if (change === 'detach') await f.ledger.detach({ owner: f.owner, generation: f.session.generation });
@@ -144,60 +150,69 @@ test('receiver final checks prevent queue across native, epoch, route, attachmen
       if (change === 'native-mismatch') f.state.turns.push({ id: 'newer', status: 'completed' });
       if (change === 'native-malformed') f.state.turns = [{ id: 'one' }];
       if (change === 'native-unavailable') { f.state.status = 'notLoaded'; socket.terminate(); }
-      changed.resolve();
     };
     await f.ledger.post({ owner: f.owner, key: 'pending', text: 'must remain unsent' });
-    const watcher = f.watch();
-    await changed.promise;
-    if (change === 'generation' || change === 'detach') {
-      await watcher.promise;
-      assert.ok((await f.ledger.health(f.owner)).unknownAttempts.length);
-    } else {
-      await until(async () => (await f.ledger.handoffs(f.owner, { generation: f.session.generation })).every(attempt => attempt.outcome !== 'dispatching'), 'known-unsent settlement');
-    }
+    await f.watch().promise;
+    if (change === 'generation' || change === 'detach') assert.ok((await f.ledger.health(f.owner)).unknownAttempts.length);
+    else assert.ok((await f.ledger.handoffs(f.owner, { generation: f.session.generation })).every(attempt => attempt.outcome !== 'dispatching'));
     assert.deepEqual(await f.calls(), []);
   });
 });
 
-test('Interrupt command cancels only its pending batch; a later verified Stop admits future cards', async t => {
+test('different Stop does not lose its wait behind an older turn lock', async t => {
+  const f = await fixture(t);
+  const old = f.watch();
+  await until(f.locked, 'old turn lock');
+  f.state.turns.push({ id: 'two', status: 'completed' });
+  await f.ledger.post({ owner: f.owner, key: 'new', text: 'new Stop owns delivery' });
+  const next = f.watch('two');
+  await next.promise;
+  await old.promise;
+  assert.equal((await f.calls()).length, 1);
+});
+
+test('Interrupt cancels its pending batch; a later Stop admits future cards', async t => {
   const f = await fixture(t);
   await f.ledger.post({ owner: f.owner, key: 'cancelled', text: 'old batch' });
   const interrupt = spawn(process.execPath, [cli, 'codex-interrupt'], { env: f.env, stdio: ['pipe', 'pipe', 'pipe'] });
-  let stdout = ''; interrupt.stdout.on('data', data => { stdout += data; });
   const exited = once(interrupt, 'exit');
   interrupt.stdin.end(JSON.stringify({ session_id: 'thread', hook_event_name: 'Interrupt', turn_id: 'one' }));
   assert.deepEqual(await exited, [0, null]);
-  assert.equal(stdout, '');
-  assert.equal(await f.boundaries.queueEligible('thread'), false);
+  f.state.turns[0].status = 'interrupted';
   await f.ledger.post({ owner: f.owner, key: 'future', text: 'future batch' });
-  assert.deepEqual((await f.ledger.pending(f.owner, { generation: f.session.generation })).map(card => card.key), ['future']);
-  f.watch();
-  await f.hook('Stop');
-  await until(async () => (await f.calls()).length === 1, 'future card queued');
+  await f.watch().promise;
+  assert.deepEqual(await f.calls(), []);
+  f.state.turns.push({ id: 'two', status: 'completed' });
+  await f.watch('two').promise;
+  assert.equal((await f.calls()).length, 1);
   assert.match((await f.calls())[0].at(-1), /future batch/);
   assert.doesNotMatch((await f.calls())[0].at(-1), /old batch/);
 });
 
-test('known-unsent retry waits for reconciliation instead of following its own claim edges', async t => {
-  const f = await fixture(t); f.env.QUEUE_REFUSED = '1';
-  await f.ledger.post({ owner: f.owner, key: 'retry', text: 'known unsent' });
-  const watcher = f.watch();
-  await until(async () => (await f.ledger.handoffs(f.owner, { generation: f.session.generation })).some(attempt => attempt.outcome === 'released'), 'known-unsent release');
-  await pause(300);
-  assert.equal((await f.calls()).length, 1, 'own claim/settlement writes must not drive a hot retry');
-  await until(async () => (await f.calls()).length === 2, 'bounded retry rescan');
-  watcher.controller.abort();
-  await watcher.promise;
+test('refused and ambiguous queue attempts both end the watcher without retry or false receipts', async t => {
+  for (const flag of ['QUEUE_REFUSED', 'QUEUE_UNKNOWN']) await t.test(flag, async t => {
+    const f = await fixture(t); f.env[flag] = '1';
+    await f.ledger.post({ owner: f.owner, key: 'attempt', text: 'one attempt only' });
+    await f.watch().promise;
+    assert.equal((await f.calls()).length, 1);
+    const attempts = await f.ledger.handoffs(f.owner, { generation: f.session.generation });
+    assert.equal(attempts[0].outcome, flag === 'QUEUE_REFUSED' ? 'released' : 'unknown');
+    assert.deepEqual(await f.ledger.receipts(f.owner), []);
+  });
 });
 
-test('invoked unknown queue is held without replay or a false presentation receipt', async t => {
-  const f = await fixture(t); f.env.QUEUE_UNKNOWN = '1';
-  await f.ledger.post({ owner: f.owner, key: 'unknown', text: 'uncertain native effect' });
-  f.watch();
-  await until(async () => (await f.ledger.health(f.owner)).unknownAttempts.length, 'unknown settlement');
-  await f.hook('Stop');
-  assert.deepEqual((await f.ledger.pending(f.owner, { generation: f.session.generation })).map(card => card.text), ['']);
-  assert.equal((await f.ledger.post({ owner: f.owner, key: 'unknown', text: 'replacement' })).status, 'duplicate');
-  assert.deepEqual(await f.ledger.receipts(f.owner), []);
-  assert.equal((await f.calls()).length, 1);
+test('without a hosting endpoint idle delivery exits and leaves cards for PostToolUse', async t => {
+  const f = await fixture(t);
+  delete f.env.SQUARE_CODEX_ENDPOINT;
+  await f.ledger.updateRoutes({ owner: f.owner, generation: f.session.generation,
+    routes: [{ kind: 'codex-queue', address: { threadId: 'thread', codexHome: f.env.CODEX_HOME } }] });
+  await f.ledger.post({ owner: f.owner, key: 'stdio', text: 'active hook fallback' });
+  const command = f.command();
+  assert.deepEqual(await command.exited, [0, null]);
+  assert.match(command.output().stderr, /requires a reachable hosting app-server endpoint/);
+  assert.deepEqual(await f.calls(), []);
+  let output;
+  await codexHookResponse({ session_id: 'thread', hook_event_name: 'PostToolUse' }, text => { output = JSON.parse(text); }, f.env, () => {});
+  assert.match(output.hookSpecificOutput.additionalContext, /active hook fallback/);
+  assert.equal((await f.ledger.receipts(f.owner)).length, 1);
 });

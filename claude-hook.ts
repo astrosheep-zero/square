@@ -105,7 +105,7 @@ export async function runClaudeHook(
     && input.tool_name?.startsWith('mcp__plugin_square_square__') && input.tool_use_id) {
     await endClaudeMcpCallForSession(input.tool_use_id, input.session_id, env, input.agent_id).catch(() => undefined);
   }
-  if (['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(input.hook_event_name)) {
+  if (input.hook_event_name === 'PostToolUse') {
     await presentPendingAtBoundary(owner, async context => {
       await sink(`${JSON.stringify({ hookSpecificOutput: { hookEventName: input.hook_event_name, additionalContext: context } })}\n`);
     }, env, AbortSignal.timeout(4500));
