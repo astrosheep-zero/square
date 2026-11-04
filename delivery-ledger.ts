@@ -50,8 +50,8 @@ export interface DeliveryAttempt {
   readonly settledAt?: number;
 }
 export interface DeliveryReceipt { readonly owner: Owner; readonly key: string; readonly at: number }
-export type PostResult = { readonly status: 'posted' | 'duplicate' | 'conflict' | 'unknown-session' | 'deleted-session' | 'retracted' };
-export type RetractResult = 'retracted' | 'not-found' | 'in-custody';
+export type PostResult = { readonly status: 'posted' | 'duplicate' | 'conflict' | 'unknown-session' | 'deleted-session' | 'suppressed' };
+export type SuppressionResult = { readonly id: string; readonly status: 'suppressed' | 'in-custody' };
 export interface DeliveryHealth {
   readonly unknownAttempts: readonly DeliveryAttempt[];
   readonly repeatedFailures: readonly { readonly owner: Owner; readonly key: string; readonly count: number }[];
@@ -118,7 +118,7 @@ function correlation(value: DeliveryCorrelation): void {
 
 /** Shared by host and producer callers; an explicit delivery override always wins. */
 export function deliveryLedgerLocation(env: NodeJS.ProcessEnv = process.env, homeDir = os.homedir()): string {
-  return env.SQUARE_DELIVERY ?? path.join(homeDir, '.square', 'delivery.v2.sqlite');
+  return env.SQUARE_DELIVERY ?? path.join(homeDir, '.square', 'delivery.v3.sqlite');
 }
 
 function encodeDetails(details: Readonly<Record<string, unknown>>): string {
@@ -178,8 +178,18 @@ export class DeliveryLedger {
     if (typeof input.text !== 'string') throw new TypeError('Expected card text');
     return this.store.post({ ...input, details: input.details === undefined ? null : encodeDetails(input.details) });
   }
-  retract(input: { readonly owner: Owner; readonly key: string }): Promise<RetractResult> {
-    validateOwner(input.owner); nonempty(input.key); return this.store.retract(input);
+  suppress(input: { readonly owner: Owner; readonly key: string; readonly scope: 'exact' | 'prefix'; readonly expiresAt?: number }): Promise<SuppressionResult> {
+    validateOwner(input.owner); nonempty(input.key);
+    if (!['exact', 'prefix'].includes(input.scope) || input.expiresAt !== undefined && !Number.isFinite(input.expiresAt)) throw new TypeError('Invalid suppression');
+    return this.store.suppress(input);
+  }
+  renewSuppression(input: { readonly owner: Owner; readonly id: string; readonly expiresAt: number }): Promise<boolean> {
+    validateOwner(input.owner); nonempty(input.id);
+    if (!Number.isFinite(input.expiresAt)) throw new TypeError('Expected finite suppression expiry');
+    return this.store.renewSuppression(input);
+  }
+  releaseSuppression(input: { readonly owner: Owner; readonly id: string }): Promise<boolean> {
+    validateOwner(input.owner); nonempty(input.id); return this.store.releaseSuppression(input);
   }
   cancel(input: { readonly owner: Owner; readonly generation: string }): Promise<boolean> {
     validateOwner(input.owner); nonempty(input.generation); return this.store.cancel(input);

@@ -1,7 +1,7 @@
 # Delivery ledger
 
 `@astrosheep/square/delivery-ledger` exports `DeliveryLedger` and its types, also available from the
-package root. The per-user ledger defaults to `~/.square/delivery.v2.sqlite` and stores producer-neutral,
+package root. The per-user ledger defaults to `~/.square/delivery.v3.sqlite` and stores producer-neutral,
 finished text cards, session attachment, routes, attempts and receipts. Producers own content and
 recipient selection; adapters own transport behavior. Routes contain only `{kind, address}`.
 
@@ -14,8 +14,8 @@ Receipt retention is finite: once evidence expires, Square retains unproved loca
 or ACK, rather than inventing consumption or reinserting an uncertain old card.
 
 Square folds receipts lazily into its own read state only for full activity cards; a shortened activity
-card points to `square_catch` and cannot consume the full activity. Catch retracts corresponding ledger
-cards where possible. Cancellation suppresses outstanding work without claiming it was seen and cannot
+card points to `square_catch` and cannot consume the full activity. Catch permanently suppresses the
+corresponding ledger card where possible. Cancellation suppresses outstanding work without claiming it was seen and cannot
 recall an external send already past its final check. The ledger has no metadata matching or deferral
 API; producer-owned leases and exact ACK are described in [square-api.md](square-api.md).
 

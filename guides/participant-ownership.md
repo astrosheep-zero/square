@@ -4,10 +4,10 @@ Membership and host attachment are distinct. Square owns the standing participan
 join generation, listens and read horizon. The host delivery ledger owns session attachment and
 routes; it does not own membership. An owner is not an authentication credential.
 
-`done` ends membership and outgoing listens. After the leave commits, Square best-effort retracts
-known posted cards not yet in ledger custody for that captured participant and join generation; it
-does not consume producer history or recall an in-custody effect. Cleanup failure does not undo the
-leave or make it retry. A later join establishes a fresh generation; explicit takeover fences the
+`done` ends membership and outgoing listens. After the leave commits, Square best-effort withdraws
+matching posted cards for that captured participant and join generation when they are not already in
+ledger custody. It does not consume producer history or recall an in-custody effect. Cleanup failure
+does not undo the leave or make it retry. A later join establishes a fresh generation; explicit takeover fences the
 previous owner and generation. Host end only detaches the ledger session:
 the participant remains away without a timeout, retains audience and unread activity, and cannot
 write or receive proactive delivery. Start/resume attaches the ledger session, not individual seats;

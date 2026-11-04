@@ -6,6 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
+import { DatabaseSync } from 'node:sqlite';
 import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
@@ -212,7 +213,10 @@ test('done withdraws only its captured unclaimed cards without consuming history
   const pending = await c.cards();
   assert.equal(pending.some(card => card.key.includes(`#${first.id}/recipient/bob/`)), false);
   assert.ok(pending.some(card => card.key.includes(`/recipient/carol/`)), 'another seat under the same owner is not withdrawn');
-  assert.ok(pending.some(card => card.key === held.key), 'held custody cannot be recalled');
+  assert.equal(pending.some(card => card.key === held.key), false, 'suppressed custody is not pending');
+  const db = new DatabaseSync(c.env.SQUARE_DELIVERY, { readOnly: true });
+  try { assert.equal(db.prepare('SELECT 1 FROM cards WHERE owner=? AND key=?').get(c.owner, held.key) !== undefined, true, 'in-custody row remains until settlement'); }
+  finally { db.close(); }
   assert.equal((await c.artifact.read(facts => facts.receipt('Bob', Number(first.id.slice(4))))).value, undefined);
   const reborn = (await c.square.join('Bob', { owner: c.owner })).participant;
   await alice.express('replacement generation', { mentions: ['Bob'], force: true });

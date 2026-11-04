@@ -47,11 +47,11 @@ cannot recall or retroactively suppress export ownership already committed.
 After landing, Square renders and posts a card per audience member to the host delivery ledger using
 `square:<canonical-path>#act/N/recipient/<encodeURIComponent(nameKey(recipient))>/join/<encodeURIComponent(capturedJoinGeneration)>`.
 Notices use the analogous `notice/N` key. The recipient and participant join generation are frozen at
-landing; ledger attachment rotation does not change the key. Post, receipt lookup and retraction use
+landing; ledger attachment rotation does not change the key. Post, receipt lookup and suppression use
 the same captured coordinates. A later mutating operation retries unposted work idempotently. Directed
 activity cards bound the body to 200 characters and point to `square_catch` when shortened. Square records which cards contain
 the full activity. Unread means after the read horizon, not caught, and without a ledger receipt for
-a full card. Square folds retained receipts lazily during privileged producer operations; catch retracts
+a full card. Square folds retained receipts lazily during privileged producer operations; catch permanently suppresses
 the corresponding ledger cards when possible. Ledger receipt evidence has finite retention: after proof
 expires, locally unproved activity remains unread until explicit catch or ACK. Missing evidence proves
 neither consumption nor non-delivery. A shortened card cannot consume the full activity. Handoff

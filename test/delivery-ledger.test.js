@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { dispatchEligibleCards, postAndDispatch } from '../dist/index.js';
 import { DeliveryLedger, deliveryLedgerLocation } from '../dist/delivery-ledger.js';
 
 const owner = 'native:session/1';
@@ -99,25 +100,26 @@ test('opaque details round-trip across reopen, compare canonically, and do not c
     assert.throws(() => f.ledger.post({ owner, key: 'invalid', text: 'x', details: invalid }), TypeError);
 });
 
-test('the fresh default uses v2 and leaves an old default file untouched; overrides still win', async t => {
+test('the fresh default uses v3 and refuses old formats without changing them; overrides still win', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'delivery-default-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const oldPath = path.join(root, '.square', 'delivery.sqlite');
   await fs.mkdir(path.dirname(oldPath));
   const old = new DatabaseSync(oldPath);
-  old.exec('PRAGMA application_id=1145849682; PRAGMA user_version=1; CREATE TABLE cards (text TEXT);');
+  old.exec('PRAGMA application_id=1145849682; PRAGMA user_version=2; CREATE TABLE cards (text TEXT);');
   old.close();
   const before = await fs.readFile(oldPath);
   const override = process.env.SQUARE_DELIVERY;
   const homedir = mock.method(os, 'homedir', () => root);
   try {
     delete process.env.SQUARE_DELIVERY;
-    assert.equal(deliveryLedgerLocation(), path.join(root, '.square', 'delivery.v2.sqlite'));
+    assert.equal(deliveryLedgerLocation(), path.join(root, '.square', 'delivery.v3.sqlite'));
     const ledger = await DeliveryLedger.open();
     await ledger.close();
+    await assert.rejects(DeliveryLedger.open({ location: oldPath }), /Unsupported delivery ledger format/);
     assert.deepEqual(await fs.readFile(oldPath), before);
     const db = new DatabaseSync(deliveryLedgerLocation(), { readOnly: true });
-    try { assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2); }
+    try { assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3); }
     finally { db.close(); }
     process.env.SQUARE_DELIVERY = path.join(root, 'custom.sqlite');
     const custom = await DeliveryLedger.open();
@@ -150,21 +152,136 @@ test('attachment CAS has one winner and fences all lifecycle, route and new atte
   assert.equal((await f.post('p:deleted')).status, 'deleted-session');
 });
 
-test('retraction cannot recall custody, and failed/released attempts release both tracks', async t => {
+test('suppression blocks before and after claim, then permanent exact tombstones delete cards', async t => {
   const f = await fixture(t);
-  await f.post('p:retract');
-  assert.equal(await f.ledger.retract({ owner, key: 'p:retract' }), 'retracted');
+  const hold = await f.ledger.suppress({ owner, key: 'p:', scope: 'prefix', expiresAt: Date.now() + day });
+  assert.equal((await f.post('p:1')).status, 'suppressed');
+  assert.deepEqual(await f.ledger.pending(owner, { generation: f.session.generation }), []);
   assert.equal(await f.claim(), undefined);
+  assert.equal((await f.dispatch('p:1')).outcome, 'not-invoked');
+  const observer = await f.ledger.observe(owner);
+  t.after(() => observer.close());
+  const changed = observer.changed(await observer.read(), 3000);
+  await f.ledger.releaseSuppression({ owner, id: hold.id });
+  assert.equal(await changed, true);
+  const batch = await f.claim();
+  assert.equal(await f.ledger.suppress({ owner, key: 'p:1', scope: 'exact' }).then(result => result.status), 'in-custody');
+  assert.equal(await batch.current(), false);
+  await batch.settle('released');
+  assert.equal((await f.ledger.receipts(owner)).length, 0);
+  assert.equal(await f.ledger.pending(owner, { generation: f.session.generation }).then(cards => cards.length), 0);
+  await f.post('p:2');
+  const first = await f.ledger.suppress({ owner, key: 'p:2', scope: 'exact' });
+  const repeated = await f.ledger.suppress({ owner, key: 'p:2', scope: 'exact' });
+  assert.deepEqual(repeated, first);
+  assert.equal(f.read("SELECT COUNT(*) AS n FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL", owner, 'p:2')[0].n, 1);
+  assert.equal(first.status, 'suppressed');
+  assert.equal(f.read('SELECT * FROM cards WHERE key=?', 'p:2').length, 0);
+  assert.equal((await f.post('p:2')).status, 'suppressed');
+});
+
+test('permanent suppression preserves accepted handoff observation until presentation is confirmed', async t => {
+  const f = await fixture(t);
+  await f.post('producer:accepted-observation');
+  const result = await f.ledger.dispatchHandoff(owner, 'producer:accepted-observation', { kind: push.kind, async send(_card, _address, context) {
+    assert.equal(await context.prepare({ token: 'native', payloadHash: 'payload-hash' }), true);
+    return 'accepted';
+  } }, { generation: f.session.generation, timeoutMs: 1000 });
+  assert.equal(result.outcome, 'accepted');
+  const ref = await f.ledger.handoff(result.token);
+  assert.ok(ref);
+  const suppression = await f.ledger.suppress({ owner, key: 'producer:accepted-observation', scope: 'exact' });
+  assert.equal(suppression.status, 'in-custody');
+  assert.equal(f.read('SELECT COUNT(*) AS n FROM cards WHERE owner=? AND key=?', owner, 'producer:accepted-observation')[0].n, 1);
+  assert.equal(await f.ledger.observePresentation(ref), true);
+  assert.equal((await f.ledger.receipts(owner, { keys: ['producer:accepted-observation'] })).length, 1);
+  assert.equal((await f.ledger.pending(owner, { generation: f.session.generation })).length, 0);
+  assert.equal((await f.dispatch('producer:accepted-observation')).outcome, 'not-invoked');
+});
+
+test('suppression preserves a truthful late presentation after timeout', async t => {
+  const f = await fixture(t);
+  await f.post('p:late-presented');
+  const started = Promise.withResolvers(), effect = Promise.withResolvers();
+  const handoff = f.ledger.dispatchHandoff(owner, 'p:late-presented', { kind: push.kind, send() {
+    started.resolve(); return effect.promise;
+  } }, { generation: f.session.generation, timeoutMs: 20 });
+  await started.promise;
+  const timedOut = await handoff;
+  assert.equal(timedOut.outcome, 'unknown');
+  const suppression = await f.ledger.suppress({ owner, key: 'p:', scope: 'prefix', expiresAt: Date.now() + day });
+  assert.equal(suppression.status, 'in-custody');
+  effect.resolve('presented');
+  assert.deepEqual(await timedOut.lateSettlement, { outcome: 'presented', persistence: { status: 'recorded' } });
+  assert.equal((await f.ledger.receipts(owner, { keys: ['p:late-presented'] })).length, 1);
+  await f.ledger.releaseSuppression({ owner, id: suppression.id });
+  assert.equal((await f.ledger.pending(owner, { generation: f.session.generation })).some(card => card.key === 'p:late-presented'), false);
+});
+
+test('expiry restores eligibility and released suppression cannot be renewed', async t => {
+  let now = 100;
+  const f = await fixture(t, { clock: () => now });
+  const hold = await f.ledger.suppress({ owner, key: 'p:', scope: 'prefix', expiresAt: 110 });
+  assert.equal(await f.ledger.renewSuppression({ owner, id: hold.id, expiresAt: 120 }), true);
+  await f.post('p:renewed');
+  assert.deepEqual(await f.ledger.pending(owner, { generation: f.session.generation }), []);
+  now = 121;
+  assert.equal(await f.ledger.renewSuppression({ owner, id: hold.id, expiresAt: 130 }), false);
+  assert.deepEqual((await f.ledger.pending(owner, { generation: f.session.generation })).map(card => card.key), ['p:renewed']);
+  const released = await f.ledger.suppress({ owner, key: 'x', scope: 'exact', expiresAt: 200 });
+  assert.equal(await f.ledger.releaseSuppression({ owner, id: released.id }), true);
+  assert.equal(await f.ledger.renewSuppression({ owner, id: released.id, expiresAt: 300 }), false);
+});
+
+test('a permanent exact suppression survives release of a matching prefix hold', async t => {
+  const f = await fixture(t);
+  const prefix = await f.ledger.suppress({ owner, key: 'p/', scope: 'prefix', expiresAt: Date.now() + day });
+  await f.post('p/1'); await f.post('p/2');
+  await f.ledger.suppress({ owner, key: 'p/1', scope: 'exact' });
+  await f.ledger.releaseSuppression({ owner, id: prefix.id });
+  assert.deepEqual((await f.ledger.pending(owner, { generation: f.session.generation })).map(card => card.key), ['p/2']);
+});
+
+test('producer-neutral post helper dispatches a non-Square card through a supplied transport', async t => {
+  const f = await fixture(t);
+  const sent = [];
+  const result = await postAndDispatch(f.ledger, { owner, key: 'producer:plain', text: 'plain card' }, {
+    transports: [{ kind: push.kind, async send(card) { sent.push(card.text); return 'presented'; } }],
+  });
+  assert.equal(result.status, 'posted');
+  assert.deepEqual(sent, ['plain card']);
+  const held = await f.ledger.suppress({ owner, key: 'held/', scope: 'prefix', expiresAt: Date.now() + day });
+  await f.post('held/one');
+  assert.deepEqual(await f.ledger.pending(owner, { generation: f.session.generation }), []);
+  await f.ledger.releaseSuppression({ owner, id: held.id });
+  await dispatchEligibleCards(f.ledger, owner, { transports: [{ kind: push.kind, async send(card) { sent.push(card.text); return 'presented'; } }] });
+  assert.deepEqual(sent, ['plain card', 'held/one']);
+});
+
+test('handoff final check refuses suppression added after claim', async t => {
+  const f = await fixture(t);
+  await f.post('producer:guarded');
+  let presented = false;
+  const result = await f.ledger.dispatchHandoff(owner, 'producer:guarded', { kind: push.kind, async send(_card, _address, context) {
+    const suppression = await f.ledger.suppress({ owner, key: 'producer:guarded', scope: 'exact' });
+    assert.equal(suppression.status, 'in-custody');
+    if (await context.beforeSend()) presented = true;
+    return presented ? 'presented' : 'released';
+  } }, { generation: f.session.generation, timeoutMs: 1000 });
+  assert.equal(presented, false);
+  assert.equal(result.outcome, 'released');
+  assert.equal((await f.ledger.receipts(owner)).length, 0);
+});
+
+test('failed/released attempts release both tracks', async t => {
+  const f = await fixture(t);
   await f.post('p:active');
   const batch = await f.claim();
-  assert.equal(await f.ledger.retract({ owner, key: 'p:active' }), 'in-custody');
-  assert.equal((await f.dispatch('p:active')).outcome, 'not-invoked');
   await batch.settle('released');
   assert.equal((await f.dispatch('p:active', 'failed')).outcome, 'failed');
   const retried = await f.claim();
   await retried.settle('failed');
   assert.equal((await f.dispatch('p:active', 'not-capable')).outcome, 'not-capable');
-  assert.equal(await f.ledger.retract({ owner, key: 'p:active' }), 'retracted');
 });
 
 test('both tracks exclude custody in every blocking outcome, while exact handoff observation confirms once', async t => {
@@ -424,7 +541,7 @@ test('retention expires completed cards/receipts at 30 days, keeps unconsumed ca
   const f = await fixture(t, { clock: () => now });
   await f.post('p:done');
   await (await f.claim()).settle('presented');
-  await f.post('p:retracted'); await f.ledger.retract({ owner, key: 'p:retracted' });
+  await f.post('p:withdrawn'); await f.ledger.suppress({ owner, key: 'p:withdrawn', scope: 'exact' });
   await f.post('p:pending');
   await f.post('p:accepted');
   assert.equal((await f.dispatch('p:accepted')).outcome, 'accepted');

@@ -4,16 +4,19 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { inSqliteTransaction } from './sqlite-transaction.js';
 import { validateSchema } from './sqlite-framing.js';
-import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, RetractResult } from './delivery-ledger.js';
+import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, SuppressionResult } from './delivery-ledger.js';
 
 type Row = Record<string, SQLInputValue>;
-const FORMAT = 2;
+const FORMAT = 3;
 const APPLICATION_ID = 0x444c4752;
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const SCHEMA = `CREATE TABLE meta (format INTEGER NOT NULL, next_seq INTEGER NOT NULL);
 CREATE TABLE sessions (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, state TEXT NOT NULL, routes_json TEXT NOT NULL, at REAL NOT NULL);
-CREATE TABLE cards (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, text TEXT NOT NULL, details TEXT, posted_at REAL NOT NULL, retracted_at REAL, UNIQUE(owner,key));
+CREATE TABLE cards (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, text TEXT NOT NULL, details TEXT, posted_at REAL NOT NULL, UNIQUE(owner,key));
 CREATE INDEX cards_owner ON cards(owner,seq);
+CREATE TABLE suppressions (id TEXT PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('exact','prefix')), created_at REAL NOT NULL, expires_at REAL);
+CREATE INDEX suppressions_owner ON suppressions(owner);
+CREATE UNIQUE INDEX suppressions_permanent_exact ON suppressions(owner,key) WHERE scope='exact' AND expires_at IS NULL;
 CREATE TABLE attempts (token TEXT PRIMARY KEY, seq INTEGER NOT NULL, generation TEXT NOT NULL, track TEXT NOT NULL, route_kind TEXT, outcome TEXT NOT NULL, correlation_json TEXT NOT NULL, started_at REAL NOT NULL, expires_at REAL NOT NULL, settled_at REAL);
 CREATE INDEX attempts_seq ON attempts(seq);
 CREATE TABLE receipts (owner TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL, PRIMARY KEY(owner,key));
@@ -109,6 +112,12 @@ export class LedgerStore {
   private listAttempts(seq: number): DeliveryAttempt[] {
     return (this.db.prepare('SELECT * FROM attempts WHERE seq=? ORDER BY started_at,token').all(seq) as Row[]).map(attempt);
   }
+  private awaitingEffect(seq: number): boolean {
+    const attempts = this.listAttempts(seq);
+    if (attempts.some(a => ['dispatching', 'unknown'].includes(a.outcome))) return true;
+    return attempts.some(a => a.track === 'handoff' && a.outcome === 'accepted')
+      && !attempts.some(a => a.track === 'presentation' && a.outcome === 'presented');
+  }
   private getAttempt(token: string): DeliveryAttempt | undefined {
     const row = this.db.prepare('SELECT * FROM attempts WHERE token=?').get(token) as Row | undefined;
     return row ? attempt(row) : undefined;
@@ -120,9 +129,18 @@ export class LedgerStore {
   }
   private gc(now: number): void {
     const cutoff = now - RETENTION_MS;
-    const old = this.db.prepare(`SELECT c.seq FROM cards c WHERE c.posted_at<? AND
-      (c.retracted_at<? OR EXISTS(SELECT 1 FROM attempts p WHERE p.seq=c.seq AND p.track='presentation' AND p.outcome='presented' AND p.settled_at<?))
-      AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.seq=c.seq AND a.outcome='dispatching') ORDER BY c.seq LIMIT 100`).all(cutoff, cutoff, cutoff) as Row[];
+    this.db.prepare('DELETE FROM suppressions WHERE expires_at IS NOT NULL AND expires_at<=?').run(now);
+    const suppressed = this.db.prepare(`SELECT seq FROM cards WHERE EXISTS(SELECT 1 FROM suppressions s WHERE s.owner=cards.owner AND s.scope='exact' AND s.key=cards.key AND s.expires_at IS NULL)
+      AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.seq=cards.seq AND a.outcome IN ('dispatching','unknown'))`).all() as Row[];
+    for (const row of suppressed) {
+      if (this.awaitingEffect(row.seq as number)) continue;
+      this.db.prepare('DELETE FROM attempts WHERE seq=?').run(row.seq);
+      this.db.prepare('DELETE FROM cards WHERE seq=?').run(row.seq);
+    }
+    this.db.prepare('DELETE FROM suppressions WHERE expires_at IS NULL AND created_at<?').run(cutoff);
+    const old = this.db.prepare(`SELECT c.seq FROM cards c WHERE c.posted_at<?
+      AND EXISTS(SELECT 1 FROM attempts p WHERE p.seq=c.seq AND p.track='presentation' AND p.outcome='presented' AND p.settled_at<?)
+      AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.seq=c.seq AND a.outcome='dispatching') ORDER BY c.seq LIMIT 100`).all(cutoff, cutoff) as Row[];
     for (const row of old) {
       this.db.prepare('DELETE FROM attempts WHERE seq=?').run(row.seq);
       this.db.prepare('DELETE FROM cards WHERE seq=?').run(row.seq);
@@ -134,8 +152,8 @@ export class LedgerStore {
     return this.transaction(false, () => (this.db.prepare('SELECT * FROM sessions ORDER BY owner').all() as Row[]).map(row => session(row)!));
   }
   pendingCards(owner: string, generation: string): Promise<readonly DeliveryCard[]> {
-    return this.transaction(false, () => this.attached(owner, generation)
-      ? (this.db.prepare('SELECT * FROM cards WHERE owner=? ORDER BY seq').all(owner) as Row[]).filter(row => this.eligible(row)).map(card) : []);
+    return this.transaction(false, now => this.attached(owner, generation)
+      ? (this.db.prepare('SELECT * FROM cards WHERE owner=? ORDER BY seq').all(owner) as Row[]).filter(row => this.eligible(row, now)).map(card) : []);
   }
   handoffs(owner: string, generation: string): Promise<readonly DeliveryAttempt[]> {
     return this.transaction(false, () => (this.db.prepare(`SELECT a.* FROM attempts a JOIN cards c ON c.seq=a.seq
@@ -173,23 +191,41 @@ export class LedgerStore {
       const s = this.getSession(input.owner);
       if (!s) return { status: 'unknown-session' };
       if (s.state === 'deleted') return { status: 'deleted-session' };
-      const previous = this.db.prepare('SELECT text,details,retracted_at FROM cards WHERE owner=? AND key=?').get(input.owner, input.key);
-      if (previous) return { status: previous.text !== input.text || previous.details !== input.details ? 'conflict' : previous.retracted_at === null ? 'duplicate' : 'retracted' };
+      const previous = this.db.prepare('SELECT text,details FROM cards WHERE owner=? AND key=?').get(input.owner, input.key);
+      if (previous) return { status: previous.text !== input.text || previous.details !== input.details ? 'conflict' : this.isSuppressed(input.owner, input.key, now) ? 'suppressed' : 'duplicate' };
+      if (this.db.prepare("SELECT 1 FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL").get(input.owner, input.key)) return { status: 'suppressed' };
+      const suppressed = this.isSuppressed(input.owner, input.key, now);
       const seq = Number(this.db.prepare('SELECT next_seq FROM meta').get()!.next_seq);
       if (!Number.isSafeInteger(seq + 1)) throw new RangeError('Delivery sequence exhausted');
       this.db.prepare('UPDATE meta SET next_seq=?').run(seq + 1);
-      this.db.prepare('INSERT INTO cards VALUES(?,?,?,?,?,?,NULL)').run(seq, input.owner, input.key, input.text, input.details, now);
-      return { status: 'posted' };
+      this.db.prepare('INSERT INTO cards VALUES(?,?,?,?,?,?)').run(seq, input.owner, input.key, input.text, input.details, now);
+      return { status: suppressed ? 'suppressed' : 'posted' };
     });
   }
-  retract(input: { owner: string; key: string }): Promise<RetractResult> {
+  suppress(input: { owner: string; key: string; scope: 'exact' | 'prefix'; expiresAt?: number }): Promise<SuppressionResult> {
     return this.transaction(true, now => {
-      const row = this.db.prepare('SELECT * FROM cards WHERE owner=? AND key=?').get(input.owner, input.key) as Row | undefined;
-      if (!row) return 'not-found';
-      if (this.listAttempts(row.seq as number).some(holds)) return 'in-custody';
-      this.db.prepare('UPDATE cards SET retracted_at=COALESCE(retracted_at,?) WHERE seq=?').run(now, row.seq);
-      return 'retracted';
+      const permanentId = input.scope === 'exact' && input.expiresAt === undefined
+        ? (this.db.prepare("SELECT id FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL").get(input.owner, input.key) as Row | undefined)?.id as string | undefined
+        : undefined;
+      const id = permanentId ?? randomUUID();
+      const matching = (this.db.prepare('SELECT * FROM cards WHERE owner=?').all(input.owner) as Row[])
+        .filter(row => input.scope === 'exact' ? row.key === input.key : String(row.key).startsWith(input.key));
+      const inCustody = matching.some(row => this.awaitingEffect(row.seq as number));
+      if (permanentId === undefined) this.db.prepare('INSERT INTO suppressions VALUES(?,?,?,?,?,?)').run(id, input.owner, input.key, input.scope, now, input.expiresAt ?? null);
+      if (input.scope === 'exact' && input.expiresAt === undefined) for (const row of matching) {
+        if (!this.awaitingEffect(row.seq as number)) {
+          this.db.prepare('DELETE FROM attempts WHERE seq=?').run(row.seq);
+          this.db.prepare('DELETE FROM cards WHERE seq=?').run(row.seq);
+        }
+      }
+      return { id, status: inCustody ? 'in-custody' : 'suppressed' };
     });
+  }
+  renewSuppression(input: { owner: string; id: string; expiresAt: number }): Promise<boolean> {
+    return this.transaction(true, now => this.db.prepare('UPDATE suppressions SET expires_at=? WHERE owner=? AND id=? AND (expires_at IS NULL OR expires_at>?)').run(input.expiresAt, input.owner, input.id, now).changes > 0);
+  }
+  releaseSuppression(input: { owner: string; id: string }): Promise<boolean> {
+    return this.transaction(true, () => this.db.prepare('DELETE FROM suppressions WHERE owner=? AND id=?').run(input.owner, input.id).changes > 0);
   }
   cancel(input: { owner: string; generation: string }): Promise<boolean> {
     return this.transaction(true, () => {
@@ -199,8 +235,12 @@ export class LedgerStore {
       return true;
     });
   }
-  private eligible(row: Row): boolean {
-    if (row.retracted_at !== null) return false;
+  private isSuppressed(owner: string, key: string, now: number): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM suppressions WHERE owner=? AND (expires_at IS NULL OR expires_at>?)
+      AND ((scope='exact' AND key=?) OR (scope='prefix' AND substr(?,1,length(key))=key)) LIMIT 1`).get(owner, now, key, key);
+  }
+  private eligible(row: Row, now: number): boolean {
+    if (this.isSuppressed(String(row.owner), String(row.key), now)) return false;
     if (this.db.prepare('SELECT 1 FROM receipts WHERE owner=? AND key=?').get(row.owner, row.key)) return false;
     const cancellation = this.db.prepare('SELECT through_seq FROM cancellations WHERE owner=?').get(row.owner);
     return !(cancellation && Number(cancellation.through_seq) >= Number(row.seq));
@@ -217,7 +257,7 @@ export class LedgerStore {
       const cards: DeliveryCard[] = [], attempts: DeliveryAttempt[] = [];
       let size = 0;
       for (const row of this.db.prepare('SELECT * FROM cards WHERE owner=? ORDER BY seq').all(owner) as Row[]) {
-        if (!this.eligible(row) || this.listAttempts(row.seq as number).some(holds)) continue;
+        if (!this.eligible(row, now) || this.listAttempts(row.seq as number).some(holds)) continue;
         const next = card(row);
         const nextSize = size + next.text.length + (cards.length ? 2 : 0);
         if (nextSize > budgetChars && cards.length > 0) break;
@@ -235,7 +275,7 @@ export class LedgerStore {
       if (!route) return undefined;
       this.normalize(now);
       const row = this.db.prepare('SELECT * FROM cards WHERE owner=? AND key=?').get(owner, key) as Row | undefined;
-      if (!row || !this.eligible(row) || this.listAttempts(row.seq as number).some(holds)) return undefined;
+      if (!row || !this.eligible(row, now) || this.listAttempts(row.seq as number).some(holds)) return undefined;
       return { card: card(row), route, attempt: this.insertAttempt(row.seq as number, generation, 'handoff', route.kind, now, leaseMs) };
     }, signal);
   }
@@ -247,7 +287,7 @@ export class LedgerStore {
       const row = this.db.prepare('SELECT * FROM cards WHERE seq=?').get(a.seq) as Row | undefined;
       const s = row && this.attached(row.owner as string, a.generation);
       const registered = s?.routes.find(candidate => candidate.kind === route?.kind);
-      return !!row && !!s && this.eligible(row) && (route === undefined || !!registered
+      return !!row && !!s && this.eligible(row, now) && (route === undefined || !!registered
         && Object.keys(route.address).length === Object.keys(registered.address).length
         && Object.entries(route.address).every(([key, value]) => Object.hasOwn(registered.address, key) && registered.address[key] === value));
     }), signal);
@@ -315,7 +355,7 @@ export class LedgerStore {
   }
   private currentHandoff(facts: NonNullable<ReturnType<LedgerStore['handoffFacts']>>, now: number): boolean {
     const s = this.attached(facts.ref.owner, facts.ref.generation);
-    return facts.attempt.expiresAt > now && !!s && s.routes.some(route => route.kind === facts.ref.routeKind) && this.eligible(facts.row);
+    return facts.attempt.expiresAt > now && !!s && s.routes.some(route => route.kind === facts.ref.routeKind) && this.eligible(facts.row, now);
   }
   handoff(token: string): Promise<(DeliveryHandoffRef & { routeKind: string }) | undefined> {
     return this.transaction(false, () => this.handoffFacts(token)?.ref);
@@ -339,7 +379,7 @@ export class LedgerStore {
       const facts = typeof handoff === 'string' ? undefined : this.matchingHandoff(handoff);
       if (options?.requireCurrent) {
         const s = facts && this.attached(facts.ref.owner, facts.ref.generation);
-        if (!facts || !s || !s.routes.some(route => route.kind === facts.ref.routeKind) || !this.eligible(facts.row)
+        if (!facts || !s || !s.routes.some(route => route.kind === facts.ref.routeKind) || !this.eligible(facts.row, now)
           || !!this.db.prepare(`SELECT 1 FROM attempts WHERE seq=? AND rowid>(SELECT rowid FROM attempts WHERE token=?) LIMIT 1`)
             .get(facts.attempt.seq, facts.attempt.token)) return false;
       }

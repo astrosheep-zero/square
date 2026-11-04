@@ -79,16 +79,16 @@ export async function reconcileSquareDelivery(artifact: SquareArtifactPort, loca
       if (receipt !== undefined && post.full === true && !post.consumed)
         await artifact.transactAs({ kind: 'producer' }, facts => facts.foldReceipt(post, receipt));
     }
-    await retractWithdrawn(artifact, ledger, location);
+    await suppressWithdrawn(artifact, ledger, location);
   } finally { await ledger.close(); }
 }
-async function retractWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryLedger, location: string): Promise<void> {
+async function suppressWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryLedger, location: string): Promise<void> {
   const posts = (await artifact.read(facts => facts.postedPosts().filter(post => {
     const seat = facts.seat(post.recipient);
     return post.consumed || !seat || seat.owner !== post.owner || seat.generation !== post.generation;
   }))).value;
   // Departure withdraws only the captured notification, never producer read history or held effects.
-  for (const post of posts) await ledger.retract({ owner: post.owner, key: squarePostKey(location, post) });
+  for (const post of posts) await ledger.suppress({ owner: post.owner, key: squarePostKey(location, post), scope: 'exact' });
 }
 /** One export path for Square activities and Square-owned notices. No transaction spans I/O. */
 export async function flushSquarePosts(artifact: SquareArtifactPort, location: string, env: NodeJS.ProcessEnv, clock: () => number): Promise<void> {
@@ -117,7 +117,7 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
           ...(post.kind === 'activity' ? { details: { kind: 'square-activity', square: location,
             act: formatActivityId(post.index), actor: post.from, recipient: post.recipient, route: post.route } } : {}),
         });
-        posted = ['posted', 'duplicate', 'retracted'].includes(result.status);
+        posted = ['posted', 'duplicate', 'suppressed'].includes(result.status);
         knownUnsent = !posted;
         if (result.status === 'conflict') throw new Error('A Square card key already holds different text.');
       } finally {
@@ -125,8 +125,7 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
         await artifact.settleAs({ kind: 'producer' }, facts => facts.settlePost(token, rendered.full, disposition));
       }
     }
-    await retractWithdrawn(artifact, ledger, location);
-    // Insertion is durable producer progress; dispatch remains retryable through ledger custody.
+    await suppressWithdrawn(artifact, ledger, location);
     const posts = (await artifact.read(facts => facts.postedPosts().filter(post => {
       const seat = facts.seat(post.recipient);
       return !post.consumed && seat?.owner === post.owner && seat.generation === post.generation;
