@@ -126,6 +126,20 @@ export class LedgerStore {
     this.db.prepare(`UPDATE attempts SET outcome='unknown', settled_at=? WHERE outcome='dispatching' AND
       (expires_at<=? OR NOT EXISTS(SELECT 1 FROM cards c JOIN sessions s ON s.owner=c.owner
         WHERE c.seq=attempts.seq AND s.generation=attempts.generation AND s.state='attached'))`).run(now, now);
+    this.db.prepare(`UPDATE cards SET text='',details=NULL WHERE (text<>'' OR details IS NOT NULL)
+      AND EXISTS(SELECT 1 FROM attempts a WHERE a.seq=cards.seq AND a.outcome IN ('accepted','unknown','presented'))`).run();
+    const terminal = this.db.prepare(`SELECT seq FROM cards WHERE
+      EXISTS(SELECT 1 FROM attempts a WHERE a.seq=cards.seq AND a.track='presentation' AND a.outcome='presented')
+      AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.seq=cards.seq AND a.outcome='dispatching')`).all() as Row[];
+    for (const row of terminal) this.deleteCard(row.seq as number, now);
+  }
+  private deleteCard(seq: number, tombstoneAt?: number): void {
+    if (tombstoneAt !== undefined) this.db.prepare(`INSERT INTO suppressions
+      SELECT ?,owner,key,'exact',?,NULL FROM cards WHERE seq=?
+      ON CONFLICT(owner,key) WHERE scope='exact' AND expires_at IS NULL DO UPDATE SET created_at=excluded.created_at`)
+      .run(randomUUID(), tombstoneAt, seq);
+    this.db.prepare('DELETE FROM attempts WHERE seq=?').run(seq);
+    this.db.prepare('DELETE FROM cards WHERE seq=?').run(seq);
   }
   private gc(now: number): void {
     const cutoff = now - RETENTION_MS;
@@ -134,17 +148,19 @@ export class LedgerStore {
       AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.seq=cards.seq AND a.outcome IN ('dispatching','unknown'))`).all() as Row[];
     for (const row of suppressed) {
       if (this.awaitingEffect(row.seq as number)) continue;
-      this.db.prepare('DELETE FROM attempts WHERE seq=?').run(row.seq);
-      this.db.prepare('DELETE FROM cards WHERE seq=?').run(row.seq);
+      this.deleteCard(row.seq as number);
     }
-    this.db.prepare('DELETE FROM suppressions WHERE expires_at IS NULL AND created_at<?').run(cutoff);
-    const old = this.db.prepare(`SELECT c.seq FROM cards c WHERE c.posted_at<?
-      AND EXISTS(SELECT 1 FROM attempts p WHERE p.seq=c.seq AND p.track='presentation' AND p.outcome='presented' AND p.settled_at<?)
-      AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.seq=c.seq AND a.outcome='dispatching') ORDER BY c.seq LIMIT 100`).all(cutoff, cutoff) as Row[];
-    for (const row of old) {
-      this.db.prepare('DELETE FROM attempts WHERE seq=?').run(row.seq);
-      this.db.prepare('DELETE FROM cards WHERE seq=?').run(row.seq);
-    }
+    this.db.prepare(`DELETE FROM suppressions WHERE id IN (SELECT id FROM suppressions
+      WHERE expires_at IS NULL AND created_at<? ORDER BY created_at LIMIT 100)`).run(cutoff);
+    const expiredSessions = this.db.prepare(`SELECT c.seq FROM cards c JOIN sessions s ON s.owner=c.owner
+      WHERE s.state='deleted' OR (s.state='detached' AND s.at<?) ORDER BY c.seq`).all(cutoff) as Row[];
+    for (const row of expiredSessions) this.deleteCard(row.seq as number);
+    this.db.prepare("DELETE FROM suppressions WHERE owner IN (SELECT owner FROM sessions WHERE state='deleted')").run();
+    const old = this.db.prepare(`SELECT c.seq FROM cards c WHERE
+      EXISTS(SELECT 1 FROM attempts a WHERE a.seq=c.seq AND a.outcome IN ('accepted','unknown'))
+      AND (SELECT MAX(a.settled_at) FROM attempts a WHERE a.seq=c.seq)<?
+      AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.seq=c.seq AND a.outcome='dispatching') ORDER BY c.seq LIMIT 100`).all(cutoff) as Row[];
+    for (const row of old) this.deleteCard(row.seq as number, now);
     this.db.prepare('DELETE FROM receipts WHERE rowid IN (SELECT rowid FROM receipts WHERE at<? ORDER BY at LIMIT 100)').run(cutoff);
   }
   session(owner: string): Promise<DeliverySession | undefined> { return this.transaction(false, () => this.getSession(owner)); }
@@ -191,8 +207,11 @@ export class LedgerStore {
       const s = this.getSession(input.owner);
       if (!s) return { status: 'unknown-session' };
       if (s.state === 'deleted') return { status: 'deleted-session' };
-      const previous = this.db.prepare('SELECT text,details FROM cards WHERE owner=? AND key=?').get(input.owner, input.key);
-      if (previous) return { status: previous.text !== input.text || previous.details !== input.details ? 'conflict' : this.isSuppressed(input.owner, input.key, now) ? 'suppressed' : 'duplicate' };
+      const previous = this.db.prepare('SELECT * FROM cards WHERE owner=? AND key=?').get(input.owner, input.key) as Row | undefined;
+      if (previous) {
+        if (this.listAttempts(previous.seq as number).some(a => ['accepted', 'unknown', 'presented'].includes(a.outcome))) return { status: 'duplicate' };
+        return { status: previous.text !== input.text || previous.details !== input.details ? 'conflict' : this.isSuppressed(input.owner, input.key, now) ? 'suppressed' : 'duplicate' };
+      }
       if (this.db.prepare("SELECT 1 FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL").get(input.owner, input.key)) return { status: 'suppressed' };
       const suppressed = this.isSuppressed(input.owner, input.key, now);
       const seq = Number(this.db.prepare('SELECT next_seq FROM meta').get()!.next_seq);
@@ -213,10 +232,7 @@ export class LedgerStore {
       const inCustody = matching.some(row => this.awaitingEffect(row.seq as number));
       if (permanentId === undefined) this.db.prepare('INSERT INTO suppressions VALUES(?,?,?,?,?,?)').run(id, input.owner, input.key, input.scope, now, input.expiresAt ?? null);
       if (input.scope === 'exact' && input.expiresAt === undefined) for (const row of matching) {
-        if (!this.awaitingEffect(row.seq as number)) {
-          this.db.prepare('DELETE FROM attempts WHERE seq=?').run(row.seq);
-          this.db.prepare('DELETE FROM cards WHERE seq=?').run(row.seq);
-        }
+        if (!this.awaitingEffect(row.seq as number)) this.deleteCard(row.seq as number);
       }
       return { id, status: inCustody ? 'in-custody' : 'suppressed' };
     });

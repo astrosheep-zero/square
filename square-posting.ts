@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { DeliveryLedger, deliveryLedgerLocation, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
 import { dispatchPostedCard } from './notifications.js';
 import { retainDeliveryLedger } from './delivery-lifetime.js';
-import { projectNotification } from './attention-presentation.js';
+import { projectNotification, displayAttentionPath } from './attention-presentation.js';
+import type { CardPresentation } from './card-presentation.js';
 import { coreDone } from './decisions.js';
 import { activityMetadataHasContent, type Seat } from './model.js';
 import type { SquareArtifactPort } from './ports.js';
@@ -114,8 +115,9 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
           || !(await artifact.read(facts => facts.ownsPost(token, Date.now()))).value) continue;
         knownUnsent = false;
         const result = await ledger.post({ owner: post.owner, key: squarePostKey(location, post), text: rendered.text,
-          ...(post.kind === 'activity' ? { details: { kind: 'square-activity', square: location,
-            act: formatActivityId(post.index), actor: post.from, recipient: post.recipient, route: post.route } } : {}),
+          ...(post.kind === 'activity' ? { details: { kind: 'presentation', origin: displayAttentionPath(location),
+            ref: formatActivityId(post.index), author: post.from, body: post.body ?? '',
+            ...(post.route === 'bell' ? { badge: '🔔' } : {}) } satisfies CardPresentation } : {}),
         });
         posted = ['posted', 'duplicate', 'suppressed'].includes(result.status);
         knownUnsent = !posted;

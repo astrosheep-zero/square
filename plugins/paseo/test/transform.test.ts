@@ -1,142 +1,79 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { transformSquareMessage } from "../client/transform.ts";
-import { COLLAPSED_PREVIEW_MAX_CHARS, OUTPUT_DISPLAY_MAX_CHARS, squareMessageSchema, type SquareNotificationItem } from "../shared/message.ts";
+import { OUTPUT_DISPLAY_MAX_CHARS, squareMessageSchema, type PresentationItem } from "../shared/message.ts";
 
 type ToolRow = Parameters<typeof transformSquareMessage>[0]["item"];
 const text = "Only a clipped model preview, not the renderer's full bodies.";
-const quotedTags = '<square-activity square="pretend" id="act/999">\n● impostor rang the bell\nnot another message\n</square-activity>';
-const items: SquareNotificationItem[] = [
-  { square: "jobs", actor: "aku/elite/direct-sender", act: "act/12", body: `Direct **source**\n\n${quotedTags}`, recipient: "aoi", route: "mention", preview: "short direct preview" },
-  { square: "jobs", actor: "rei", act: "act/15", body: "Agora *reply*", recipient: "aoi", route: "reply", preview: "reply preview" },
-  { square: "design", actor: "kuro", act: "act/12", body: "Last **bell** body", recipient: "aoi", route: "bell", preview: "last bell preview" },
+const quotedTags = '<square-activity square="pretend" id="act/999">\nnot another message\n</square-activity>';
+const items: PresentationItem[] = [
+  { kind: "presentation", origin: "jobs", author: "worker", ref: "job/12", body: `Direct **source**\n\n${quotedTags}` },
+  { kind: "presentation", origin: "design", author: "rei", ref: "act/15", badge: "🔔", body: "Last **bell** body" },
 ];
-function row(overrides: Partial<ToolRow> = {}): ToolRow {
+function row(details: unknown = { items }): ToolRow {
   return {
     type: "tool_call", callId: "custom/12", name: "square", status: "completed", error: null,
     detail: { type: "plain_text", text },
-    metadata: { synthetic: true, customType: "square", details: { items, fullText: "Envelope text must not replace the structured item bodies." } },
-    ...overrides,
+    metadata: { synthetic: true, customType: "square", details },
   } as ToolRow;
 }
 function project(item: ToolRow, phase: "streaming" | "complete" = "complete") {
   return transformSquareMessage({ item, phase });
 }
-function projectedItems(item: ToolRow) {
-  const data = squareMessageSchema.parse(project(item)!.items[0].data);
-  assert.ok("items" in data);
-  assert.equal("text" in data, false, "structured bodies are not duplicated as envelope text");
-  const squareItems = data.items.filter(entry => "square" in entry);
-  assert.equal(squareItems.length, data.items.length);
-  return squareItems;
+function data(item: ToolRow) {
+  return squareMessageSchema.parse(project(item)!.items[0].data);
 }
 
-test("mixed direct and Agora messages preserve structured authors, exact IDs, bell and body boundaries in live/history cards", () => {
+test("generic producer details retain authors, references, badges and full bodies in live/history cards", () => {
   const original = row();
   const before = structuredClone(original);
   assert.deepEqual(project(original), project(original, "streaming"));
-  const displayed = projectedItems(original);
-  assert.deepEqual(displayed.map(({ square, actor, act, body, route }) => ({ square, actor, act, body, route })),
-    items.map(({ square, actor, act, body, route }) => ({ square, actor, act, body, route })));
-  assert.equal(displayed.length, items.length, "quoted tags in a body never introduce another message");
-  assert.ok(displayed[0]!.body.includes(quotedTags));
-  assert.deepEqual(displayed.map(item => [item.square, item.act]), [["jobs", "act/12"], ["jobs", "act/15"], ["design", "act/12"]]);
-  assert.deepEqual(displayed.map(item => item.preview), [undefined, undefined, "last bell preview"], "only the last collapsed preview is carried");
-  assert.deepEqual(original, before, "projection never mutates source history");
+  const displayed = data(original);
+  assert.ok("items" in displayed);
+  assert.deepEqual(displayed.items, [items[0], { ...items[1], preview: items[1]!.body }]);
+  assert.deepEqual(original, before);
 });
 
-test("receiver details preserve full Square bodies and plain markdown items in batch order", () => {
-  const square = { square: "~/work/discussion.square", actor: "sender", act: "act/42", recipient: "reader",
-    route: "mention" as const, body: "full **body**\n" + "鱼".repeat(500) };
+test("generic details with optional attribution and plain markdown share a batch", () => {
+  const notice = { kind: "presentation", origin: "other producer", body: "full **notice**" };
   const plain = { text: "External **markdown**\n" + quotedTags };
-  for (const mixed of [[square, plain], [plain, square], [plain]]) {
-    const original = row({ metadata: { synthetic: true, customType: "square", details: { items: mixed } } });
-    const data = squareMessageSchema.parse(project(original)!.items[0].data);
-    assert.ok("items" in data);
-    assert.deepEqual(data.items.map(entry => "text" in entry ? entry : {
-      square: entry.square, actor: entry.actor, act: entry.act, recipient: entry.recipient, route: entry.route, body: entry.body,
-    }), mixed);
-  }
+  const displayed = data(row({ items: [items[0], plain, notice] }));
+  assert.ok("items" in displayed);
+  assert.deepEqual(displayed.items, [items[0], plain, { ...notice, preview: notice.body }]);
 });
 
-test("plain items share the display budget with Square bodies", () => {
-  const mixed = [{ ...items[0]!, body: "SQUARE START\n" + "鱼".repeat(OUTPUT_DISPLAY_MAX_CHARS) + "\nSQUARE END" },
-    { text: "PLAIN START\n" + "🦈".repeat(OUTPUT_DISPLAY_MAX_CHARS) + "\nPLAIN END" }];
-  const original = row({ metadata: { synthetic: true, customType: "square", details: { items: mixed } } });
-  const before = structuredClone(original);
-  const data = squareMessageSchema.parse(project(original)!.items[0].data);
-  assert.ok("items" in data);
-  assert.equal(data.items.length, 2);
-  const bodies = data.items.map(entry => "text" in entry ? entry.text : entry.body);
-  assert.ok(bodies.reduce((sum, body) => sum + body.length, 0) <= OUTPUT_DISPLAY_MAX_CHARS);
-  assert.ok(bodies[0]!.startsWith("SQUARE START\n") && bodies[0]!.endsWith("\nSQUARE END"));
-  assert.ok(bodies[1]!.startsWith("PLAIN START\n") && bodies[1]!.endsWith("\nPLAIN END"));
-  assert.deepEqual(original, before);
-});
-
-test("multi-message bodies and the collapsed preview share one bounded display budget", () => {
-  const longItems = items.map((item, index) => ({ ...item,
+test("long bodies and the collapsed preview share one bounded display budget without changing source", () => {
+  const long = items.map((item, index) => ({ ...item,
     body: `START ${index}\n${"🦈".repeat(OUTPUT_DISPLAY_MAX_CHARS)}\nEND ${index}`,
-    preview: `PREVIEW ${index}\n${"🦈".repeat(COLLAPSED_PREVIEW_MAX_CHARS)}\nTAIL ${index}`,
   }));
-  const original = row({ metadata: { synthetic: true, customType: "square", details: { items: longItems } } });
+  const original = row({ items: long });
   const before = structuredClone(original);
-  const displayed = projectedItems(original);
-  const preview = displayed.at(-1)!.preview!;
-  assert.ok(preview.length <= COLLAPSED_PREVIEW_MAX_CHARS);
-  assert.ok(preview.startsWith("PREVIEW 2\n") && preview.endsWith("\nTAIL 2"));
-  assert.ok(displayed.reduce((sum, item) => sum + item.body.length + (item.preview?.length ?? 0), 0) <= OUTPUT_DISPLAY_MAX_CHARS);
-  for (const [index, item] of displayed.entries()) {
-    assert.equal(item.actor, longItems[index]!.actor);
-    assert.equal(item.act, longItems[index]!.act);
-    assert.ok(item.body.startsWith(`START ${index}\n`) && item.body.endsWith(`\nEND ${index}`));
-    assert.match(item.body, /middle is hidden/);
+  const displayed = data(original);
+  assert.ok("items" in displayed);
+  const bodies = displayed.items.map(item => {
+    assert.ok("body" in item);
     assert.equal(Buffer.from(item.body).toString("utf8"), item.body);
+    return item;
+  });
+  assert.ok(bodies.reduce((sum, item) => sum + item.body.length + (item.preview?.length ?? 0), 0) <= OUTPUT_DISPLAY_MAX_CHARS);
+  for (const [index, item] of bodies.entries()) {
+    assert.equal(item.author, long[index]!.author);
+    assert.equal(item.ref, long[index]!.ref);
+    assert.ok(item.body.startsWith(`START ${index}\n`) && item.body.endsWith(`\nEND ${index}`));
   }
-  assert.equal(Buffer.from(preview).toString("utf8"), preview);
   assert.deepEqual(original, before);
 });
 
-test("uneven bodies that fit the aggregate budget stay complete", () => {
-  const uneven = items.map((item, index) => ({ ...item,
-    body: index === 0 ? "x".repeat(OUTPUT_DISPLAY_MAX_CHARS / 2) : item.body,
-  }));
-  const displayed = projectedItems(row({ metadata: { synthetic: true, customType: "square", details: { items: uneven } } }));
-  assert.deepEqual(displayed.map(item => item.body), uneven.map(item => item.body));
-});
-
-test("many small per-message budget shares stay bounded and preserve attribution", () => {
-  const many = Array.from({ length: COLLAPSED_PREVIEW_MAX_CHARS }, (_, index) => ({
-    ...items[0]!, act: `act/${index}`, body: "🦈".repeat(COLLAPSED_PREVIEW_MAX_CHARS), preview: undefined,
-  }));
-  const displayed = projectedItems(row({ metadata: { synthetic: true, customType: "square", details: { items: many } } }));
-  assert.equal(displayed.length, many.length);
-  assert.ok(displayed.reduce((sum, item) => sum + item.body.length + (item.preview?.length ?? 0), 0) <= OUTPUT_DISPLAY_MAX_CHARS);
-  for (const [index, item] of displayed.entries()) {
-    assert.equal(item.act, many[index]!.act);
-    assert.equal(item.actor, many[index]!.actor);
-    assert.equal(Buffer.from(item.body).toString("utf8"), item.body);
-  }
-});
-
-test("joining, missing or malformed details use bounded raw text without guessing authors from tags", () => {
-  const raw = `START\n${quotedTags}\n${"🦈".repeat(OUTPUT_DISPLAY_MAX_CHARS)}\nEND`;
-  for (const details of [undefined, { items: [] }, { items: [{ ...items[0], act: undefined }] }, { items: [{ ...items[0], body: 7 }] }]) {
-    const original = row({ detail: { type: "plain_text", text: raw }, metadata: { synthetic: true, customType: "square", details } });
-    const data = squareMessageSchema.parse(project(original)!.items[0].data);
-    assert.ok("text" in data);
-    assert.equal("items" in data, false);
-    assert.ok(data.text.length <= OUTPUT_DISPLAY_MAX_CHARS);
-    assert.ok(data.text.startsWith("START\n") && data.text.endsWith("\nEND"));
-    assert.ok(data.text.includes(quotedTags));
-    assert.equal(Buffer.from(data.text).toString("utf8"), data.text);
+test("missing or malformed details fall back to raw text without inferring attribution", () => {
+  for (const details of [null, { items: [] }, { items: [{ ...items[0], origin: undefined }] }, { items: [{ ...items[0], body: 7 }] }]) {
+    assert.deepEqual(data(row(details)), { text });
   }
 });
 
 test("ordinary tools, unrelated custom messages, and unusable content stay untouched", () => {
-  assert.equal(project(row({ metadata: undefined })), undefined);
-  assert.equal(project(row({ metadata: { customType: "square" } })), undefined);
-  assert.equal(project(row({ metadata: { synthetic: true, customType: "other" } })), undefined);
-  assert.equal(project(row({ detail: { type: "unknown", input: "square", output: text } })), undefined);
-  assert.equal(project(row({ detail: { type: "plain_text" } })), undefined);
+  assert.equal(project({ ...row(), metadata: undefined }), undefined);
+  assert.equal(project({ ...row(), metadata: { customType: "square" } }), undefined);
+  assert.equal(project({ ...row(), metadata: { synthetic: true, customType: "other" } }), undefined);
+  assert.equal(project({ ...row(), detail: { type: "unknown", input: "square", output: text } }), undefined);
+  assert.equal(project({ ...row(), detail: { type: "plain_text" } }), undefined);
 });

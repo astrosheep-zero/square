@@ -21,8 +21,8 @@ export const transformSquareMessage: PluginTimelineTransformerContribution<"tool
       const body = clipped ? outputPreview(source, Math.floor(remaining / (items.length - index))) : source;
       remaining -= body.length;
       if ("text" in entry) return { text: body };
-      const { preview: _preview, ...square } = entry;
-      return { ...square, body, ...(index === items.length - 1 ? { preview } : {}) };
+      const { preview: _preview, ...presentation } = entry;
+      return { ...presentation, body, ...(index === items.length - 1 ? { preview } : {}) };
     }) };
   } else {
     data = { text: outputPreview(item.detail.text) };

@@ -16,8 +16,9 @@ Paseo supplies all runtime modules. No Git preparation step is needed. Plugins
 are trusted, unsandboxed code running inside the Paseo app.
 
 Requires Paseo >=0.11.2 with custom-message tool rows (#6090). Structured notification
-cards use Square's `details.items`, including each item's `actor`, `act`, `body` and
-`route`. Missing or malformed details fall back to the original plain text.
+cards use `details.items` with producer-neutral presentation facts: `kind: 'presentation'`, `origin`,
+optional `author`, `ref` and `badge`, and the full Markdown `body`. Missing or malformed details fall
+back to the original plain text.
 
 ## Display
 
@@ -27,9 +28,9 @@ and unrecognized rows remain unchanged.
 
 The heading and expanded messages use `metadata.details.items` directly, never
 reverse-parsing notification envelopes or body text for senders, IDs or message
-boundaries. Each expanded item keeps its full source body, author, exact activity ID
-and bell marker, even when the model preview was clipped or omitted. IDs with gaps
-are not compressed into a misleading range; items from different squares remain
+boundaries. Each expanded item keeps its full source body, author, exact reference
+and badge, even when the model preview was clipped or omitted. References with gaps
+are not compressed into a misleading range; items from different origins remain
 separate. Collapsing shows only the last item's preview. Body text containing square
 tags is ordinary content, not another notification.
 
@@ -44,7 +45,7 @@ Long content scrolls inside a bounded panel. The
 card does not fetch extra activity or mark anything seen. Live events and fetched history use
 the same transformer.
 
-An accent glyph, actor and square name identify the card. The header and its arrow
+An accent glyph, author and origin label identify the card. The header and its arrow
 toggle an inline drawer. It uses Paseo theme colors, selectable text, accessible
 expansion state and compact layout on narrow displays. Removing the plugin restores
 Paseo's ordinary custom-message row.

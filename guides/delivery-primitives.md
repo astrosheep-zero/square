@@ -4,6 +4,10 @@
 package root. The per-user ledger defaults to `~/.square/delivery.v3.sqlite` and stores producer-neutral,
 finished text cards, session attachment, routes, attempts and receipts. Producers own content and
 recipient selection; adapters own transport behavior. Routes contain only `{kind, address}`.
+A card may also carry producer-neutral presentation `details`:
+`{kind: 'presentation', origin, author?, ref?, badge?, body}`. `text` remains the bounded model-facing
+card; `body` holds the full Markdown for display. Receivers validate these details and render them
+without opening producer storage. Cards without valid presentation details remain plain text.
 
 Posting is idempotent by owner and key. Producer-push handoff and receiver-pull presentation have
 separate attempt tracks, with cross-track exclusion based on ledger attempt state. Accepted or unknown
@@ -12,6 +16,15 @@ receipts record only the cards confirmed by the receiving boundary. A receipt me
 boundary, not model comprehension. An observer may not detect a later plugin removing a card.
 Receipt retention is finite: once evidence expires, Square retains unproved local unread until catch
 or ACK, rather than inventing consumption or reinserting an uncertain old card.
+
+The ledger is an outbox. Accepted and unknown attempts drop card text and details in the same
+transaction, retaining only custody so an exact late observation can still write a receipt. A presented
+presentation attempt deletes its card and attempts once no attempt is dispatching; a permanent exact
+suppression prevents reposting the key. Unconfirmed accepted/unknown custody expires only after
+30 days from its latest settlement. Failed and released attempts keep content for retry. Receipts and
+permanent suppressions expire in bounded batches after 30 days. Deleted sessions lose cards, attempts
+and suppressions; sessions detached longer than 30 days lose cards and attempts. Session rows remain:
+a deleted row is the authority for producer reconciliation and cannot be registered again.
 
 Square folds receipts lazily into its own read state only for full activity cards; a shortened activity
 card points to `square_catch` and cannot consume the full activity. Catch permanently suppresses the

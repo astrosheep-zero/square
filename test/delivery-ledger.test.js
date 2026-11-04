@@ -180,25 +180,6 @@ test('suppression blocks before and after claim, then permanent exact tombstones
   assert.equal((await f.post('p:2')).status, 'suppressed');
 });
 
-test('permanent suppression preserves accepted handoff observation until presentation is confirmed', async t => {
-  const f = await fixture(t);
-  await f.post('producer:accepted-observation');
-  const result = await f.ledger.dispatchHandoff(owner, 'producer:accepted-observation', { kind: push.kind, async send(_card, _address, context) {
-    assert.equal(await context.prepare({ token: 'native', payloadHash: 'payload-hash' }), true);
-    return 'accepted';
-  } }, { generation: f.session.generation, timeoutMs: 1000 });
-  assert.equal(result.outcome, 'accepted');
-  const ref = await f.ledger.handoff(result.token);
-  assert.ok(ref);
-  const suppression = await f.ledger.suppress({ owner, key: 'producer:accepted-observation', scope: 'exact' });
-  assert.equal(suppression.status, 'in-custody');
-  assert.equal(f.read('SELECT COUNT(*) AS n FROM cards WHERE owner=? AND key=?', owner, 'producer:accepted-observation')[0].n, 1);
-  assert.equal(await f.ledger.observePresentation(ref), true);
-  assert.equal((await f.ledger.receipts(owner, { keys: ['producer:accepted-observation'] })).length, 1);
-  assert.equal((await f.ledger.pending(owner, { generation: f.session.generation })).length, 0);
-  assert.equal((await f.dispatch('producer:accepted-observation')).outcome, 'not-invoked');
-});
-
 test('suppression preserves a truthful late presentation after timeout', async t => {
   const f = await fixture(t);
   await f.post('p:late-presented');
@@ -273,15 +254,21 @@ test('handoff final check refuses suppression added after claim', async t => {
   assert.equal((await f.ledger.receipts(owner)).length, 0);
 });
 
-test('failed/released attempts release both tracks', async t => {
+test('failed/released attempts release both tracks and keep original content for retry', async t => {
   const f = await fixture(t);
-  await f.post('p:active');
+  const details = { body: 'full body' };
+  await f.ledger.post({ owner, key: 'p:active', text: 'preview', details });
   const batch = await f.claim();
   await batch.settle('released');
   assert.equal((await f.dispatch('p:active', 'failed')).outcome, 'failed');
   const retried = await f.claim();
+  assert.equal(retried.cards[0].text, 'preview');
+  assert.deepEqual(retried.cards[0].details, details);
   await retried.settle('failed');
   assert.equal((await f.dispatch('p:active', 'not-capable')).outcome, 'not-capable');
+  const [pending] = await f.ledger.pending(owner, { generation: f.session.generation });
+  assert.equal(pending.text, 'preview');
+  assert.deepEqual(pending.details, details);
 });
 
 test('both tracks exclude custody in every blocking outcome, while exact handoff observation confirms once', async t => {
@@ -295,7 +282,7 @@ test('both tracks exclude custody in every blocking outcome, while exact handoff
     assert.equal(await f.claim(), undefined);
     assert.equal((await f.dispatch(key)).outcome, 'not-invoked');
     assert.equal(await f.ledger.observePresentation(result.token), true);
-    assert.equal(await f.ledger.observePresentation(result.token), true);
+    assert.equal(await f.ledger.observePresentation(result.token), false);
     assert.equal((await f.ledger.receipts(owner, { keys: [key] })).length, 1);
   }
   assert.equal(await f.ledger.observePresentation('missing'), false);
@@ -419,7 +406,7 @@ test('late external results settle captured authority without authorizing sends 
   await f.post('p:new');
   assert.equal((await f.dispatch('p:new')).outcome, 'not-invoked');
   assert.equal((await f.claim(1000, next.generation)).cards[0].key, 'p:new');
-  assert.equal(f.read("SELECT correlation_json FROM attempts WHERE track='handoff'")[0].correlation_json, '{"token":"opaque","messageId":"m:1","payloadHash":"hash"}');
+  assert.equal(f.read("SELECT correlation_json FROM attempts WHERE track='handoff'").length, 0);
 });
 
 test('interrupted return retains late accepted/presented evidence under captured authority without resending', async t => {
@@ -435,7 +422,8 @@ test('interrupted return retains late accepted/presented evidence under captured
     assert.equal((await f.ledger.receipts(owner, { keys: [key] })).length, outcome === 'presented' ? 1 : 0);
     assert.equal((await f.dispatch(key, 'accepted', { generation })).outcome, 'not-invoked');
     assert.equal(gate.calls(), 1);
-    assert.equal(f.read('SELECT outcome FROM attempts WHERE token=?', gate.result.token)[0].outcome, 'accepted');
+    const stored = f.read('SELECT outcome FROM attempts WHERE token=?', gate.result.token);
+    assert.deepEqual(stored.map(row => row.outcome), outcome === 'presented' ? [] : ['accepted']);
   }
 });
 
@@ -536,7 +524,7 @@ test('push persists before I/O, records uncertainty on failure/timeout and relea
   assert.equal(thrown.outcome, 'unknown');
 });
 
-test('retention expires completed cards/receipts at 30 days, keeps unconsumed cards and monotonic seq', async t => {
+test('retention expires receipts and unconfirmed custody at 30 days, keeps pending cards and monotonic seq', async t => {
   let now = 1;
   const f = await fixture(t, { clock: () => now });
   await f.post('p:done');
@@ -556,8 +544,10 @@ test('retention expires completed cards/receipts at 30 days, keeps unconsumed ca
   now++;
   await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes });
   assert.equal((await f.ledger.receipts(owner)).length, 0);
-  assert.deepEqual(f.read('SELECT key FROM cards ORDER BY seq').map(r => r.key), ['p:pending', 'p:accepted', 'p:uncertain']);
-  assert.deepEqual(f.read("SELECT outcome FROM attempts WHERE outcome IN ('accepted','unknown') ORDER BY outcome").map(r => r.outcome), ['accepted', 'unknown']);
+  assert.deepEqual(f.read('SELECT key FROM cards ORDER BY seq').map(r => r.key), ['p:pending']);
+  assert.deepEqual(f.read('SELECT * FROM attempts'), []);
+  assert.equal((await f.post('p:accepted')).status, 'suppressed');
+  assert.equal((await f.post('p:uncertain')).status, 'suppressed');
   await f.post('p:new');
   const batch = await f.claim();
   assert.equal(batch.cards[0].key, 'p:new');
@@ -683,9 +673,12 @@ test('GC is bounded and sequence/cancellation authority survives collection of e
   await f.ledger.cancel({ owner, generation: f.session.generation });
   now += 31 * day;
   await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes });
-  assert.equal(f.read('SELECT COUNT(*) AS n FROM cards')[0].n, 101);
+  assert.deepEqual(f.read('SELECT * FROM cards'), []);
+  assert.deepEqual(f.read('SELECT * FROM attempts'), []);
+  assert.equal(f.read('SELECT COUNT(*) AS n FROM suppressions')[0].n, 101);
+  assert.equal((await f.ledger.receipts(owner)).length, 101);
   for (let index = 0; index < 2; index++) await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes });
-  assert.equal(f.read('SELECT COUNT(*) AS n FROM cards')[0].n, 0);
+  assert.deepEqual(f.read('SELECT * FROM suppressions'), []);
   assert.equal((await f.ledger.receipts(owner)).length, 0);
   await f.post('p:later');
   const batch = await f.claim();
@@ -724,13 +717,19 @@ test('prepared handoff references fence admission and preserve separate late pre
     if (cause === 'deadline') now += 60001;
     if (cause === 'route') await f.ledger.updateRoutes({ owner: own, generation: initial.generation, routes: [pull] });
     assert.equal(await f.ledger.guardHandoff(ref), false);
+    if (cause === 'delete') {
+      assert.equal(await f.ledger.acceptHandoff(ref), false);
+      assert.equal(await f.ledger.observePresentation(ref), false);
+      done.resolve('accepted'); await running;
+      continue;
+    }
     assert.equal(await f.ledger.acceptHandoff(ref), true);
     assert.equal(await f.ledger.acceptHandoff(ref), true);
     assert.equal(await f.ledger.guardHandoff(ref), false);
     assert.equal((await f.ledger.receipts(own)).length, 0);
     if (['cancel', 'rotation', 'delete', 'route'].includes(cause)) assert.equal(await f.ledger.observePresentation(ref, { requireCurrent: true }), false);
     assert.equal(await f.ledger.observePresentation(ref), true);
-    assert.equal(await f.ledger.acceptHandoff(ref), true);
+    assert.equal(await f.ledger.acceptHandoff(ref), false);
     assert.equal((await f.ledger.receipts(own)).length, 1);
     done.resolve('accepted'); await running;
   }
@@ -769,6 +768,122 @@ test('handoff query facts and failed or released evidence remain distinct', asyn
   assert.equal((await f.ledger.sessions())[0].state, 'detached');
   assert.deepEqual(await f.ledger.pending(owner, { generation: f.session.generation }), []);
   assert.equal((await f.ledger.handoffs(owner, { generation: f.session.generation })).length, 2);
+});
+
+test('presentation writes receipts, deletes cards and attempts, and tombstones the exact key', async t => {
+  const f = await fixture(t);
+  await f.post('completed', 'preview');
+  const claim = await f.claim();
+  assert.equal(await claim.settle('presented'), true);
+  assert.deepEqual((await f.ledger.receipts(owner)).map(receipt => receipt.key), ['completed']);
+  assert.deepEqual(f.read('SELECT * FROM cards'), []);
+  assert.deepEqual(f.read('SELECT * FROM attempts'), []);
+  assert.equal((await f.post('completed', 'preview')).status, 'suppressed');
+  assert.deepEqual(f.read('SELECT * FROM cards'), []);
+});
+
+test('accepted admission drops content while exact custody confirms later, including under suppression', async t => {
+  const f = await fixture(t);
+  for (const suppressed of [false, true]) {
+    const key = `admitted:${suppressed}`;
+    const details = { kind: 'presentation', origin: 'producer', body: 'full body' };
+    await f.ledger.post({ owner, key, text: 'preview', details });
+    const ready = Promise.withResolvers(), finish = Promise.withResolvers();
+    const dispatch = f.ledger.dispatchHandoff(owner, key, { kind: push.kind, async send(_card, _address, context) {
+      await context.prepare({ payloadHash: key });
+      ready.resolve(context.token);
+      return finish.promise;
+    } }, { generation: f.session.generation, timeoutMs: 60000 });
+    const token = await ready.promise;
+    try {
+      const ref = await f.ledger.handoff(token);
+      assert.equal(await f.ledger.guardHandoff(ref), true);
+      assert.equal(await f.ledger.acceptHandoff(ref), true);
+      assert.deepEqual(f.read('SELECT text,details FROM cards WHERE key=?', key).map(row => ({ ...row })), [{ text: '', details: null }]);
+      assert.equal((await f.ledger.handoffs(owner, { generation: f.session.generation })).some(a => a.token === token && a.outcome === 'accepted'), true);
+      assert.equal(await f.claim(), undefined);
+      assert.equal((await f.ledger.post({ owner, key, text: 'preview', details })).status, 'duplicate');
+      if (suppressed) {
+        assert.equal((await f.ledger.suppress({ owner, key, scope: 'exact' })).status, 'in-custody');
+        assert.equal(await f.ledger.observePresentation(ref, { requireCurrent: true }), false);
+      }
+      assert.equal(await f.ledger.observePresentation(ref, { requireCurrent: !suppressed }), true);
+      assert.equal(await f.ledger.handoff(token), undefined);
+      assert.equal(await f.ledger.observePresentation(ref), false);
+      assert.deepEqual(f.read('SELECT * FROM attempts WHERE token=?', token), []);
+      assert.equal((await f.ledger.receipts(owner, { keys: [key] })).length, 1);
+      assert.equal((await f.post(key)).status, 'suppressed');
+    } finally { finish.resolve('accepted'); await dispatch; }
+  }
+});
+
+test('unknown outcomes drop content at settlement, lease expiry and detach while preserving late evidence', async t => {
+  let now = 100;
+  const f = await fixture(t, { clock: () => now, leaseMs: 10 });
+  let generation = f.session.generation;
+  for (const cause of ['settle', 'expiry', 'detach']) {
+    const key = `unknown:${cause}`;
+    const details = { body: 'full body' };
+    await f.ledger.post({ owner, key, text: 'preview', details });
+    const claim = await f.claim(1000, generation);
+    if (cause === 'settle') await claim.settle('unknown');
+    if (cause === 'expiry') { now += 11; await f.claim(1000, generation); }
+    if (cause === 'detach') {
+      await f.ledger.detach({ owner, generation });
+      generation = (await f.ledger.attach({ owner, expectedGeneration: generation, routes })).generation;
+    }
+    assert.deepEqual(f.read('SELECT text,details FROM cards WHERE key=?', key).map(row => ({ ...row })), [{ text: '', details: null }]);
+    assert.equal((await f.ledger.health(owner)).unknownAttempts.some(a => a.token === claim.attempts[0].token), true);
+    assert.equal((await f.ledger.post({ owner, key, text: 'preview', details })).status, 'duplicate');
+    assert.equal(await f.claim(1000, generation), undefined);
+    assert.equal(await claim.settle('presented'), true);
+    assert.equal((await f.ledger.receipts(owner, { keys: [key] })).length, 1);
+  }
+});
+
+test('unconfirmed custody survives suppression until retention after the latest settlement', async t => {
+  let now = 100;
+  const f = await fixture(t, { clock: () => now });
+  for (const key of ['accepted', 'suppressed']) await f.post(key);
+  now += day;
+  for (const key of ['accepted', 'suppressed']) await f.dispatch(key);
+  await f.ledger.suppress({ owner, key: 'suppressed', scope: 'exact' });
+  now += 30 * day - 1;
+  await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes });
+  assert.deepEqual(f.read('SELECT key FROM cards ORDER BY seq').map(row => row.key), ['accepted', 'suppressed']);
+  now += 2;
+  await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes });
+  assert.deepEqual(f.read('SELECT * FROM cards'), []);
+  assert.deepEqual(f.read('SELECT * FROM attempts'), []);
+  assert.equal((await f.post('accepted')).status, 'suppressed');
+  assert.equal((await f.post('suppressed')).status, 'suppressed');
+});
+
+test('deleted and long-detached sessions lose cards without losing session authority', async t => {
+  let now = 100;
+  const f = await fixture(t, { clock: () => now });
+  await f.post('deleted');
+  const claim = await f.claim();
+  await f.ledger.suppress({ owner, key: 'deleted', scope: 'prefix' });
+  await f.ledger.markDeleted({ owner, generation: f.session.generation });
+  assert.deepEqual(f.read('SELECT * FROM cards'), []);
+  assert.deepEqual(f.read('SELECT * FROM attempts'), []);
+  assert.deepEqual(f.read('SELECT * FROM suppressions'), []);
+  assert.equal((await f.ledger.session(owner)).state, 'deleted');
+  assert.equal(await claim.settle('presented'), false);
+  const other = 'detached-owner';
+  const session = await f.ledger.attach({ owner: other, expectedGeneration: null, routes });
+  await f.ledger.post({ owner: other, key: 'away', text: 'body' });
+  await f.ledger.claimPresentation(other, { generation: session.generation, budgetChars: 1000 });
+  await f.ledger.detach({ owner: other, generation: session.generation });
+  now += 30 * day - 1;
+  await f.ledger.attach({ owner: 'trigger', expectedGeneration: null, routes: [] });
+  assert.equal(f.read('SELECT * FROM cards WHERE owner=?', other).length, 1);
+  now += 2;
+  await f.ledger.updateRoutes({ owner: 'trigger', generation: (await f.ledger.session('trigger')).generation, routes: [] });
+  assert.deepEqual(f.read('SELECT * FROM cards'), []);
+  assert.deepEqual(f.read('SELECT * FROM attempts'), []);
+  assert.equal((await f.ledger.session(other)).state, 'detached');
 });
 
 test('unsupported existing formats and foreign databases are refused without changing bytes', async t => {

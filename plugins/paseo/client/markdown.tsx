@@ -166,14 +166,14 @@ export function SquareCue({ label, theme }: { label: ReactNode; theme: PluginThe
 }
 
 /**
- * A body of Markdown: no envelope, no route line — the words only, at full width.
- * `lead` runs the speaker into the first line; `actor` names whoever performs an action.
+ * A body of Markdown: no envelope — the words only, at full width.
+ * `lead` runs the author into the first line; `author` names whoever performs an action.
  */
-export function SquareMarkdownBody({ text, theme, lead, actor }: {
+export function SquareMarkdownBody({ text, theme, lead, author }: {
   text: string;
   theme: PluginTheme;
   lead?: string;
-  actor?: string;
+  author?: string;
 }) {
   const styles = useMemo(() => makeStyles(theme.colors), [theme.colors]);
   const tokens = useMemo(() => lexer(text).filter(token => token.type !== "space"), [text]);
@@ -182,7 +182,7 @@ export function SquareMarkdownBody({ text, theme, lead, actor }: {
     const key = `body-${index}`;
     if (isAction(token)) {
       const words = renderInlines(children(children(token)[0]!), styles, key);
-      return <SquareCue key={key} theme={theme} label={actor === undefined ? words : <>{actor} {words}</>} />;
+      return <SquareCue key={key} theme={theme} label={author === undefined ? words : <>{author} {words}</>} />;
     }
     if (pending === undefined) return renderBlocks([token], styles, key);
     const name = pending;

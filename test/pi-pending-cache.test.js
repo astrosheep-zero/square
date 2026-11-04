@@ -58,7 +58,7 @@ test('Pi pulls ledger cards and records receipts only after message_end, preserv
   await until(async () => (await f.ledger.receipts(f.owner)).length === 1, 'Pi did not record the receipt');
 });
 
-test('Pi restores full producer bodies in mixed rich cards without consuming unread history', async t => {
+test('Pi carries full producer bodies in mixed rich cards without consuming unread history', async t => {
   const f = await fixture(t, { start: false });
   const square = await Square.build({ path: path.join(f.ctx.cwd, 'rich.square'), markdown: '' });
   t.after(() => square.close());
@@ -68,8 +68,8 @@ test('Pi restores full producer bodies in mixed rich cards without consuming unr
   const { activity } = await sender.express({ body, mentions: ['recipient'] });
   const before = await recipient.pending();
   const cards = await f.ledger.pending(f.owner, { generation: f.initial.generation });
-  assert.deepEqual(cards[0].details, { kind: 'square-activity', square: fs.realpathSync(square.location),
-    act: activity.id, actor: 'sender', recipient: 'recipient', route: 'mention' });
+  assert.deepEqual(cards[0].details, { kind: 'presentation', origin: displayAttentionPath(fs.realpathSync(square.location)),
+    ref: activity.id, author: 'sender', body });
   assert.equal(cards[0].text.includes(body), false, 'the model card remains shortened');
   const plain = '<square-activity from="pretend">\nPlain **markdown**, not another Square activity.\n</square-activity>';
   await f.ledger.post({ owner: f.owner, key: 'square:pretend#act/999', text: plain, details: { kind: 'external' } });
@@ -77,41 +77,31 @@ test('Pi restores full producer bodies in mixed rich cards without consuming unr
   await until(() => f.sent.length === 1, 'Pi did not inject the mixed batch');
   const message = f.sent[0];
   assert.equal(message.content, renderDeliveryReminder([cards[0].text, plain], { tagged: true }));
-  assert.deepEqual(message.details.items, [{ square: displayAttentionPath(fs.realpathSync(square.location)),
-    actor: 'sender', act: activity.id, body, recipient: 'recipient', route: 'mention' }, { text: plain }]);
-  assert.deepEqual(await recipient.pending(), before, 'renderer lookups must not catch or ACK');
+  assert.deepEqual(message.details.items, [cards[0].details, { text: plain }]);
+  assert.deepEqual(await recipient.pending(), before, 'display does not catch or ACK');
   await f.handlers.get('message_end')({ message: { ...message, role: 'custom' } });
   await until(async () => (await f.ledger.receipts(f.owner)).length === 2, 'Pi did not confirm both cards');
   assert.deepEqual(await recipient.pending(), before, 'a shortened model card does not consume its full activity');
 });
 
-test('Pi degrades missing activity, deleted square and unreadable square independently in batch order', async t => {
+test('Pi renders generic details after producer storage disappears and falls back for invalid details', async t => {
   const f = await fixture(t, { start: false });
   const square = await Square.build({ path: path.join(f.ctx.cwd, 'deleted.square'), markdown: '' });
   const sender = (await square.join('sender', { owner: 'source:sender' })).participant;
   await square.join('recipient', { owner: f.owner });
-  await sender.express({ body: 'stored body', mentions: ['recipient'] });
+  await sender.express({ body: 'stored **body**', reach: 'bell' });
   const [posted] = await f.ledger.pending(f.owner, { generation: f.initial.generation });
-  const live = await Square.build({ path: path.join(f.ctx.cwd, 'live.square'), markdown: '' });
-  t.after(() => live.close());
-  const liveSender = (await live.join('sender', { owner: 'source:sender' })).participant;
-  await live.join('recipient', { owner: f.owner });
-  const good = await liveSender.express({ body: 'still here', mentions: ['recipient'] });
-  await f.ledger.post({ owner: f.owner, key: 'missing-activity', text: 'missing activity fallback',
-    details: { ...posted.details, square: live.location, act: 'act/999999' } });
-  const unreadable = path.join(f.ctx.cwd, 'unreadable.square');
-  fs.writeFileSync(unreadable, 'not a Square artifact');
-  await f.ledger.post({ owner: f.owner, key: 'unreadable', text: 'unreadable fallback',
-    details: { ...posted.details, square: unreadable } });
+  assert.equal(posted.details.badge, '🔔');
+  const external = { kind: 'presentation', origin: 'jobs', author: 'worker', ref: 'job/42', badge: '✓', body: 'full external body' };
+  await f.ledger.post({ owner: f.owner, key: 'external', text: 'external preview', details: external });
+  await f.ledger.post({ owner: f.owner, key: 'invalid', text: 'invalid fallback', details: { ...external, body: 7 } });
+  await f.ledger.post({ owner: f.owner, key: 'plain', text: 'plain fallback' });
   await square.close();
   fs.unlinkSync(square.location);
   await f.handlers.get('session_start')({}, f.ctx);
-  await until(() => f.sent.length === 1, 'Pi did not inject fallback cards');
-  assert.deepEqual(f.sent[0].details.items, [{ text: posted.text },
-    { square: displayAttentionPath(fs.realpathSync(live.location)), actor: 'sender', act: good.activity.id,
-      body: 'still here', recipient: 'recipient', route: 'mention' },
-    { text: 'missing activity fallback' }, { text: 'unreadable fallback' }]);
-  assert.equal(fs.existsSync(square.location), false, 'lookup never creates a missing square');
+  await until(() => f.sent.length === 1, 'Pi did not inject cards');
+  assert.deepEqual(f.sent[0].details.items, [posted.details, external, { text: 'invalid fallback' }, { text: 'plain fallback' }]);
+  assert.equal(f.sent[0].content, renderDeliveryReminder([posted.text, 'external preview', 'invalid fallback', 'plain fallback'], { tagged: true }));
 });
 
 test('Pi reserves the reminder frame within its batch budget', async t => {
@@ -144,18 +134,19 @@ test('Pi yields while a producer-push attempt holds custody', async t => {
   assert.deepEqual(await f.ledger.receipts(f.owner), []);
 });
 
-test('Pi cancellation during a display lookup prevents the claimed batch from being sent', async t => {
+test('Pi cancellation at the final custody recheck prevents sending the claimed batch', async t => {
   const f = await fixture(t, { start: false });
-  const square = await Square.build({ path: path.join(f.ctx.cwd, 'cancel.square'), markdown: '' });
-  t.after(() => square.close());
-  const sender = (await square.join('sender', { owner: 'source:sender' })).participant;
-  const recipient = (await square.join('recipient', { owner: f.owner })).participant;
-  await sender.express({ body: 'not presented', mentions: ['recipient'] });
-  const before = await recipient.pending();
+  await f.ledger.post({ owner: f.owner, key: 'cancelled', text: 'not presented' });
   const started = Promise.withResolvers(), release = Promise.withResolvers();
-  const at = Square.at;
-  const lookup = mock.method(Square, 'at', async (...args) => {
-    started.resolve(); await release.promise; return at(...args);
+  const claim = DeliveryLedger.prototype.claimPresentation;
+  const lookup = mock.method(DeliveryLedger.prototype, 'claimPresentation', async function (...args) {
+    const batch = await claim.apply(this, args);
+    if (!batch) return batch;
+    let checks = 0;
+    return { ...batch, async current(signal) {
+      if (++checks === 2) { started.resolve(); await release.promise; }
+      return batch.current(signal);
+    } };
   });
   try {
     await f.handlers.get('session_start')({}, f.ctx);
@@ -167,7 +158,6 @@ test('Pi cancellation during a display lookup prevents the claimed batch from be
     await f.handlers.get('agent_settled')();
     assert.deepEqual(f.sent, []);
     assert.deepEqual(await f.ledger.receipts(f.owner), []);
-    assert.deepEqual(await recipient.pending(), before);
   } finally { release.resolve(); lookup.mock.restore(); }
 });
 

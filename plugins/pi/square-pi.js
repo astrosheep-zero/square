@@ -1,4 +1,3 @@
-import { isAbsolute } from 'node:path';
 import { Markdown } from '@earendil-works/pi-tui';
 import { z } from 'zod/v4';
 
@@ -6,7 +5,7 @@ import { Square } from '../../dist/square-api.js';
 import { harnessOwner } from '../../dist/owner.js';
 import { DeliveryLedger } from '../../dist/delivery-ledger.js';
 import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/delivery-frame.js';
-import { displayAttentionPath } from '../../dist/attention-presentation.js';
+import { isCardPresentation } from '../../dist/card-presentation.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, createSquareToolRunner, squareToolsEnabled } from '../../dist/square-tools.js';
 import { operationEnv } from '../../dist/participant-identity.js';
 import { attachDeliverySession, detachDeliverySession } from '../../dist/session-lifecycle.js';
@@ -14,22 +13,8 @@ import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-deliv
 
 const BUDGET_CHARS = 12_000;
 
-async function displayCard(card, signal) {
-  const details = card.details;
-  if (details?.kind !== 'square-activity') return { text: card.text };
-  let square;
-  try {
-    if (typeof details.square !== 'string' || !isAbsolute(details.square)
-      || typeof details.act !== 'string' || typeof details.recipient !== 'string'
-      || !['mention', 'reply', 'attention', 'bell'].includes(details.route)) return { text: card.text };
-    square = await Square.at({ path: details.square }, { signal });
-    const { activities } = await square.history({ at: [details.act], mention: details.recipient }, { signal });
-    const activity = activities[0];
-    if (activity?.kind !== 'say') return { text: card.text };
-    return { square: displayAttentionPath(details.square), actor: activity.actor, act: activity.id,
-      body: activity.body ?? '', recipient: details.recipient, route: details.route };
-  } catch { return { text: card.text }; }
-  finally { await square?.close().catch(() => undefined); }
+function displayCard(card) {
+  return isCardPresentation(card.details) ? card.details : { text: card.text };
 }
 
 export function renderSquareCard(message, { outputPad = 1 }, theme) {
@@ -139,7 +124,7 @@ export default function squarePiExtension(pi) {
             await claim.settle('released');
             continue;
           }
-          const items = await Promise.all(claim.cards.map(card => displayCard(card, signal)));
+          const items = claim.cards.map(displayCard);
           if (signal.aborted || token !== epoch || !await claim.current(signal) || signal.aborted || token !== epoch) {
             await claim.settle('released');
             continue;

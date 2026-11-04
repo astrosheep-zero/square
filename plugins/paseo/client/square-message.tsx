@@ -9,10 +9,10 @@ import { squarePalette } from "./palette";
 /**
  * A matte slate slip in the timeline's shared 4px-corner family: square seal ■,
  * thin quote guide under the header.
- * Header (both states): ■ square · who spoke … act ids · how many.
+ * Header (both states): ■ origin · authors … refs · how many.
  * Collapsed: two preview lines. Expanded: the whole scene, at full width.
- * Each structured message keeps its own sender, activity id and body.
- * A bell or an *action* is stage direction, a caption on a hairline.
+ * Each structured message keeps its own author, reference and body.
+ * A badge or an *action* is stage direction, a caption on a hairline.
  */
 export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<SquareMessageData>) {
   const [expanded, setExpanded] = useState(false);
@@ -20,19 +20,20 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
   const palette = useMemo(() => squarePalette(theme), [theme]);
   const items = "items" in item.data ? item.data.items : undefined;
   const text = "text" in item.data ? item.data.text : undefined;
-  const squareItems = items?.filter(entry => "square" in entry);
+  const presentations = items?.filter(entry => "origin" in entry);
   const latest = items?.at(-1);
   // Keep the source's own line breaks: collapsed and expanded text must wrap alike.
   const preview = latest && "text" in latest ? outputPreview(latest.text, COLLAPSED_PREVIEW_MAX_CHARS)
     : latest?.preview ?? text;
-  const speakers = [...new Set(squareItems?.map(entry => entry.actor))];
-  const chorus = speakers.length > 1;
-  const squares = [...new Set(squareItems?.map(entry => entry.square))];
-  const squareName = squares.join(", ") || "Square";
-  const bell = squareItems?.at(-1)?.route === "bell";
-  // Exact IDs never imply intervening activities, and different squares keep their own IDs.
-  const trailing = [squareItems?.map(entry => squares.length > 1 ? `${entry.square} ${entry.act}` : entry.act).join(", "),
-    squareItems && squareItems.length > 1 ? String(squareItems.length) : undefined].filter(Boolean).join(" · ");
+  const authors = [...new Set(presentations?.flatMap(entry => entry.author === undefined ? [] : [entry.author]))];
+  const chorus = authors.length > 1;
+  const origins = [...new Set(presentations?.map(entry => entry.origin))];
+  const originName = origins.join(", ") || "Notification";
+  const badge = presentations?.at(-1)?.badge;
+  // Exact references never imply intervening messages; each origin keeps its own references.
+  const trailing = [presentations?.flatMap(entry => entry.ref === undefined ? []
+    : [origins.length > 1 ? `${entry.origin} ${entry.ref}` : entry.ref]).join(", "),
+    presentations && presentations.length > 1 ? String(presentations.length) : undefined].filter(Boolean).join(" · ");
   const { accent, border, foreground, foregroundMuted: muted, surface1 } = palette.theme.colors;
   // On web the header brightens its details under the cursor; touch keeps them quiet.
   const detail = layout.platform === "web" && hovered ? foreground : muted;
@@ -46,7 +47,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
     ]}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${expanded ? "收起" : "展开"} ${squareName}: ${speakers.join(", ") || "Square"}`}
+        accessibilityLabel={`${expanded ? "收起" : "展开"} ${originName}: ${authors.join(", ") || "Notification"}`}
         aria-expanded={expanded}
         onPress={() => setExpanded(value => !value)}
         onHoverIn={() => setHovered(true)}
@@ -56,9 +57,9 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
         <View style={row}>
           <View style={{ width: 6, height: 6, borderRadius: palette.seal.borderRadius, backgroundColor: accent }} />
           <Text numberOfLines={1} style={{ color: foreground, fontSize: 11.5, lineHeight: 17, fontWeight: "600", flex: 1 }}>
-            {squareName}
-            {(speakers.length > 0 || bell) && (
-              <Text style={{ color: muted, fontWeight: "400", fontSize: 10.5 }}> · {[speakers.join(", "), bell ? "🔔" : ""].filter(Boolean).join(" · ")}</Text>
+            {originName}
+            {(authors.length > 0 || badge) && (
+              <Text style={{ color: muted, fontWeight: "400", fontSize: 10.5 }}> · {[authors.join(", "), badge].filter(Boolean).join(" · ")}</Text>
             )}
           </Text>
           {trailing !== "" && <Text numberOfLines={1} style={{ color: detail, fontSize: 9.5, fontFamily: MONO, fontVariant: ["tabular-nums"], flexShrink: 1 }}>{trailing}</Text>}
@@ -66,7 +67,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
         </View>
         {!expanded && preview !== undefined && preview !== "" && (
           <View style={{ ...indent, marginTop: 5, marginLeft: 2.5, paddingLeft: palette.quote.paddingLeft, borderLeftWidth: palette.quote.borderLeftWidth, borderLeftColor: palette.quote.borderLeftColor }}>
-            <SquareInline text={preview} theme={palette.theme} numberOfLines={2} lead={chorus && latest && "actor" in latest ? latest.actor : undefined} />
+            <SquareInline text={preview} theme={palette.theme} numberOfLines={2} lead={chorus && latest && "author" in latest ? latest.author : undefined} />
           </View>
         )}
       </Pressable>
@@ -77,10 +78,10 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
               <SquareMarkdownBody key={index} text={entry.text} theme={palette.theme} />
             ) : (
               <View key={index} style={{ gap: 6 }}>
-                {entry.route === "bell"
-                  ? <SquareCue theme={palette.theme} label={`${entry.actor} 🔔 · ${entry.square} · ${entry.act}`} />
-                  : <Text style={{ color: muted, fontSize: 11, fontFamily: MONO }}>{entry.square} · {entry.act}</Text>}
-                <SquareMarkdownBody text={entry.body} theme={palette.theme} lead={chorus ? entry.actor : undefined} actor={entry.actor} />
+                {entry.badge
+                  ? <SquareCue theme={palette.theme} label={[[entry.author, entry.badge].filter(Boolean).join(" "), entry.origin, entry.ref].filter(Boolean).join(" · ")} />
+                  : <Text style={{ color: muted, fontSize: 11, fontFamily: MONO }}>{[entry.origin, entry.ref].filter(Boolean).join(" · ")}</Text>}
+                <SquareMarkdownBody text={entry.body} theme={palette.theme} lead={chorus ? entry.author : undefined} author={entry.author} />
               </View>
             ))}
           </View>

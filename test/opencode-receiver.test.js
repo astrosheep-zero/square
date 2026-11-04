@@ -54,6 +54,9 @@ test('exact context hash confirms the current handoff, never a changed message o
   assert.deepEqual(await f.ledger.receipts(f.owner), []);
   await observeOpenCodeContext('ses_test', f.generation, context('hello'), f.env, signal);
   assert.equal((await f.ledger.receipts(f.owner)).length, 1);
+  assert.deepEqual(await f.ledger.handoffs(f.owner, { generation: f.generation }), []);
+  assert.equal(await f.ledger.handoff(result.token), undefined);
+  assert.equal((await f.ledger.post({ owner: f.owner, key: 'first', text: 'hello' })).status, 'suppressed');
 
   await f.ledger.post({ owner: f.owner, key: 'second', text: 'later' });
   await f.ledger.dispatchHandoff(f.owner, 'second', transport(async (card, _address, c) => {

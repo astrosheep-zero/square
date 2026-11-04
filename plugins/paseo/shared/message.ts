@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isCardPresentation, type CardPresentation } from "./card-presentation.ts";
 
 /** Aggregate client display budget, including omission lines; source history stays unchanged. */
 export const OUTPUT_DISPLAY_MAX_CHARS = 32_000;
@@ -15,18 +16,11 @@ export function outputPreview(text: string, maxChars = OUTPUT_DISPLAY_MAX_CHARS)
   return head + middle + tail;
 }
 
-/** Square display facts resolved by the receiver through producer history. */
-const squareNotificationItemSchema = z.object({
-  square: z.string(),
-  actor: z.string(),
-  act: z.string().regex(/^act\/(0|[1-9]\d*)$/),
-  body: z.string(),
-  recipient: z.string().optional(),
-  route: z.enum(["mention", "reply", "attention", "bell"]),
-  preview: z.string().optional(),
-});
+/** Receiver display facts, with a bounded preview derived on the client. */
+const presentationItemSchema = z.custom<CardPresentation>(isCardPresentation)
+  .and(z.object({ preview: z.string().optional() }));
 export const squareCardDetailsSchema = z.object({
-  items: z.array(z.union([squareNotificationItemSchema, z.object({ text: z.string() })])).min(1),
+  items: z.array(z.union([presentationItemSchema, z.object({ text: z.string() })])).min(1),
 });
 
 export const squareMessageSchema = z.union([
@@ -34,4 +28,4 @@ export const squareMessageSchema = z.union([
   z.object({ text: z.string() }),
 ]);
 export type SquareMessageData = z.output<typeof squareMessageSchema>;
-export type SquareNotificationItem = z.output<typeof squareNotificationItemSchema>;
+export type PresentationItem = z.output<typeof presentationItemSchema>;

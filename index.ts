@@ -4,5 +4,7 @@ export { selectOwnSeat, requireOwner, requireJoinName, localUserOwner, harnessOw
 export { postAndDispatch, dispatchEligibleCards } from './notifications.js';
 export { DeliveryLedger, deliveryLedgerLocation } from './delivery-ledger.js';
 export type * from './delivery-ledger.js';
+export { isCardPresentation } from './card-presentation.js';
+export type { CardPresentation } from './card-presentation.js';
 // Public operation contracts; no alternate runtime surface.
 export type * from './square-facade.js';
