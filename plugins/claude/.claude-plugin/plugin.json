@@ -1,6 +1,6 @@
 {
   "name": "square",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Native Claude Code hook delivery for Square participants",
   "author": {
     "name": "Square"
