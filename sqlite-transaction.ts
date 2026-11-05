@@ -4,8 +4,11 @@ import { setTimeout as sleep } from 'node:timers/promises';
 function abort(signal?: AbortSignal): void {
   if (signal?.aborted) throw signal.reason ?? new Error('SQLite operation aborted');
 }
-function isBusy(error: unknown): boolean {
-  return error instanceof Error && /database is locked|database is busy|SQLITE_BUSY/i.test(error.message);
+function isSqliteBusy(error: unknown): boolean {
+  const code = (error as { code?: string; errcode?: number } | null)?.code;
+  return typeof code === 'string' && /^SQLITE_BUSY(?:_|$)/.test(code)
+    || typeof (error as { errcode?: number } | null)?.errcode === 'number' && ((error as { errcode: number }).errcode & 0xff) === 5
+    || error instanceof Error && /database is locked|database is busy|SQLITE_BUSY/i.test(error.message);
 }
 /** Yield rather than blocking the process while another connection owns SQLite. */
 export async function retrySqliteBusy<T>(operation: () => T, signal?: AbortSignal, retryMs: number | (() => number) = 25): Promise<T> {
@@ -13,11 +16,23 @@ export async function retrySqliteBusy<T>(operation: () => T, signal?: AbortSigna
     abort(signal);
     try { return operation(); }
     catch (error) {
-      if (!isBusy(error)) throw error;
+      if (!isSqliteBusy(error)) throw error;
       try { await sleep(typeof retryMs === 'function' ? retryMs() : retryMs, undefined, { signal }); }
       catch (error) { abort(signal); throw error; }
     }
   }
+}
+/** Cancel a queued caller promptly without releasing its place in the connection's serial chain. */
+export async function awaitSqliteQueue<T>(result: Promise<T>, signal: AbortSignal | undefined, started: () => boolean): Promise<T> {
+  if (!signal) return result;
+  let onAbort: (() => void) | undefined;
+  try {
+    return await Promise.race([result, new Promise<never>((_, reject) => {
+      onAbort = () => { if (!started()) reject(signal.reason ?? new Error('SQLite operation aborted')); };
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    })]);
+  } finally { if (onAbort) signal.removeEventListener('abort', onAbort); }
 }
 /** Acquisition may retry; COMMIT retries retain the callback's result and transaction. */
 export async function inSqliteTransaction<T, V>(db: DatabaseSync, write: boolean, validate: () => V, change: (validated: V) => T, signal?: AbortSignal): Promise<T> {

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createArtifactPort, createSquareFile } from '../dist/artifact.js';
 import { Square } from '../dist/square-api.js';
 import { resolveKnownName } from '../dist/decisions.js';
-import { catchPresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, queryStatus, streamProjection } from '../dist/views.js';
+import { perceivePresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, queryStatus, streamProjection } from '../dist/views.js';
 
 const queryContext = { location: 'memory', now: 100_000 };
 
@@ -332,7 +332,7 @@ test('presence classifications and nearby watch participants are settled by proj
     assert.deepEqual(status.classificationByName, participants.classificationByName);
     assert.deepEqual(status.orderedHereNames, participants.orderedHereNames);
     const bodyReads = { batches: reads.batches.length, singles: reads.singles.length, ordinals: reads.ordinals.length };
-    const presence = (await square.artifact.read(facts => catchPresence(facts, square.clock()))).value;
+    const presence = (await square.artifact.read(facts => perceivePresence(facts, square.clock()))).value;
     assert.deepEqual(new Set(presence.participants.map((participant) => participant.name)), new Set(['Watcher', 'Lingering', 'Recent', 'Done']));
     assert.equal(presence.now, now);
     assert.deepEqual({ batches: reads.batches.length, singles: reads.singles.length, ordinals: reads.ordinals.length }, bodyReads);

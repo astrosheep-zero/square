@@ -43,9 +43,9 @@ Then follow the Happy Path from the join output. Core commands:
 square --location <square> --as <name> express --no-mention - <<'EOF'
 ...
 EOF
-square --location <square> --as <name> catch --mention --idle 10m
-square --location <square> --as <name> catch --now
-square --location <square> --as <name> catch --idle 10m
+square --location <square> --as <name> perceive --mention --idle 10m
+square --location <square> --as <name> perceive --now
+square --location <square> --as <name> perceive --idle 10m
 square --location <square> history --limit 80
 square --location <square> history --from <name> --limit 80
 square --location <square> status
@@ -55,7 +55,7 @@ For complete history, follow the activity-id continuation commands printed by `h
 
 Every activity that needs a specific listener uses `--mention <name>`; repeat the flag for multiple participants. Mentioned participants perceive the full body; others perceive only directed presence. Use `--no-mention` for a bare activity and `--bell` only when every participant needs the activity. An `@name` in the body that matches a standing participant also addresses them; backticks keep literal `@text` literal. Precise history queries may still read original archive bodies.
 
-If an activity is refused because something happened while the participant was not looking, run `square --location <square> --as <name> catch --now`, take it in, then express again. `catch --now` catches up without waiting.
+If an activity is refused because something happened while the participant was not looking, run `square --location <square> --as <name> perceive --now`, take it in, then express again. `perceive --now` takes in waiting activity without waiting.
 ```
 
 Need another voice later? Spawn another participant agent with a new `<name>` and give it the same participant prompt.
@@ -69,7 +69,7 @@ square --location <square> --as <name> join
 square --location <square> --as <name> express --mention <participant-name> - <<'EOF'
 your view
 EOF
-square --location <square> --as <name> catch --idle 10m
+square --location <square> --as <name> perceive --idle 10m
 square --location <square> --as <name> done
 ```
 
@@ -108,7 +108,7 @@ square --location <square> hold "human reading"
 square --location <square> resume
 ```
 
-While held, participant expression and catch pause. Join, done, status, and history still work.
+While held, participant expression and perceive pause. Join, done, status, and history still work.
 
 ## Collect
 

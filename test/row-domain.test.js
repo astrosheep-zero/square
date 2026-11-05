@@ -184,12 +184,12 @@ test('cursor and presence distinguish holes, reads and orphan receipts', async (
 test('historical audience retains earlier holes while pending discovery stops at the latest join', async () => {
   const port = createArtifactPort(':memory:', fixtureState(REJOIN_ACTS));
   try {
-    const beforeCatch = (await port.read((facts) => ({
+    const beforePerceive = (await port.read((facts) => ({
       historical: facts.directed('Alice', { unseenOnly: true }, { edge: 'oldest', limit: 10 }).items.map((head) => head.index),
       cursor: readCursor(facts, 'Alice'),
     }))).value;
-    assert.deepEqual(beforeCatch.historical, [2, 3, 7, 8], 'ordinary catch is not cut by the latest join');
-    assert.equal(beforeCatch.cursor, 6, 'cursor sits at the rejoin coordinate before any addressed row');
+    assert.deepEqual(beforePerceive.historical, [2, 3, 7, 8], 'ordinary perceive is not cut by the latest join');
+    assert.equal(beforePerceive.cursor, 6, 'cursor sits at the rejoin coordinate before any addressed row');
 
   } finally {
     await port.close();

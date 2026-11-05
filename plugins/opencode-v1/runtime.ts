@@ -16,8 +16,8 @@ interface Receiver { abort: AbortController; running: Promise<void>; generation:
 export async function startReceiver(ctx: Context) {
   const env = { ...process.env };
   const directory = await canonicalPath(ctx.directory);
-  const discovery = await observeOpenCodeSessions(env);
   const lifetime = new AbortController();
+  const discovery = await observeOpenCodeSessions(env, lifetime.signal);
   const receivers = new Map<string, Receiver>();
   const terminal = new Set<string>();
   const interrupting = new Set<string>();
@@ -40,7 +40,7 @@ export async function startReceiver(ctx: Context) {
       && await canonicalPath(info.directory) === directory;
   };
   const reconcile = async (active?: string) => {
-    const candidates = new Set(await listOpenCodeSessions(env));
+    const candidates = new Set(await listOpenCodeSessions(env, lifetime.signal));
     if (active) candidates.add(active);
     for (const id of candidates) {
       if (lifetime.signal.aborted) return;
@@ -48,7 +48,7 @@ export async function startReceiver(ctx: Context) {
       if (terminal.has(id) || !await validate(id) || terminal.has(id)) {
         const receiver = receivers.get(id);
         stop(id);
-        if (receiver) await detachOpenCodeSession(id, receiver.generation, env);
+        if (receiver) await detachOpenCodeSession(id, receiver.generation, env, lifetime.signal);
         continue;
       }
       const existing = receivers.get(id);

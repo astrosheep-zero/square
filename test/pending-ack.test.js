@@ -1,14 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { randomUUID } from 'node:crypto';
-import { createArtifactPort } from '../dist/artifact.js';
 import { Square } from '../dist/square-api.js';
 
-const state = { hardCap: null, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } };
 async function setup(t) {
-  const artifact = createArtifactPort(':memory:', state);
-  const square = await Square.at({ path: `/tmp/square-ack-${randomUUID()}.square`, resources: { artifact: () => artifact, close: async () => {} } });
-  t.after(async () => { await square.close(); await artifact.close(); });
+  const square = Square.inMemory({ markdown: '' });
+  t.after(() => square.close());
   const alice = (await square.join('Alice', { owner: 'test:alice' })).participant;
   const bob = (await square.join('Bob', { owner: 'test:bob' })).participant;
   return { square, alice, bob };
@@ -21,7 +17,7 @@ test('exact activity ACK consumes only the selected addressed activity', async t
   assert.deepEqual(await bob.ack([one.id]), { consumed: 1 });
   assert.deepEqual(await bob.ack([one.id]), { consumed: 0 });
   assert.deepEqual((await bob.pending()).activities.map(a => a.id), [two.id]);
-  assert.deepEqual((await bob.catch()).activities.map(a => a.id), [two.id]);
+  assert.deepEqual((await bob.perceive()).activities.map(a => a.id), [two.id]);
 });
 
 test('send returns a notice, not a participant or a say activity', async t => {

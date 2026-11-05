@@ -53,7 +53,7 @@ export function projectNotification(attention: AttentionPreview) {
   ];
   return {
     text: [`<square-activity ${attributes.join(' ')}>`, `${description}.`, '', escapeSquareTags(preview),
-      ...(!isFull ? ['', escapeSquareTags(`Use square_catch with location=${JSON.stringify(attention.squarePath)}, as=${JSON.stringify(attention.recipient)}, id=${JSON.stringify(formatActivityId(attention.actIndex))} for the full activity.`)] : []),
+      ...(!isFull ? ['', escapeSquareTags(`Use square_perceive with location=${JSON.stringify(attention.squarePath)}, as=${JSON.stringify(attention.recipient)}, id=${JSON.stringify(formatActivityId(attention.actIndex))} for the full activity.`)] : []),
       '</square-activity>'].join('\n'),
     full: ['<square-activity>', `· ${displayAttentionPath(attention.squarePath)} · ${attention.recipient} · ${formatActivityId(attention.actIndex)}`,
       `● ${description}`, '', body, '</square-activity>'].join('\n'),

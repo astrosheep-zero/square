@@ -183,8 +183,8 @@ test('express through the library stores derived mention metadata', async () => 
     assert.deepEqual(literal.activity.mentions, []);
     const bare = await alice.express('hey @Bob', { force: true, noMention: true });
     assert.deepEqual(bare.activity.mentions, []);
-    const caught = await bob.catch();
-    assert.deepEqual(caught.activities.map((activity) => activity.id), [directed.activity.id]);
+    const perceived = await bob.perceive();
+    assert.deepEqual(perceived.activities.map((activity) => activity.id), [directed.activity.id]);
   } finally {
     await square.close();
   }

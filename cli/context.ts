@@ -108,7 +108,7 @@ const LOCATION_REQUIRED_COMMANDS = new Set([
   'build',
   'stream',
   'join',
-  'catch',
+  'perceive',
   'express',
   'listen',
   'ignore',
@@ -153,13 +153,10 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
   const command = args[0];
   if (name !== undefined) validateName(name);
   const explicitSquarePath = requestedPath !== undefined;
-  const configuredLocation = process.env.SQUARE_LOCATION?.trim();
-  const configured = configuredLocation === '' ? undefined : configuredLocation;
-  if (command !== undefined && !['--help', '-h'].includes(command) && locationIsRequired(command) && requestedPath === undefined && configured === undefined) {
+  if (command !== undefined && !['--help', '-h'].includes(command) && locationIsRequired(command) && requestedPath === undefined) {
     fail(`✕ ${command} needs a square location\nsquare ls`);
   }
-  const squarePath = requestedPath ?? configured;
-  return { squarePath, explicitSquarePath: explicitSquarePath || configured !== undefined, multipleSquares: false, name, owner, args };
+  return { squarePath: requestedPath, explicitSquarePath, multipleSquares: false, name, owner, args };
 }
 
 export function locationIsRequired(command: string): boolean {

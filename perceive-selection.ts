@@ -2,7 +2,7 @@ import { sameName } from './model.js';
 import { audienceIncludes, type Audience } from './square-core.js';
 
 /** Pure filter over settled audience facts; unread/directed eligibility and paging belong to callers. */
-export function matchesCatchSelection(
+export function matchesPerceiveSelection(
   actor: string,
   audience: Audience,
   filter: { readonly participants?: readonly string[]; readonly mention?: string },
@@ -25,9 +25,9 @@ export interface RoutedNotification {
   readonly recipient: string;
 }
 
-/** A live catch owns every matching notification, independent of its page size. */
+/** A live perceive owns every matching notification, independent of its page size. */
 export function leaseOwnsNotification(lease: import('./model.js').WatchLease, notification: RoutedNotification): boolean {
-  return matchesCatchSelection(notification.actor, notification.route === 'bell' ? { kind: 'bell' }
+  return matchesPerceiveSelection(notification.actor, notification.route === 'bell' ? { kind: 'bell' }
     : { kind: 'mentions', names: notification.route === 'mention' ? [notification.recipient] : [] }, lease.filter ?? {},
   notification.route === 'reply' ? notification.recipient : undefined);
 }

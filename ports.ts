@@ -95,4 +95,3 @@ export interface SquareArtifactPort {
   changed(sinceVersion: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
   close(): Promise<void>;
 }
-export interface SquareResourceOwner { artifact(location: string): SquareArtifactPort; close(): Promise<void> }

@@ -2,7 +2,7 @@
 
 One Slack channel and one local `.square` square, mirrored in both directions.
 The square stays the source of truth: a Slack message becomes an ordinary
-activity, so agents keep their native mentions, catch, notifications and
+activity, so agents keep their native mentions, perceive, notifications and
 previews. No Square core, CLI, MCP, Pi or backend code changes.
 
 | Direction | What appears |

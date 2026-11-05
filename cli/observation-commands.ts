@@ -4,10 +4,9 @@ import { runClaudeHook, runClaudeWatch } from '../claude-hook.js';
 import { runCodexHook, runCodexInterrupt } from '../codex-hook.js';
 import { runCodexWatch } from '../codex-watch.js';
 import { isSquareError } from '../model.js';
-import type { ActivityId, OperationError, ArchiveRecord, CatchOptions, DiscoveryResult, DiscoveryOptions, HistoryQuery, StreamStart } from '../square-facade.js';
+import type { ActivityId, OperationError, ArchiveRecord, PerceiveOptions, DiscoveryOptions, HistoryQuery, StreamStart } from '../square-facade.js';
 import {
   commandPrefix,
-  participantIdentity,
   truncateChars,
   withPathOutput,
   quoteShell,
@@ -18,11 +17,11 @@ import {
   renderHistoryResult,
   renderParticipantsResult,
   renderStatusResult,
+  renderSquareList,
 } from '../operation-presentation.js';
-import { style } from '../tty-style.js';
-import { formatRelativeTime, formatTimestamp, parseTimeOrRelative } from '../time.js';
-import { discover, inbox, formatActivityId, parseActivityId, CATCH_DEFAULT_LIMIT, CATCH_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../square-api.js';
-import { renderCatchOutcome, renderCatchProgress } from './catch-presentation.js';
+import { formatTimestamp, parseTimeOrRelative } from '../time.js';
+import { discover, inbox, formatActivityId, parseActivityId, PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../square-api.js';
+import { renderPerceiveOutcome, renderPerceiveProgress } from './perceive-presentation.js';
 import { selectOwnSeat } from '../square-api.js';
 import { jsonResult } from './json.js';
 
@@ -57,35 +56,6 @@ interface HistoryCommandOptions {
   continuationArgs: string[];
 }
 
-function renderSquareList(data: DiscoveryResult, projection: { now: number; depth: number; limit: number }): string {
-  const { items, stopped, remaining, next } = data;
-  if (data.total === 0) {
-    return ['(no squares found)', ...(stopped ? [style('dim', '○ the walk stopped early — deeper squares may still be hiding')] : [])].join('\n') + '\n';
-  }
-  const lines = ['squares'];
-  for (const item of items) {
-    const glyph = item.activities > 0 ? '●' : style('dim', '○');
-    lines.push(`${glyph} ${inboxDisplay(item.path)}${style('dim', ` · ${formatRelativeTime(item.lastActiveAt, projection.now)} · ${item.participants.length} in the square · ${item.activities} ${item.activities === 1 ? 'activity' : 'activities'}`)}`);
-    const context = item.context.slice(0, 2);
-    if (context.length === 0) lines.push(`  ${style('dim', 'context')} · (none)`);
-    else {
-      context.forEach((line, index) => lines.push(`  ${index === 0 ? style('dim', 'context') : '       '} · ${inboxDisplay(line)}`));
-      const hidden = item.context.length - context.length;
-      if (hidden > 0) lines.push(style('dim', `          · … ${hidden} more ${hidden === 1 ? 'line' : 'lines'}`));
-    }
-    const participants = item.participants.slice(0, 3);
-    const hidden = item.participants.length - participants.length;
-    const names = participants.length === 0 ? 'nobody' : participants.map((name) => participantIdentity(inboxDisplay(name))).join(' · ');
-    lines.push(`  ${style('dim', 'participants')} · ${names}${hidden > 0 ? style('dim', ` · … ${hidden} more`) : ''}`);
-  }
-  if (remaining > 0) {
-    lines.push(style('dim', stopped ? '  … more squares' : `  … ${remaining} more ${remaining === 1 ? 'square' : 'squares'}`));
-    if (next !== undefined) lines.push(`square list --depth ${projection.depth} --limit ${projection.limit} --after ${quoteShell(next)}`);
-  }
-  if (stopped) lines.push(style('dim', '○ the walk stopped early — deeper squares may still be hiding'));
-  return lines.join('\n') + '\n';
-}
-
 export const listCommand: CommandSpec<DiscoveryOptions, string> = {
   parse(argv, context) {
     let depth = DEFAULT_LIST_DEPTH;
@@ -108,7 +78,10 @@ export const listCommand: CommandSpec<DiscoveryOptions, string> = {
     return { depth, limit, after };
   },
   async execute(intent, context) {
-    const result = await discover(squareInput(context), intent);
+    let owner;
+    try { owner = commandIdentity(context.env, context.owner).owner; }
+    catch { /* Discovery stays available without a complete harness identity. */ }
+    const result = await discover(squareInput(context), { ...intent, owner });
     return renderSquareList(result, { now: now(context), depth: intent.depth ?? DEFAULT_LIST_DEPTH, limit: intent.limit ?? DEFAULT_LIST_LIMIT });
   },
   present: (result) => process.stdout.write(result),
@@ -170,7 +143,7 @@ export const streamCommand: CommandSpec<StreamIntent> = {
   present: () => {},
 };
 
-export const catchCommand: CommandSpec<CatchOptions> = {
+export const perceiveCommand: CommandSpec<PerceiveOptions> = {
   parse(argv, context) {
     let idle: number | undefined;
     let mention: boolean | undefined;
@@ -181,9 +154,9 @@ export const catchCommand: CommandSpec<CatchOptions> = {
     const participants: string[] = [];
     for (let index = 0; index < argv.length; index++) {
       if (argv[index] === '--id') {
-        if (id !== undefined) fail('✕ catch accepts one --id\nsquare catch --help');
+        if (id !== undefined) fail('✕ perceive accepts one --id\nsquare perceive --help');
         const value = requireValue(argv, index, '--id');
-        if (parseActivityId(value) === undefined) fail('✕ invalid --id: expected an activity id like act/12\nsquare catch --help');
+        if (parseActivityId(value) === undefined) fail('✕ invalid --id: expected an activity id like act/12\nsquare perceive --help');
         id = value as ActivityId;
         index += 1;
       } else if (argv[index] === '--from') {
@@ -195,24 +168,24 @@ export const catchCommand: CommandSpec<CatchOptions> = {
       } else if (argv[index] === '--mention') {
         mention = true;
       } else if (argv[index] === '--limit') {
-        limit = parseBoundedLimit(argv[index + 1], '--limit', CATCH_MAX_LIMIT, `${commandPrefix(requireSquarePath(context))} catch --limit ${CATCH_MAX_LIMIT}`);
+        limit = parseBoundedLimit(argv[index + 1], '--limit', PERCEIVE_MAX_LIMIT, `${commandPrefix(requireSquarePath(context))} perceive --limit ${PERCEIVE_MAX_LIMIT}`);
         index += 1;
       } else if (argv[index] === '--replace') replace = true;
       else if (argv[index] === '--now') now = true;
-      else if (argv[index] !== '--json') fail(`✕ catch does not know ${argv[index]}\nsquare catch --help`);
+      else if (argv[index] !== '--json') fail(`✕ perceive does not know ${argv[index]}\nsquare perceive --help`);
     }
     if (id !== undefined) {
       if (argv.some((flag) => ['--idle', '--from', '--mention', '--limit', '--replace'].includes(flag))) {
-        fail('✕ --id cannot be combined with --idle, --from, --mention, --limit or --replace\nsquare catch --help');
+        fail('✕ --id cannot be combined with --idle, --from, --mention, --limit or --replace\nsquare perceive --help');
       }
       return { id };
     }
-    if (idle !== undefined && now) fail('catch accepts --now or --idle, not both.');
+    if (idle !== undefined && now) fail('perceive accepts --now or --idle, not both.');
     if (replace && idle === undefined) fail('--replace can only be used with --idle.');
     return {
       ...(participants.length > 0 ? { from: participants } : {}),
       ...(mention === undefined ? {} : { mention }),
-      limit: limit ?? CATCH_DEFAULT_LIMIT,
+      limit: limit ?? PERCEIVE_DEFAULT_LIMIT,
       ...(idle === undefined ? {} : { idle }),
       ...(replace ? { replace } : {}),
     };
@@ -223,10 +196,10 @@ export const catchCommand: CommandSpec<CatchOptions> = {
     const interrupt = () => controller.abort();
     process.once('SIGINT', interrupt);
     try {
-      const outcome = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name)).catch({ ...intent, ...(context.json ? {} : { observe: true }) }, {
+      const outcome = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name)).perceive({ ...intent, ...(context.json ? {} : { observe: true }) }, {
         signal: controller.signal,
         onProgress(progress) {
-          const line = renderCatchProgress(squarePath, progress);
+          const line = renderPerceiveProgress(squarePath, progress);
           if (line !== undefined) process.stderr.write(line);
         },
       }), { signal: controller.signal });
@@ -234,13 +207,13 @@ export const catchCommand: CommandSpec<CatchOptions> = {
         process.stdout.write(jsonResult(outcome));
         process.exitCode = outcome.reason === 'already-active' || outcome.reason === 'capped' ? 1 : 0;
       } else {
-        const rendered = renderCatchOutcome(squarePath, outcome, intent, context.owner ?? context.env.SQUARE_OWNER);
+        const rendered = renderPerceiveOutcome(squarePath, outcome, intent, context.owner ?? context.env.SQUARE_OWNER);
         process.stdout.write(rendered.stdout);
         process.exitCode = rendered.exitCode;
       }
     } catch (error) {
       if (!controller.signal.aborted) throw error;
-      process.stdout.write(withPathOutput(squarePath, '○ you step back — catch stopped'));
+      process.stdout.write(withPathOutput(squarePath, '○ you step back — perceive stopped'));
       process.exitCode = 130;
     } finally { process.off('SIGINT', interrupt); }
   },

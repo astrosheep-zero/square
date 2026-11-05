@@ -3,19 +3,54 @@
 import { sameName } from './model.js';
 import { formatActivityId } from './square-core.js';
 import type {
-  CatchOptions, CatchResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
+  PerceiveOptions, PerceiveResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
   JoinResult, LifecycleResult, ListenerChangeResult, ListeningResult, OperationFailureDetail,
-  ParticipantsResult, StatusResult,
+  ParticipantsResult, StatusResult, DiscoveryResult,
 } from './square-facade.js';
 import {
   commandPrefix, joinRecoveryCommand, participantCommandPrefix, participantIdentity,
   participantsRecoveryCommand, quoteShell, renderAmbientEvent, renderAmbientEventFacts,
   renderEventCli, renderGrepActivitiesView, renderPresenceAnchor,
   renderRoomChangeText, renderWatchAlreadyActive, renderWatchReplaced, renderWatchStatus,
-  takeoverRecoveryLines, withPathOutput,
+  takeoverRecoveryLines, withPathOutput, truncateChars,
 } from './presentation.js';
 import { formatRelativeTime, formatTimestamp } from './time.js';
 import { style } from './tty-style.js';
+
+function listDisplay(value: string): string {
+  const truncated = truncateChars(value, 159);
+  return truncated.remaining === 0 ? truncated.text : `${truncated.text}…`;
+}
+
+export function renderSquareList(data: DiscoveryResult, projection: { now: number; depth: number; limit: number }): string {
+  const { items, stopped, remaining, next } = data;
+  if (data.total === 0) {
+    return ['(no squares found)', ...(stopped ? [style('dim', '○ the walk stopped early — deeper squares may still be hiding')] : [])].join('\n') + '\n';
+  }
+  const lines = ['squares'];
+  for (const item of items) {
+    const glyph = item.activities > 0 ? '●' : style('dim', '○');
+    lines.push(`${glyph} ${listDisplay(item.path)}${style('dim', ` · ${formatRelativeTime(item.lastActiveAt, projection.now)} · ${item.participants.length} in the square · ${item.activities} ${item.activities === 1 ? 'activity' : 'activities'}`)}`);
+    const context = item.context.slice(0, 2);
+    if (context.length === 0) lines.push(`  ${style('dim', 'context')} · (none)`);
+    else {
+      context.forEach((line, index) => lines.push(`  ${index === 0 ? style('dim', 'context') : '       '} · ${listDisplay(line)}`));
+      const hidden = item.context.length - context.length;
+      if (hidden > 0) lines.push(style('dim', `          · … ${hidden} more ${hidden === 1 ? 'line' : 'lines'}`));
+    }
+    const participants = item.participants.slice(0, 3);
+    const hidden = item.participants.length - participants.length;
+    const names = participants.length === 0 ? 'nobody' : participants.map((name) => participantIdentity(listDisplay(name))).join(' · ');
+    lines.push(`  ${style('dim', 'participants')} · ${names}${hidden > 0 ? style('dim', ` · … ${hidden} more`) : ''}`);
+    if (item.joined?.length) lines.push(`  ${style('dim', 'joined')} · ${item.joined.map(seat => `${participantIdentity(listDisplay(seat.name))}${seat.pending > 0 ? style('dim', ` (${seat.pending} waiting)`) : ''}`).join(' · ')}`);
+  }
+  if (remaining > 0) {
+    lines.push(style('dim', stopped ? '  … more squares' : `  … ${remaining} more ${remaining === 1 ? 'square' : 'squares'}`));
+    if (next !== undefined) lines.push(`square list --depth ${projection.depth} --limit ${projection.limit} --after ${quoteShell(next)}`);
+  }
+  if (stopped) lines.push(style('dim', '○ the walk stopped early — deeper squares may still be hiding'));
+  return lines.join('\n') + '\n';
+}
 
 export const PARTICIPANTS_DEFAULT_LIMIT = 20;
 export const PARTICIPANTS_MAX_LIMIT = 100;
@@ -35,8 +70,8 @@ export function renderJoinResult(data: JoinPresentation, owner?: string): string
     now: after.now, preview: 200, perception: event.perception,
   })).filter(Boolean).join('\n\n');
   const fallback = after.deliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
-    '', `${participantCommandPrefix(after.location, name, owner)} catch --idle 30m`,
-    '  · stay within earshot — keep this catch open for new activity',
+    '', `${participantCommandPrefix(after.location, name, owner)} perceive --idle 30m`,
+    '  · stay within earshot — keep this perceive open for new activity',
   ];
   const entryLine = data.kind === 'joined' ? '● you stepped into the square'
     : data.kind === 'reconnected' ? '● you are already in the square'
@@ -67,7 +102,7 @@ export function renderExpression(squarePath: string, data: ExpressResult, owner?
     'Unread context · preview only, not consumed',
     ...context.activities.map(item => `· ${participantIdentity(item.actor)} · ${item.id}\n  ${item.preview}${item.truncated ? '… (truncated)' : ''}`),
     ...(context.remaining === 0 ? [] : [`· ${context.remaining} more unread activities`]),
-    `${participantCommandPrefix(projection.location, name, owner)} catch`,
+    `${participantCommandPrefix(projection.location, name, owner)} perceive`,
   ].join('\n');
   const ownCount = projection.ownActivityCount;
   const capCount = projection.hardCap === null ? '' : ` · ${ownCount}/${projection.hardCap}`;
@@ -86,19 +121,19 @@ export function renderExpression(squarePath: string, data: ExpressResult, owner?
     { participantCount: projection.standingCount });
 }
 
-function continuationCommand(squarePath: string, name: string, options: CatchOptions, owner?: string): string {
+function continuationCommand(squarePath: string, name: string, options: PerceiveOptions, owner?: string): string {
   const args = ['--now'];
   if (options.from?.length) args.push('--from', options.from.join(','));
   if (options.mention) args.push('--mention');
   if (options.limit !== undefined) args.push('--limit', String(options.limit));
-  return `${participantCommandPrefix(squarePath, name, owner)} catch ${args.join(' ')}`;
+  return `${participantCommandPrefix(squarePath, name, owner)} perceive ${args.join(' ')}`;
 }
 
-/** Render settled catch facts; no selection, terminal decisions, receipts or wait machinery. */
-export function renderCatchOutcome(
+/** Render settled perceive facts; no selection, terminal decisions, receipts or wait machinery. */
+export function renderPerceiveOutcome(
   squarePath: string,
-  data: CatchResult,
-  options: CatchOptions = {},
+  data: PerceiveResult,
+  options: PerceiveOptions = {},
   owner?: string,
 ): { stdout: string; exitCode: number } {
   const projection = data.observation;
@@ -109,7 +144,7 @@ export function renderCatchOutcome(
   const header = { participantCount: projection.standingCount };
   const statusOptions = {
     squarePath: location, name, owner, presence: projection.presence,
-    showCatchHint: !projection.deliveryAvailable,
+    showPerceiveHint: !projection.deliveryAvailable,
     ownActivityCount: projection.ownActivityCount, hardCap: projection.hardCap,
   };
   if (stop === 'already-active' || stop === 'replaced') {
@@ -129,7 +164,7 @@ export function renderCatchOutcome(
     ...(stop === 'idle' && options.idle !== undefined ? { idleMs: options.idle } : {}),
   });
   const fallback = stop === undefined && !projection.deliveryAvailable && data.remaining === 0
-    ? `${participantCommandPrefix(location, name, owner)} catch --idle 30m\n  stay available for new activity` : '';
+    ? `${participantCommandPrefix(location, name, owner)} perceive --idle 30m\n  stay available for new activity` : '';
   const hint = data.hint === undefined ? '' : style('dim', `· ${data.hint}`);
   return {
     stdout: withPathOutput(location, [terminal, rendered, hint, remaining, fallback].filter(Boolean).join('\n\n'), header),
@@ -215,7 +250,7 @@ export function renderParticipantsResult(
   const participants = data.participants;
   const lines = participants.slice(0, limit).map((participant) => {
     const glyph = participant.presence === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 && projection.classificationByName[participant.name] === 'here' ? '●' : '○';
-    const state = participant.presence === 'watching' ? 'catching' : participant.presence === 'never-joined' ? 'not joined' : participant.presence;
+    const state = participant.presence === 'watching' ? 'perceiving' : participant.presence === 'never-joined' ? 'not joined' : participant.presence;
     const last = participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, now);
     return `  ${glyph} ${participant.name}${style('dim', ` · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`)}`;
   });
@@ -249,7 +284,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
         ? '◎'
         : participant.activityCount > 0 ? '●' : '○';
       const summary = participant.presence === 'watching'
-        ? 'is nearby · catching'
+        ? 'is nearby · perceiving'
         : participant.activityCount > 0
           ? `is nearby · ${formatRelativeTime(participant.lastActiveAt ?? data.now, data.now)}`
           : `is nearby · quiet · ${participant.lastActiveAt === undefined ? 'just now' : formatRelativeTime(participant.lastActiveAt, data.now)}`;
@@ -260,7 +295,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult): stri
           ? `${participant.pendingMentionCount} ${participant.pendingMentionCount === 1 ? 'mention' : 'mentions'} waiting`
           : participant.unreadActivityCount > 0
             ? `${participant.unreadActivityCount} change${participant.unreadActivityCount === 1 ? '' : 's'} waiting`
-            : 'caught up';
+            : 'up to date';
       return `  ${glyph} ${participantIdentity(participant.name)}${style('dim', ` ${summary}${attention === '' ? '' : ` · ${attention}`}`)}`;
     }));
     people.push(...away.slice(0, STATUS_PARTICIPANT_PREVIEW_LIMIT).map(participant => `  ○ ${participantIdentity(participant.name)}${style('dim', ' · away')}`));

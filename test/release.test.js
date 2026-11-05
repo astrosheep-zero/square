@@ -20,8 +20,8 @@ test('generated release artifacts expose the current identity and supported host
   const claudeMcp = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'claude', '.mcp.json'), 'utf8'));
   const codexPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', '.codex-plugin', 'plugin.json'), 'utf8'));
   const codexHooks = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', 'hooks', 'hooks.json'), 'utf8'));
-  assert.deepEqual(Object.keys(codexHooks.hooks).sort(), ['Interrupt', 'PostToolUse', 'SessionEnd', 'SessionStart', 'Stop']);
-  for (const event of ['SessionStart', 'SessionEnd', 'PostToolUse']) {
+  assert.deepEqual(Object.keys(codexHooks.hooks).sort(), ['Interrupt', 'PostToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'UserPromptSubmit']);
+  for (const event of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PostToolUse']) {
     const hook = codexHooks.hooks[event][0].hooks[0];
     assert.equal(hook.command, 'square codex-hook');
     assert.equal(hook.statusMessage, 'Square');
@@ -107,7 +107,7 @@ test('generated release artifacts expose the current identity and supported host
   assert.equal(claudeSkill, squareSkill);
   assert.match(squareSkill, /history.*only way to look back/i);
   assert.match(squareSkill, /Never read or parse the binary Square artifact directly/);
-  assert.match(codexPlugin.interface.defaultPrompt, /join.*catch.*express.*done/i);
+  assert.match(codexPlugin.interface.defaultPrompt, /join.*perceive.*express.*done/i);
   assert.doesNotMatch(JSON.stringify(codexPlugin.interface), /\bstream\b/i);
   assert.deepEqual(
     harnessTargets().map(({ name, capabilities }) => [name, capabilities]),

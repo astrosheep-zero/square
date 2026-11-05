@@ -3,13 +3,13 @@ import test from 'node:test';
 
 import { expressionContext } from '../dist/activity-feed.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
-import { decideCatch } from '../dist/catch-decisions.js';
+import { decidePerceive } from '../dist/perceive-decisions.js';
 import { attentionChange, coreListening, coreParticipants, decideAct, decideJoin } from '../dist/decisions.js';
 import { renderPresenceLines } from '../dist/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/runtime.js';
 import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
-import { catchPresence, publicActivities, NON_READ, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/views.js';
+import { perceivePresence, publicActivities, NON_READ, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/views.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
@@ -66,14 +66,14 @@ test('participant lists share actual action and receipt times, including a fresh
     const projections = [
       (await cell.read((facts) => queryParticipants(facts, { location: 'memory', now: 180000 }))).value.participants,
       (await cell.read((facts) => queryStatus(facts, { location: 'memory', now: 180000 }))).value.participants,
-      (await cell.read(facts => catchPresence(facts, 180000))).value.participants,
+      (await cell.read(facts => perceivePresence(facts, 180000))).value.participants,
     ];
     for (const participants of projections) {
       assert.deepEqual(participants.map((p) => [p.name, p.lastActiveAt]), expected);
       const output = renderPresenceLines(participants, 180000).join('\n');
       assert.ok(output.indexOf('@Newcomer') < output.indexOf('@Returning'));
       assert.ok(output.indexOf('@Returning') < output.indexOf('@Reader'));
-      assert.match(output, /@Reader.*catching.*2m/);
+      assert.match(output, /@Reader.*perceiving.*2m/);
     }
     assert.deepEqual((await cell.read(listPresentation)).value.participants, expected.map(([name]) => name));
   } finally {
@@ -118,7 +118,7 @@ test('unknown participant errors identify only the requested name', async () => 
   const unknown = 'Eve';
   const cases = [
     () => cell.read((facts) => decideAct(facts, { name: 'Alice', body: 'hello', force: true, now: 2, mentions: [unknown] })),
-    () => cell.read((facts) => decideCatch(facts, unknown, {}, 2)),
+    () => cell.read((facts) => decidePerceive(facts, unknown, {}, 2)),
   ];
 
   const expectedReasons = ['not_standing', 'never_joined'];
@@ -436,14 +436,14 @@ test('activity history grep searches ids, participant names, and bodies', async 
   }
 });
 
-test('catch pages unseen directed activity and keeps the continuous cursor behind a gap', async () => {
+test('perceive pages unseen directed activity and keeps the continuous cursor behind a gap', async () => {
   const first = createArtifactPort(':memory:', makeState());
   try {
     const alice = await establishSeat(first, 'Alice', 1);
     const bob = await establishSeat(first, 'Bob', 2);
     const cara = await establishSeat(first, 'Cara', 3);
     for (let index = 0; index < 25; index += 1) await landSayTo(first, index % 2 === 0 ? bob : cara, 'Alice', index + 4, `message ${index} @Alice`);
-    const page = (options, at) => first.transactAs({ kind: 'participant', seat: alice }, (facts) => decideCatch(facts, 'Alice', options, at)).then((result) => result.value);
+    const page = (options, at) => first.transactAs({ kind: 'participant', seat: alice }, (facts) => decidePerceive(facts, 'Alice', options, at)).then((result) => result.value);
     const one = await page({ limit: 10 }, 100);
     assert.deepEqual(one.activities.map((item) => item.id), Array.from({ length: 10 }, (_, index) => `act/${index + 3}`));
     assert.equal(one.remaining, 15);
@@ -462,9 +462,9 @@ test('catch pages unseen directed activity and keeps the continuous cursor behin
     const cara = await establishSeat(gap, 'Cara', 3);
     await landSayTo(gap, cara, 'Alice', 4, 'gap @Alice');
     await landSayTo(gap, bob, 'Alice', 5, 'seen @Alice');
-    const bobOnly = (await gap.transactAs({ kind: 'participant', seat: alice }, (facts) => decideCatch(facts, 'Alice', { from: ['Bob'] }, 200))).value;
+    const bobOnly = (await gap.transactAs({ kind: 'participant', seat: alice }, (facts) => decidePerceive(facts, 'Alice', { from: ['Bob'] }, 200))).value;
     assert.deepEqual(bobOnly.activities.map((item) => item.id), ['act/4']);
-    const repeat = (await gap.transactAs({ kind: 'participant', seat: alice }, (facts) => decideCatch(facts, 'Alice', { from: ['Bob'] }, 201))).value;
+    const repeat = (await gap.transactAs({ kind: 'participant', seat: alice }, (facts) => decidePerceive(facts, 'Alice', { from: ['Bob'] }, 201))).value;
     assert.deepEqual(repeat.activities, []);
   } finally {
     await gap.close();

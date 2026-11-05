@@ -1,6 +1,6 @@
 ---
 name: developing-sqaure
-description: Develop, refactor, review, test, and ship changes in the sqaure repository. Use for Square domain modeling, artifact/parser work, delivery hooks, catch/history behavior, wake routes and attempts, Paseo integration, CLI behavior, architecture cleanup, test maintenance, and release verification.
+description: Develop, refactor, review, test, and ship changes in the sqaure repository. Use for Square domain modeling, artifact/parser work, delivery hooks, perceive/history behavior, wake routes and attempts, Paseo integration, CLI behavior, architecture cleanup, test maintenance, and release verification.
 ---
 
 # Developing Sqaure
@@ -23,7 +23,7 @@ Treat `AGENTS.md` as project authority. Read it before changing behavior, then i
 - Treat native hooks as available for every session. Paseo is one wake path, not a separate session capability model.
 - Keep Paseo timeline waiting inside `PaseoAdapter` until Paseo owns boundary queuing itself.
 - Send wake awareness only. Never include activity bodies in wake prompts.
-- Let boundary adapters alone write presented evidence. Let `catch` alone write delivered receipts.
+- Let boundary adapters alone write presented evidence. Let `perceive` alone write delivered receipts.
 - Record wake attempts only for real adapter calls. Never persist synthetic outcomes for missing routes or derived exhaustion.
 - Keep leases limited to mutual exclusion and interrupted-dispatch recovery. Never consume lease content in delivery classification.
 - Derive worker eligibility, doctor output, and future sweep behavior from the same primary-evidence predicates.

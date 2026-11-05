@@ -13,8 +13,8 @@ test('concurrent expressions land exactly once with distinct activities and thei
     alice.express('for Cara', { mentions: ['Cara'], force: true }),
   ]);
   assert.notEqual(sent[0].activity.id, sent[1].activity.id);
-  assert.deepEqual((await bob.catch()).activities.map(item => item.body), ['for Bob']);
-  assert.deepEqual((await cara.catch()).activities.map(item => item.body), ['for Cara']);
+  assert.deepEqual((await bob.perceive()).activities.map(item => item.body), ['for Bob']);
+  assert.deepEqual((await cara.perceive()).activities.map(item => item.body), ['for Cara']);
   const says = (await square.history({ limit: null })).activities.filter(item => item.kind === 'say');
   assert.deepEqual(says.map(item => item.body).sort(), ['for Bob', 'for Cara']);
 });

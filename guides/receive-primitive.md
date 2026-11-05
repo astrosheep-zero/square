@@ -79,14 +79,14 @@ primitive entrypoints without constructing Square.
 
 ## Square composition
 
-Square uses these functions for production landing, catch and `markSeen` (including explicit
+Square uses these functions for production landing, perceive and `markSeen` (including explicit
 `Participant.ack`) against its existing activity, audience and receipt tables. `Participant.pending`
 uses the same addressed/unconsumed relation without writing receipts; its shared exact-ID, sender,
 metadata, search and cursor filters are applied by storage before the page limit. Numeric activity indexes stay
 internal keys; the primitive does not know Square IDs. Square retains validation,
 limits, filtering, perception, ownership, leases, hints and error mapping. The
-empty-catch read probe does not hydrate or acquire a writer; a nonempty probe is
-reselected inside the writer. Ordinary catch sees historical receipt holes,
+empty-perceive read probe does not hydrate or acquire a writer; a nonempty probe is
+reselected inside the writer. Ordinary perceive sees historical receipt holes,
 including before rejoin; proactive pending still starts after the latest join.
 The artifact schema/format and receipt identity are unchanged. See the
 [Square API](square-api.md) for product operations.

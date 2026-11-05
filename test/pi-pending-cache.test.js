@@ -78,7 +78,7 @@ test('Pi carries full producer bodies in mixed rich cards without consuming unre
   const message = f.sent[0];
   assert.equal(message.content, renderDeliveryReminder([cards[0].text, plain], { tagged: true }));
   assert.deepEqual(message.details.items, [cards[0].details, { text: plain }]);
-  assert.deepEqual(await recipient.pending(), before, 'display does not catch or ACK');
+  assert.deepEqual(await recipient.pending(), before, 'display does not perceive or ACK');
   await f.handlers.get('message_end')({ message: { ...message, role: 'custom' } });
   await until(async () => (await f.ledger.receipts(f.owner)).length === 2, 'Pi did not confirm both cards');
   assert.deepEqual(await recipient.pending(), before, 'a shortened model card does not consume its full activity');

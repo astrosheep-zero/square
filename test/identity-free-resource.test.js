@@ -37,7 +37,7 @@ test('one identity-free memory resource carries explicit current seats for multi
   assert.deepEqual(status.participants.map(person => [person.name, person.deliveryAvailable]).sort(), [['Alice', false], ['Bob', true]]);
   assert.equal((await square.status({ viewer: 'Alice' })).listening.length, 0);
   await square.join('Alice', { owner: aliceBody, wakeAddress: wakeAddress('alice') });
-  assert.equal((await alice.participant.catch({ observe: true })).observation.deliveryAvailable, true,
+  assert.equal((await alice.participant.perceive({ observe: true })).observation.deliveryAvailable, true,
     'existing handles observe the current seat wake readiness, not their acquisition snapshot');
 
   const stale = alice.participant;

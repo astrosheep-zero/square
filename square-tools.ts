@@ -1,14 +1,14 @@
 import crypto from 'node:crypto';
 import { z } from 'zod/v4';
 import { isSquareError, SquareError } from './model.js';
-import { requireOwner, requireJoinName, selectOwnSeat, CATCH_DEFAULT_LIMIT, type Square } from './square-api.js';
+import { requireOwner, requireJoinName, selectOwnSeat, PERCEIVE_DEFAULT_LIMIT, DEFAULT_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_DEPTH, MAX_LIST_LIMIT, type Square } from './square-api.js';
 import type {
-  Owner, WakeAddress, ActivityId, CatchOptions, CatchResult, ExpressResult, HistoryQuery, HistoryResult,
-  LifecycleResult, ListenerChangeResult, OperationControl, OperationFailureDetail, StatusResult,
+  Owner, WakeAddress, ActivityId, PerceiveOptions, PerceiveResult, ExpressResult, HistoryQuery, HistoryResult,
+  LifecycleResult, ListenerChangeResult, OperationControl, OperationFailureDetail, StatusResult, DiscoveryOptions, DiscoveryResult,
 } from './square-facade.js';
 import {
-  renderCatchOutcome, renderExpression, renderFailureLines, renderHistoryResult, renderJoinResult,
-  renderLifecycleResult, renderListenerChange, renderStatusResult,
+  renderPerceiveOutcome, renderExpression, renderFailureLines, renderHistoryResult, renderJoinResult,
+  renderLifecycleResult, renderListenerChange, renderStatusResult, renderSquareList,
   type FailureReport, type JoinPresentation, type ListenerVerb,
 } from './operation-presentation.js';
 
@@ -52,7 +52,8 @@ export class SquareExpressDrafts {
     const effect = (failure.operation as { expressEffect?: string } | undefined)?.expressEffect;
     // After an attempt, only an admission or argument refusal proves that retrying cannot duplicate an activity.
     const unsent = !expressAttempted || effect === 'unsent' || (effect === undefined && failure.code === 'invalid_args');
-    if (!unsent || effect === 'landed' || effect === 'unknown' || typeof args.body !== 'string' || args.draft !== undefined) return undefined;
+    if (!unsent || effect === 'landed' || effect === 'unknown' || typeof args.body !== 'string' || args.draft !== undefined
+      || typeof args.location !== 'string' || !args.location.trim()) return undefined;
     this.purgeExpired();
     if (token !== undefined && this.drafts.has(token)) return token;
     const created = `dr_${crypto.randomBytes(16).toString('base64url')}`;
@@ -64,13 +65,13 @@ export class SquareExpressDrafts {
 interface ToolBinding {
   identity: ToolIdentity;
   open(location: string | undefined, control: OperationControl): Promise<Square>;
+  discover(options: DiscoveryOptions, control: OperationControl): Promise<{ result: DiscoveryResult; now: number }>;
 }
 
 export function createSquareToolRunner() {
   const drafts = new SquareExpressDrafts();
   return async (tool: ToolDefinition, args: JsonObject, control: OperationControl,
     bind: () => Promise<ToolBinding> | ToolBinding,
-    defaultLocation?: string,
   ): Promise<{ text: string; isError?: true }> => {
     let toolArgs = args;
     let owner: Owner | undefined;
@@ -80,6 +81,7 @@ export function createSquareToolRunner() {
     try {
       const binding = await bind();
       owner = binding.identity.owner;
+      if ('runDiscovery' in tool) return { text: await tool.runDiscovery(toolArgs, control, binding) };
       if (tool.name === 'express') {
         const resolved = drafts.resolve(toolArgs, owner);
         toolArgs = resolved.args;
@@ -97,7 +99,7 @@ export function createSquareToolRunner() {
       const failure = squareToolFailure(error, control.signal);
       const draft = tool.name === 'express' ? drafts.retain(toolArgs, owner, token, failure, attempted) : undefined;
       return { isError: true, text: squareToolFailureText(failure, {
-        location: square?.location ?? (toolArgs.location as string | undefined) ?? defaultLocation,
+        location: square?.location ?? (toolArgs.location as string | undefined),
         participant: typeof toolArgs.as === 'string' ? toolArgs.as : undefined,
         draft,
       }) };
@@ -107,7 +109,7 @@ export function createSquareToolRunner() {
 
 type Outcome = Promise<object>;
 type ToolRender = (result: JsonObject, args: JsonObject) => string | undefined;
-interface ToolDefinition {
+interface SingleSquareToolDefinition {
   name: string;
   description: string;
   inputSchema: z.ZodObject<z.ZodRawShape>;
@@ -115,7 +117,16 @@ interface ToolDefinition {
   run(square: Square, args: JsonObject, control: OperationControl, identity: ToolIdentity): Promise<string>;
 }
 
-const location = z.string().optional().describe('Which square: a .square file path. Relative paths start from the working directory. Leave it out for the configured square.');
+interface DiscoveryToolDefinition {
+  name: 'list';
+  description: string;
+  inputSchema: z.ZodObject<z.ZodRawShape>;
+  runDiscovery(args: JsonObject, control: OperationControl, binding: ToolBinding): Promise<string>;
+}
+type ToolDefinition = SingleSquareToolDefinition | DiscoveryToolDefinition;
+
+const location = z.string().describe('Which square: a .square file path. Relative paths start from the working directory.');
+const expressLocation = z.string().optional().describe('Which square: a .square file path. Relative paths start from the working directory. Required unless retrying with a draft token.');
 const participant = z.string().optional().describe('Your name in the square. Leave it out if you hold exactly one name here.');
 const activityId = z.string().regex(/^act\/(0|[1-9][0-9]*)$/) as z.ZodType<ActivityId>;
 const stringArray = z.array(z.string());
@@ -128,8 +139,8 @@ function rendering<T>(render: (result: T, args: JsonObject) => string | undefine
 function tool<S extends z.ZodRawShape>(name: string, description: string, shape: S,
   run: (square: Square, args: z.output<z.ZodObject<S>>, control: OperationControl, identity: ToolIdentity) => Outcome,
   render: ToolRender,
-): ToolDefinition {
-  const inputSchema = z.object({ ...shape, location }).strict();
+): SingleSquareToolDefinition {
+  const inputSchema = z.object({ ...shape, location: name === 'express' ? expressLocation : location }).strict();
   return { name, description, inputSchema,
     run: async (square, args, control, identity) => {
       const { location: _location, ...operationArgs } = inputSchema.parse(args) as JsonObject;
@@ -145,7 +156,7 @@ export function squareToolsEnabled(env: NodeJS.ProcessEnv = process.env): boolea
   throw new SquareError('invalid_args', 'Invalid SQUARE_TOOLS: expected 0, 1, true, false, or none.');
 }
 
-export const SQUARE_TOOL_INSTRUCTIONS = 'Join once. Then express to speak, and catch to take in what reached you. History looks back without taking anything in.';
+export const SQUARE_TOOL_INSTRUCTIONS = 'List nearby squares and your joined names with list. Pass location for a single square. Join once. Then express to speak, and perceive to take in what reached you. History looks back without taking anything in.';
 
 type HistoryToolQuery = Omit<HistoryQuery, 'search' | 'cursor'> & {
   readonly grep?: string; readonly fixed?: string;
@@ -162,8 +173,23 @@ function historyToolQuery({ grep, fixed, before, after, ...query }: HistoryToolQ
 
 const target = z.string().describe('The participant to turn toward or away from.');
 
+const listSchema = z.object({
+  depth: z.number().int().min(0).max(MAX_LIST_DEPTH).optional().describe('How many directory levels to explore (default 4).'),
+  limit: z.number().int().min(1).max(MAX_LIST_LIMIT).optional().describe('How many squares per page (default 20).'),
+  after: z.string().min(1).optional().describe('Continue after this relative square path.'),
+}).strict();
+
 export const SQUARE_TOOLS: readonly ToolDefinition[] = [
-  tool('join', 'Step into the square under your name. Do this once before you speak or catch. You arrive seeing what was said most recently.', {
+  {
+    name: 'list', description: 'Find nearby squares, including your joined names and what is waiting for them. Start here to choose a location.',
+    inputSchema: listSchema,
+    async runDiscovery(args, control, binding) {
+      const options = listSchema.parse(args);
+      const { result, now } = await binding.discover({ ...options, owner: binding.identity.owner }, control);
+      return renderSquareList(result, { now, depth: options.depth ?? DEFAULT_LIST_DEPTH, limit: options.limit ?? DEFAULT_LIST_LIMIT });
+    },
+  },
+  tool('join', 'Step into the square under your name. Do this once before you speak or perceive. You arrive seeing what was said most recently.', {
     as: z.string().optional().describe('Your name in the square. Give it explicitly when joining.'), takeover: z.boolean().optional().describe('Claim this name even though another session holds it now. That session loses it.'),
   }, (square, { as, takeover }, control, identity) => square.join(requireJoinName(as), { ...identity, owner: requireOwner(identity.owner), takeover, observe: true }, control),
     rendering((result: JoinPresentation) => renderJoinResult(result))),
@@ -175,7 +201,7 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     reach: z.enum(['bell']).optional().describe('"bell" calls everyone in the square. Cannot be used with mentions.'),
     reply: activityId.optional().describe('The activity you are answering, like act/12. Its author hears you if still here.'),
     noMention: z.boolean().optional().describe('Leave @names in the body as plain text. Mentions and reply still reach people.'),
-    force: z.boolean().optional().describe('Speak now, even if something reached you that you have not caught yet.'),
+    force: z.boolean().optional().describe('Speak now, even if something reached you that you have not perceived yet.'),
     noWait: z.boolean().optional().describe('If you are speaking too fast, return at once instead of waiting.'),
   }, async (square, { body, draft, as, ...options }, control, identity) => {
     if (draft !== undefined) throw new SquareError('invalid_args', 'Unknown or expired express draft.');
@@ -183,21 +209,21 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     return (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, observe: true }, control);
   },
     rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result))),
-  tool('catch', 'Take in what reached you since you last looked: mentions, replies, bells, and words from those you listen to. What you catch no longer waits for you; history lets you look back.', {
+  tool('perceive', 'Take in what reached you since you last looked: mentions, replies, bells, and words from those you listen to. What you perceive no longer waits for you; history lets you look back.', {
     as: participant,
-    id: activityId.optional().describe('Take in this activity in full, like act/12, even if you caught it before. Do not combine with idle, from, mention or limit.'),
+    id: activityId.optional().describe('Take in this activity in full, like act/12, even if you perceived it before. Do not combine with idle, from, mention or limit.'),
     idle: z.number().finite().min(0).optional().describe('When nothing is waiting, wait until something arrives or until it has been quiet this many milliseconds. Leave it out to return at once.'),
     from: stringArray.optional().describe('Only what these participants said.'),
     mention: z.boolean().optional().describe('Only what was addressed to you, and bells.'),
     limit: z.number().int().min(1).optional().describe('At most this many at once (default 10, up to 100). The rest keeps waiting.'),
-  }, async (square, { as, ...options }, control, identity) => (await selectOwnSeat(square, identity.owner, as)).catch({ ...options, observe: true }, control),
-    rendering((result: CatchResult, args) => {
+  }, async (square, { as, ...options }, control, identity) => (await selectOwnSeat(square, identity.owner, as)).perceive({ ...options, observe: true }, control),
+    rendering((result: PerceiveResult, args) => {
       // The CLI always spells the default cap in its continuation, so the tool does too.
-      const options = args as CatchOptions;
-      const renderOptions = options.id === undefined ? { ...options, limit: options.limit ?? CATCH_DEFAULT_LIMIT } : options;
-      return renderCatchOutcome(result.observation?.location ?? '', result, renderOptions).stdout;
+      const options = args as PerceiveOptions;
+      const renderOptions = options.id === undefined ? { ...options, limit: options.limit ?? PERCEIVE_DEFAULT_LIMIT } : options;
+      return renderPerceiveOutcome(result.observation?.location ?? '', result, renderOptions).stdout;
     })),
-  tool('history', 'Look back at what was said. Reading here takes nothing in: whatever waits for catch keeps waiting. Page with before or after.', {
+  tool('history', 'Look back at what was said. Reading here takes nothing in: whatever waits for perceive keeps waiting. Page with before or after.', {
     limit: z.number().int().min(1).optional().describe('How many per page (default 10, up to 100).'),
     order: z.enum(['asc', 'desc']).optional().describe('"asc" for oldest first (default), "desc" for newest first.'),
     before: activityId.optional().describe('The page just before this activity, like act/12.'),
@@ -245,7 +271,7 @@ export function squareToolFailureText(failure: JsonObject, context: { location?:
   if (context.draft !== undefined) {
     lines.push(`· draft kept in memory: ${context.draft}`);
     lines.push(report.code === 'behind'
-      ? '· catch the pending activity, then retry express with only:'
+      ? '· perceive the pending activity, then retry express with only:'
       : '· correct the problem above, then retry express with only:', `{ "draft": "${context.draft}" }`);
   }
   return lines.join('\n');

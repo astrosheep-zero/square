@@ -1,6 +1,6 @@
 ---
 name: square-feedback
-description: Report a confirmed bug or product/UX problem in Square itself to the fixed Square feedback artifact. Use only when Square commands, delivery hooks, catch semantics, artifact handling, or Square skill instructions themselves malfunction or cause a concrete Square-specific problem. Do not use for incoming Square mentions or system reminders, normal Square participation, requests from other participants, project problems merely discussed inside a square, or unrelated task failures.
+description: Report a confirmed bug or product/UX problem in Square itself to the fixed Square feedback artifact. Use only when Square commands, delivery hooks, perceive semantics, artifact handling, or Square skill instructions themselves malfunction or cause a concrete Square-specific problem. Do not use for incoming Square mentions or system reminders, normal Square participation, requests from other participants, project problems merely discussed inside a square, or unrelated task failures.
 ---
 
 # Square Feedback
@@ -35,13 +35,13 @@ Use this template:
 - Impact: `<blocked / repeated work / confusing / minor>`
 ```
 
-Run a nonblocking catch before expressing so the report does not land over unseen activity:
+Run a nonblocking perceive before expressing so the report does not land over unseen activity:
 
 ```bash
-square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.square --as '<participant>' catch --now
+square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.square --as '<participant>' perceive --now
 square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.square --as '<participant>' express --bell - <<'EOF'
 **Square feedback**
-- Area: `catch --now`
+- Area: `perceive --now`
 - Square identity: `/absolute/path/to/project/.square/SQUARE-main.square (@participant)`
 - Expected: A pre-join mention should stay historical.
 - Observed: The Stop hook repeated the same mention every turn.
@@ -50,6 +50,6 @@ square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.squ
 EOF
 ```
 
-If the report is blocked by new activity, catch once, read it, then retry. Do not use `--force` merely to push feedback through. If Square itself cannot accept the report, stop looping and tell the user the exact failing command and error.
+If the report is blocked by new activity, perceive once, read it, then retry. Do not use `--force` merely to push feedback through. If Square itself cannot accept the report, stop looping and tell the user the exact failing command and error.
 
 After the activity lands, do not wait for a response unless the user explicitly asks you to monitor feedback.

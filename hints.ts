@@ -5,9 +5,9 @@ const EXPRESS_HINTS = [
   "say the half-shaped thing — that's what the square is for",
 ];
 
-const CATCH_HINTS = [
+const PERCEIVE_HINTS = [
   'want to follow one voice? listen to them; unlisten once you have heard enough',
-  "nothing to add? quiet is fine — catching is listening too",
+  "nothing to add? quiet is fine — perceiving is listening too",
   "no need to reply just to say you’ve read a message — Square already tracks that",
   'reply to an activity to reach the person who spoke',
 ];
@@ -18,9 +18,9 @@ export function expressHint(ownActivityCount: number): string | undefined {
   return EXPRESS_HINTS[Math.floor(ownActivityCount / 5) % EXPRESS_HINTS.length];
 }
 
-/** First caught activity, then each time the caught total crosses another ten. */
-export function catchHint(caughtBefore: number, caughtAfter: number): string | undefined {
-  if (caughtAfter <= caughtBefore) return undefined;
-  const crossed = caughtBefore === 0 || Math.floor(caughtAfter / 10) > Math.floor(caughtBefore / 10);
-  return crossed ? CATCH_HINTS[Math.floor(caughtAfter / 10) % CATCH_HINTS.length] : undefined;
+/** First perceived activity, then each time the perceived total crosses another ten. */
+export function perceiveHint(perceivedBefore: number, perceivedAfter: number): string | undefined {
+  if (perceivedAfter <= perceivedBefore) return undefined;
+  const crossed = perceivedBefore === 0 || Math.floor(perceivedAfter / 10) > Math.floor(perceivedBefore / 10);
+  return crossed ? PERCEIVE_HINTS[Math.floor(perceivedAfter / 10) % PERCEIVE_HINTS.length] : undefined;
 }

@@ -1,15 +1,15 @@
 import { connect, DeliveryError } from './packages/agent-delivery/src/index.js';
-import { codexIdleAtStop } from './packages/agent-delivery/src/codex.js';
 import { codexQueueEndpoint } from './packages/agent-delivery/src/codex-endpoint.js';
 import { renderDeliveryReminder } from './delivery-frame.js';
 import type { DeliveryCard, DeliveryTransport, DeliveryTransportContext, TransportOutcome } from './delivery-ledger.js';
 
 export interface CodexQueueTransportOptions {
-  readonly turnId: string;
   readonly address: Readonly<Record<string, string>>;
   readonly env?: NodeJS.ProcessEnv;
 }
-/** Instantiated only by the receiver, for one captured Stop epoch. */
+/** Instantiated only by the receiver. The native queue store is shared across
+ * processes: the hosting Codex app-server polls it and starts queued input only
+ * when the thread is idle, so admission needs no remote idle proof. */
 export class CodexQueueTransport implements DeliveryTransport {
   readonly kind = 'codex-queue';
   constructor(private readonly opts: CodexQueueTransportOptions) {}
@@ -18,17 +18,14 @@ export class CodexQueueTransport implements DeliveryTransport {
     if (!threadId || !address.codexHome || Object.keys(address).length !== Object.keys(this.opts.address).length ||
       !Object.entries(this.opts.address).every(([key, value]) => address[key] === value)) return 'not-capable';
     const env = this.opts.env ?? process.env;
-    const turnId = this.opts.turnId;
     try {
-      // Receiver delivery addresses the already-hosting endpoint explicitly;
-      // disappearing native custody must not trigger CLI service startup.
+      // Receiver delivery addresses the shared queue store explicitly; disappearing
+      // native custody must not trigger CLI service startup.
       const endpoint = address.endpoint ?? codexQueueEndpoint({ CODEX_HOME: address.codexHome });
       const agent = await connect({ harness: 'codex', transport: 'cli', sessionId: threadId,
-        boundaries: { queueEligible: async id => {
-          // Repeat the native sample after claim, immediately before the final
-          // ledger fences. These reads are not an atomic native enqueue.
-          if (!await codexIdleAtStop({ harness: 'codex', sessionId: id, codexHome: address.codexHome,
-            endpoint, timeoutMs: Math.max(1, context.deadline - Date.now()), signal: context.signal }, turnId)) return false;
+        boundaries: { queueEligible: async () => {
+          // Only ledger fences remain: currentness, suppression, cancellation,
+          // attachment generation, signal and deadline immediately before launch.
           return await context.beforeSend()
             && !context.signal.aborted && Date.now() < context.deadline;
         } },

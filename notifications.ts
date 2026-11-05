@@ -3,14 +3,20 @@ import type { Owner } from './owner.js';
 import { createDefaultDeliveryTransports } from './wake-transports.js';
 export { createDefaultDeliveryTransports } from './wake-transports.js';
 
+function deliveryWaitMs(env: NodeJS.ProcessEnv = process.env): number {
+  const configured = Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000);
+  return Number.isSafeInteger(configured) && configured > 0 ? configured : 5000;
+}
+
 /** Best-effort dispatch for currently eligible cards, including cards restored by release. */
 export async function dispatchEligibleCards(ledger: DeliveryLedger, owner: Owner, options: {
   readonly env?: NodeJS.ProcessEnv; readonly signal?: AbortSignal; readonly track?: (result: HandoffResult) => void;
   readonly transports?: readonly DeliveryTransport[];
 } = {}): Promise<void> {
-  const session = await ledger.session(owner);
+  options = { ...options, signal: options.signal ?? AbortSignal.timeout(deliveryWaitMs(options.env)) };
+  const session = await ledger.session(owner, options.signal);
   if (!session || session.state !== 'attached' || options.signal?.aborted) return;
-  const pending = await ledger.pending(owner, { generation: session.generation });
+  const pending = await ledger.pending(owner, { generation: session.generation }, options.signal);
   for (const card of pending) await dispatchPostedCard(ledger, owner, card.key, options.track ?? (() => undefined), options.env, options.signal, options.transports);
 }
 
@@ -19,7 +25,8 @@ export async function postAndDispatch(ledger: DeliveryLedger, input: { readonly 
   readonly env?: NodeJS.ProcessEnv; readonly signal?: AbortSignal; readonly track?: (result: HandoffResult) => void;
   readonly transports?: readonly DeliveryTransport[];
 } = {}): Promise<PostResult> {
-  const result = await ledger.post(input);
+  options = { ...options, signal: options.signal ?? AbortSignal.timeout(deliveryWaitMs(options.env)) };
+  const result = await ledger.post(input, options.signal);
   if (result.status === 'posted' || result.status === 'duplicate') {
     try { await dispatchEligibleCards(ledger, input.owner, options); } catch { /* Posting is already committed. */ }
   }
@@ -29,11 +36,11 @@ export async function postAndDispatch(ledger: DeliveryLedger, input: { readonly 
 /** Best-effort dispatch after a card has been posted; never inspect producer storage. */
 export async function dispatchPostedCard(ledger: DeliveryLedger, owner: Owner, key: string, track: (result: HandoffResult) => void, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal, suppliedTransports?: readonly DeliveryTransport[]): Promise<void> {
   if (signal?.aborted) return;
-  const session = await ledger.session(owner);
+  const timeoutMs = deliveryWaitMs(env);
+  signal ??= AbortSignal.timeout(timeoutMs);
+  const session = await ledger.session(owner, signal);
   if (!session || session.state !== 'attached') return;
   const transports: readonly DeliveryTransport[] = suppliedTransports ?? await createDefaultDeliveryTransports(env);
-  const configured = Number(env.SQUARE_NOTIFY_DELIVERY_WAIT_MS ?? 5000);
-  const timeoutMs = Number.isSafeInteger(configured) && configured > 0 ? configured : 5000;
   for (const route of session.routes) {
     // Claude and Codex custody belongs to their native receivers, including for
     // callers that supply transports explicitly to the producer API.

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createArtifactPort } from '../dist/artifact.js';
-import { observeCatchSelection, selectCatchPage } from '../dist/catch-decisions.js';
+import { observePerceiveSelection, selectPerceivePage } from '../dist/perceive-decisions.js';
 import { inSquareCount, terminalStatusFor, watchTerminalStatus } from '../dist/runtime.js';
 
 function fixture(t, hardCap = null, acts = []) {
@@ -50,7 +50,7 @@ test('participant counts are immutable, transaction-scoped facts with read-your-
   assert.deepEqual((await cell.read((facts) => facts.participantCounts())).value, counts.at(-1));
 });
 
-test('catch and terminal summaries use aggregate facts and preserve all-known-peer quorum and cap precedence', async (t) => {
+test('perceive and terminal summaries use aggregate facts and preserve all-known-peer quorum and cap precedence', async (t) => {
   const cell = fixture(t, 1, [{ kind: 'say', actor: 'Ghost', body: 'known', at: 0, index: 0 }]);
   const aliceSeat = await establishSeat(cell, 'Alice', 0);
   const bobSeat = await establishSeat(cell, 'Bob', 1);
@@ -62,13 +62,13 @@ test('catch and terminal summaries use aggregate facts and preserve all-known-pe
     participantCounts() { countReads++; return facts.participantCounts(); },
   });
   const summary = () => cell.read(facts => {
-    const wrapped = wrap(facts), page = selectCatchPage(wrapped, 'bOB', {});
-    return observeCatchSelection(wrapped, page.participant, [], page.filter, 100);
+    const wrapped = wrap(facts), page = selectPerceivePage(wrapped, 'bOB', {});
+    return observePerceiveSelection(wrapped, page.participant, [], page.filter, 100);
   }).then(result => result.value);
   const pendingPeer = await summary();
   assert.equal(pendingPeer.standingCount, 1);
   assert.equal(pendingPeer.terminalStatus, undefined, 'a known nonstanding peer blocks quorum');
-  assert.equal(countReads, 1, 'catch shares its aggregate read');
+  assert.equal(countReads, 1, 'perceive shares its aggregate read');
   assert.equal((await cell.read((facts) => inSquareCount(wrap(facts)))).value, 1);
 
   const ghostSeat = await establishSeat(cell, 'Ghost', 3);

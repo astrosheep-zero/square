@@ -8,7 +8,7 @@ import { activityQueryFilter } from './activity-query.js';
 import type {
   Activity, ArchiveRecord, PerceivedActivity, HistoryQuery, HistoryContinuation,
   ParticipantSummary, PresenceClassification, ParticipantsResult,
-  EntryPresentation, StatusResult, SquareObservation, CatchPresence,
+  EntryPresentation, StatusResult, SquareObservation, PerceivePresence, Owner,
 } from './square-facade.js';
 
 const PAGE_SIZE = 100;
@@ -130,12 +130,15 @@ export function queryParticipants(facts: SquareRead, context: ParticipantQueryCo
   return { participants, ...(!observe ? {} : { observation: { ...context, ...classifyPresence(participants, context.now),
     standingCount: inSquareCount(facts) } }) };
 }
-export function listPresentation(facts: SquareRead) {
+export function listPresentation(facts: SquareRead, owner?: Owner) {
   const participants = facts.roster().filter((p) => p.joined).map((p) => {
     const receiptAt = facts.receiptFacts(p.name, p.lastJoinIndex ?? -1).latestAt;
     return { name: p.name, lastActiveAt: receiptAt === undefined ? p.lastActiveAt : Math.max(p.lastActiveAt ?? -Infinity, receiptAt) };
   }).sort(compareParticipantActivity).map((p) => p.name);
-  return { context: facts.header().preamble, participants, activities: facts.activityCount({ kinds: ['say'] }) };
+  return { context: facts.header().preamble, participants, activities: facts.activityCount({ kinds: ['say'] }),
+    ...(owner === undefined ? {} : { joined: facts.seatsForOwner(owner)
+      .filter(seat => facts.participant(seat.participant)?.joined)
+      .map(seat => ({ name: seat.participant, pending: facts.directedCount(seat.participant, { unseenOnly: true, currentGeneration: true }) })) }) };
 }
 export function queryStatus(facts: SquareRead, context: ParticipantQueryContext, viewer = '', observe = false): StatusResult {
   const participants = coreParticipants(facts, context.now);
@@ -175,7 +178,7 @@ export function queryStatus(facts: SquareRead, context: ParticipantQueryContext,
     },
   };
 }
-export function catchPresence(facts: SquareRead, now: number): CatchPresence {
+export function perceivePresence(facts: SquareRead, now: number): PerceivePresence {
   const participants = coreParticipants(facts, now).filter((participant) => participant.presence === 'done' || participant.presence === 'away' || participant.presence === 'watching'
     || (participant.lastActiveAt !== undefined && now - participant.lastActiveAt <= PRESENCE_WINDOW_MS));
   return { participants, now };

@@ -87,7 +87,7 @@ function resolvedTarget(file, module) {
 
 function storageLeaks(sources) {
   const artifactBindings = new Map([
-    ['sqlite-square.ts', ['createArtifactPort', 'createSquare', 'prepareSquareBuild', 'diagnoseSquareFile', 'createSquareResourceOwner']],
+    ['sqlite-square.ts', ['createArtifactPort', 'createSquare', 'prepareSquareBuild', 'diagnoseSquareFile']],
     ['list.ts', ['createArtifactPort']],
     ['inbox.ts', ['createArtifactPort']],
     ['stream.ts', ['createArtifactPort', 'observeSquareRevision']],
@@ -165,17 +165,17 @@ test('artifact callbacks are synchronous typed capabilities, not replacement sna
 test('pure landing depends only on domain facts, syntax, and standalone attention', () => {
   const edges = moduleEdges('square-domain.ts', productionSources.get('square-domain.ts'));
   for (const edge of edges) {
-    assert.ok(['./model.js', './ports.js', './attention.js', './square-post.js', './message.js', './runtime.js', './catch-selection.js'].includes(edge.module), edge.module);
+    assert.ok(['./model.js', './ports.js', './attention.js', './square-post.js', './message.js', './runtime.js', './perceive-selection.js'].includes(edge.module), edge.module);
     if (edge.module === './runtime.js') assert.deepEqual(edge.names, ['freshWatchLease']);
-    if (edge.module === './catch-selection.js') assert.deepEqual(edge.names, ['leaseOwnsNotification']);
+    if (edge.module === './perceive-selection.js') assert.deepEqual(edge.names, ['leaseOwnsNotification']);
     if (edge.module === './ports.js' || edge.module === './square-post.js') assert.deepEqual(edge.names, []);
   }
   assert.deepEqual(moduleEdges('attention.ts', productionSources.get('attention.ts')), []);
 });
 
-test('receive is a dependency-free leaf composed by catch', () => {
+test('receive is a dependency-free leaf composed by perceive', () => {
   assert.deepEqual(moduleEdges('receive.ts', productionSources.get('receive.ts')), []);
-  for (const [file, binding] of [['catch-decisions.ts', 'consumeReceived'], ['catch-decisions.ts', 'selectReceivedHeads']]) {
+  for (const [file, binding] of [['perceive-decisions.ts', 'consumeReceived'], ['perceive-decisions.ts', 'selectReceivedHeads']]) {
     assert.ok(moduleEdges(file, productionSources.get(file)).some(edge => edge.module === './receive.js' && edge.names.includes(binding)), `${file} uses ${binding}`);
   }
 });
@@ -222,7 +222,7 @@ test('CLI observation consumes concern projections, not state or domain law', ()
 });
 
 test('decisions and perception use domain facts, outside host and storage operations', () => {
-  for (const file of ['decisions.ts', 'catch-decisions.ts', 'perception-projection.ts']) {
+  for (const file of ['decisions.ts', 'perceive-decisions.ts', 'perception-projection.ts']) {
     const source = productionSources.get(file);
     assert.ok(source, `${file} must be part of production sources`);
     assert.doesNotMatch(source, /SquareArtifactPort|HostLedgerPort|\.artifact\.|\.transact\s*\(/, file);
@@ -348,7 +348,7 @@ test('CLI/MCP and every reachable presentation helper use Square/Participant, no
   assert.deepEqual(leaks, [], `transport boundary escaped transitively:\n${leaks.join('\n')}`);
 });
 
-test('transport boundary catches hidden execution behind helpers and limits native and syntax exceptions', () => {
+test('transport boundary detects hidden execution behind helpers and limits native and syntax exceptions', () => {
   assert.deepEqual(transportLeaks(new Map([
     ['presentation.ts', "import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';"],
   ]), ['presentation.ts']), []);

@@ -28,7 +28,7 @@ export interface SquareErrorFacts {
   activityUnsent?: true;
   /** Refusal reason, including absent participants, conflicting reach, and inaccessible activities. */
   reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'not_addressed' | 'invalid_reply' | 'invalid_done_body' | 'needs_seat';
-  /** The activity id a `catch --id` refusal named. */
+  /** The activity id a `perceive --id` refusal named. */
   activityId?: string;
   /** Requested recipient spellings, without parsing presentation copy. */
   targets?: readonly string[];
@@ -38,20 +38,20 @@ export interface SquareErrorFacts {
   retryAfterMs?: number;
 }
 
-export interface CatchWaitStart {
+export interface PerceiveWaitStart {
   readonly idleMs: number;
   readonly replacementRequested: boolean;
   readonly replaced: boolean;
 }
 export type OperationProgress =
   | { readonly kind: 'waiting'; readonly reason: 'throttled'; readonly delayMs?: number }
-  | ({ readonly kind: 'catch-started'; readonly participant: string } & CatchWaitStart);
+  | ({ readonly kind: 'perceive-started'; readonly participant: string } & PerceiveWaitStart);
 export interface OperationControl {
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: OperationProgress) => void;
 }
 export interface OperationFailureDetail {
-  readonly operation: 'express' | 'join' | 'catch' | 'history' | 'other';
+  readonly operation: 'express' | 'join' | 'perceive' | 'history' | 'other';
   readonly subject?: 'caller' | 'filter' | 'recipient';
   readonly participant?: string;
   readonly expressEffect?: 'unsent' | 'landed' | 'unknown';

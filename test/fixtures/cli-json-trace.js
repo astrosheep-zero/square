@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { Square } from '../../dist/square-api.js';
 
 const optionIndex = {
-  join: 1, express: 1, catch: 0, history: 0, listen: 1, ignore: 1, unlisten: 1,
+  join: 1, express: 1, perceive: 0, history: 0, listen: 1, ignore: 1, unlisten: 1,
   listening: 0, done: 1, status: 0, participants: 0,
 };
 function traced(resource) {

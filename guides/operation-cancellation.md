@@ -6,15 +6,15 @@ Library operations accept a final non-serializable control value:
 { signal?: AbortSignal }
 ```
 
-The signal is checked before lifecycle work and before artifact mutation, and it is propagated through artifact reads, transactions, change waits, and ownership lock acquisition. An idle `catch` rejects promptly when cancelled; it does not wake later and consume activity. Cancellation before an artifact transition prevents mutation.
+The signal is checked before lifecycle work and before artifact mutation, and it is propagated through artifact reads, transactions, change waits, and ownership lock acquisition. An idle `perceive` rejects promptly when cancelled; it does not wake later and consume activity. Cancellation before an artifact transition prevents mutation.
 
 Commit boundaries are one-way. Once an activity or observation commits, later cancellation cannot
 roll it back or turn the result into a retry. A caller may discard the response after the commit,
-but the committed activity remains recoverable through `history` or a later `catch`; catch does not
+but the committed activity remains recoverable through `history` or a later `perceive`; perceive does not
 require a second acknowledgement. The separate `pending` query never consumes; its optional
 follow-up `ack(ids)` commits exact receipts with the same cancellation boundary.
 
-Cancelling an active catch releases its catch lease, permitting still-unconsumed activity to proceed
+Cancelling an active perceive releases its perceive lease, permitting still-unconsumed activity to proceed
 at the next ordinary posting opportunity. It cannot recall export ownership already committed.
 
 Ownership and delivery have the same limitation: cancellation can stop work that has not entered the boundary, but it cannot withdraw an ownership effect or a transport send that already happened. The returned committed result and existing degradation classification remain authoritative.
@@ -29,6 +29,14 @@ success receipt. Both settle through the normal authority gate, with a five-seco
 explicit connection close still cancels them. Storage failure is reported, not converted into success.
 A batch settles all successfully rendered items before closing its connections, even if one settlement
 fails. No settlement reopens a path or grants a replacement seat authority.
+
+The ledger uses the same independent five-second settlement boundary for captured presentation and
+handoff effects. Its open signal applies only to opening. Operation signals cover queue wait, safe
+busy retries for acquisition, and commit; a busy commit retains the transaction and callback result,
+never replaying business work. A cancelled queued operation cannot execute later. Host hooks share
+one entry budget across ledger and boundary-state steps, while watchers use their lifetime signal.
+Claude's boundary consumption after output uses an independent cleanup budget. See
+[delivery-primitives.md](delivery-primitives.md) for late effect retention and close behavior.
 
 The same `Square`/`Participant` methods serve SDK and adapters; see [resource API](square-api.md). Join, listener and lifecycle essential observations use commit-time facts. Join's optional entry enrichment may be unavailable without rejecting its successful receipt. CLI express passes its abort signal through the initial `Square.at`; raw draft saving precedes a separate uncancelled recovery reopen.
 

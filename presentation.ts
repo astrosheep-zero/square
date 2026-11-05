@@ -52,7 +52,7 @@ interface WatchStatusOptions extends ParticipantOutputOptions {
   status: WatchStatus;
   idleMs?: number;
   presence?: { participants: readonly ParticipantSummary[]; now: number };
-  showCatchHint?: boolean;
+  showPerceiveHint?: boolean;
   ownActivityCount?: number;
   hardCap?: number | null;
 }
@@ -142,7 +142,7 @@ export function renderPresenceLines(recent: readonly ParticipantSummary[], now: 
       ? (p.lastActiveAt === undefined ? 'stepped out of the square' : `stepped out of the square · ${formatRelativeTime(p.lastActiveAt, now)}`)
       : p.presence === 'away' ? 'is away'
       : p.presence === 'watching'
-        ? (p.lastActiveAt === undefined ? 'is nearby · catching' : `is nearby · catching · ${formatRelativeTime(p.lastActiveAt, now)}`)
+        ? (p.lastActiveAt === undefined ? 'is nearby · perceiving' : `is nearby · perceiving · ${formatRelativeTime(p.lastActiveAt, now)}`)
         : p.lastActiveAt === undefined ? 'is nearby · quiet'
           : p.activityCount > 0 ? `is nearby · ${formatRelativeTime(p.lastActiveAt, now)}` : `is nearby · quiet · ${formatRelativeTime(p.lastActiveAt, now)}`;
     return `  ${glyph === '○' ? style('dim', glyph) : glyph} ${participantIdentity(p.name)}${style('dim', ` ${text}`)}`;
@@ -333,7 +333,7 @@ function renderUnreadSummary(activitySummaries: readonly UnreadActivitySummary[]
 }
 
 export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
-  const readNowCommand = `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} catch`;
+  const readNowCommand = `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} perceive`;
   return withPathOutput(
     opts.squarePath,
     [
@@ -456,23 +456,23 @@ export function renderActivityLimit(opts: ActivityLimitOptions): string {
 
 export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string {
   return [
-    `${style('blocked', '✕')} you are already catching`,
-    `  · an active catch is already running for ${participantIdentity(opts.name)}`,
-    '  · --replace lets a new catch take over',
-    `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} catch --idle 30m --replace`,
+    `${style('blocked', '✕')} you are already perceiving`,
+    `  · an active perceive is already running for ${participantIdentity(opts.name)}`,
+    '  · --replace lets a new perceive take over',
+    `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} perceive --idle 30m --replace`,
   ].join('\n');
 }
 
 export function renderWatchForceTakeover(_opts: ParticipantOutputOptions): string {
-  return '✓ your new catch takes over';
+  return '✓ your new perceive takes over';
 }
 
 export function renderWatchReplaceMissing(_opts: ParticipantOutputOptions): string {
-  return '· no catch stood here — yours takes the spot';
+  return '· no perceive stood here — yours takes the spot';
 }
 
 export function renderWatchReplaced(_opts: ParticipantOutputOptions): string {
-  return '✕ a newer catch took over';
+  return '✕ a newer perceive took over';
 }
 
 export function renderWatchStatus(opts: WatchStatusOptions): string {
@@ -488,18 +488,18 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
     case 'idle':
     case 'drained': {
       const prefix = participantCommandPrefix(opts.squarePath, opts.name, opts.owner);
-      // Quiet graduates with the idle length; an empty catch has no idle budget to report.
+      // Quiet graduates with the idle length; an empty perceive has no idle budget to report.
       const idleMs = opts.idleMs;
       const quiet = idleMs !== undefined && idleMs >= 60 * 60 * 1000
         ? style('dim', `○ dust lies thick — ${formatDuration(idleMs)} of quiet`)
         : idleMs !== undefined && idleMs >= 60 * 1000
           ? style('dim', `○ dust settles on the flagstones — ${formatDuration(idleMs)} of quiet`)
           : style('dim', '○ only footsteps in the square — nothing new for you');
-      // The quiet report never repeats the catch just run.
-      const hints = [`${prefix} catch --idle 30m`];
+      // The quiet report never repeats the perceive just run.
+      const hints = [`${prefix} perceive --idle 30m`];
       return [
         quiet,
-        ...(opts.showCatchHint === false ? [] : hints),
+        ...(opts.showPerceiveHint === false ? [] : hints),
         ...presenceLines,
       ].join('\n');
     }

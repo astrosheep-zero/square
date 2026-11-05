@@ -1,7 +1,7 @@
 # Waiting for changes
 
 Filesystem notifications are hints, not activity delivery or receipts. Artifact revision observation
-and reconciliation let catch and stream reconsider changes even if a filesystem event is missed;
+and reconciliation let perceive and stream reconsider changes even if a filesystem event is missed;
 subscribers retain independent cancellation and deadlines. Throttling waits for its eligibility time.
 There is no discovery index and no daemon or per-message timer.
 

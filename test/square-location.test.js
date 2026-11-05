@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { Square, squareLocation } from '../dist/square-api.js';
+import { Square, squareLocation, discover } from '../dist/square-api.js';
 import { run } from './square-cli-helpers.js';
 
 test('Windows drive paths are local, not URI schemes', () => {
@@ -23,6 +23,9 @@ test('a relative local location stays local after resolving and reopening throug
   assert.equal(squareLocation({ cwd, path: absolute }), absolute);
   const created = await Square.build({ cwd, path: relative, markdown: 'A local conversation' });
   await created.close();
+  const found = await discover({ cwd });
+  assert.deepEqual(found.items.map(item => item.path), ['conversation.square']);
+  assert.equal('joined' in found.items[0], false);
   const reopened = await Square.at({ cwd, path: absolute });
   try {
     assert.equal(reopened.location, absolute);

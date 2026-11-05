@@ -13,14 +13,14 @@ interface CommandHelp {
 const COMMANDS: readonly CommandHelp[] = [
   { names: ['help'], usage: 'help [command]', summary: 'Show the command index or help for one command.' },
   { names: ['version'], usage: 'version', summary: 'Print the installed version.', hiddenFromIndex: true },
-  { names: ['mcp-server'], usage: 'mcp-server', summary: 'Start the MCP stdio server.', usesSquare: true, hiddenFromIndex: true, details: ['Set SQUARE_LOCATION or pass --location before the command.', 'Participant tools accept as on each call. Set the default with --as.', 'Session identity comes from request _meta.threadId (Codex) or _meta["ai.opencode/sessionID"] (OpenCode), falling back to the startup environment.'] },
+  { names: ['mcp-server'], usage: 'mcp-server', summary: 'Start the MCP stdio server.', hiddenFromIndex: true, details: ['Use list to find nearby squares; single-square tools require location on each call.', 'Participant tools accept as on each call; join requires an explicit name.', 'Session identity comes from request _meta.threadId (Codex) or _meta["ai.opencode/sessionID"] (OpenCode), falling back to the startup environment.'] },
   {
     names: ['build'], usage: 'build [--cap <N|unlimited>] [--template <name>] [--throttle N] [-f] < body.md', usesSquare: true, group: 'host',
     summary: 'Create a square from Markdown on stdin.',
     details: ['Options:', '  --cap <N|unlimited>  Set a per-participant activity cap (default unlimited).', '  --template <name>    Append a packaged activity guide.', '  --throttle <N>       Allow at most N public activities per minute.', '  -f, --force          Replace an existing artifact.'],
   },
   {
-    names: ['list', 'ls'], usage: '{command} [--depth N] [--limit N] [--after path]', summary: 'List nearby squares below the current directory.', group: 'host',
+    names: ['list', 'ls'], usage: '{command} [--depth N] [--limit N] [--after path]', summary: 'List nearby squares and your joined names with waiting activity counts.', group: 'host',
     details: ['Options:', '  --depth <N>    Descend through at most N directory levels (default 4; maximum 16; 0 scans only the current directory).', '  --limit <N>    Show one page (default 20, maximum 100).', '  --after <path> Resume after a relative path from a previous page.'],
   },
   {
@@ -42,7 +42,7 @@ const COMMANDS: readonly CommandHelp[] = [
       '  Bare activities are delivered only to participants listening to the sender.',
       '',
       'Options:',
-      '  -f, --force       Express without first catching unread activity or satisfying attention etiquette.',
+      '  -f, --force       Express without first perceiving unread activity or satisfying attention etiquette.',
       '  --no-wait         If throttled, save a draft and return instead of waiting.',
       '  --metadata <json> Attach a bounded JSON object (at most 16 KiB UTF-8 and 256 nesting levels); it may be the only content.',
       '                    Metadata is returned in structured activity results but is not shown in human text or searchable.',
@@ -53,14 +53,14 @@ const COMMANDS: readonly CommandHelp[] = [
   { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Stop hearing one participant\'s future activity, except bells.' },
   { names: ['listening'], usage: '--as <name> listening', usesSquare: true, group: 'participant', summary: 'Show who you are turned toward.', details: ['Listening applies to future activity. What you could hear when an activity landed does not change afterward.'] },
   {
-    names: ['catch'], usage: '--as <name> catch [--id <activity-id>] [--now | --idle <duration>] [--from <names>] [--mention] [--limit <count>] [--replace]', usesSquare: true, group: 'participant',
-    summary: 'Catch directed conversation since you last looked.',
-    details: ['Modes:', '  --id <activity-id> Catch exactly one activity addressed to you, with its full body; implies --now.', '                    Marks only this activity seen; repeats return it again. No filters, limit, idle or replace.', '                    history stays read-only; catch --id consumes the selected activity.', '  --now             Catch up immediately; bare catch already does this.', '  --idle <duration> Wait for something relevant, or for quiet to last this long.', '', 'Attention:', '  Mentions arrive when you are addressed; bells arrive for everyone; bare says require listen.', '  listen and ignore are future-only and fixed when each say lands.', '', 'Filters:', '  --from <names>    Match only comma-separated participants.', '  --mention         Match direct attention for your current participant (and bells).', '  --limit <count>   Return one page (default 10, maximum 100).', '', 'Recovery:', '  --replace         Replace another active catch for this participant.'],
+    names: ['perceive'], usage: '--as <name> perceive [--id <activity-id>] [--now | --idle <duration>] [--from <names>] [--mention] [--limit <count>] [--replace]', usesSquare: true, group: 'participant',
+    summary: 'Perceive directed conversation since you last looked.',
+    details: ['Modes:', '  --id <activity-id> Perceive exactly one activity addressed to you, with its full body; implies --now.', '                    Marks only this activity seen; repeats return it again. No filters, limit, idle or replace.', '                    history stays read-only; perceive --id consumes the selected activity.', '  --now             Take in activity immediately; bare perceive already does this.', '  --idle <duration> Wait for something relevant, or for quiet to last this long.', '', 'Attention:', '  Mentions arrive when you are addressed; bells arrive for everyone; bare says require listen.', '  listen and ignore are future-only and fixed when each say lands.', '', 'Filters:', '  --from <names>    Match only comma-separated participants.', '  --mention         Match direct attention for your current participant (and bells).', '  --limit <count>   Return one page (default 10, maximum 100).', '', 'Recovery:', '  --replace         Replace another active perceive for this participant.'],
   },
   { names: ['done'], usage: '--as <name> done', usesSquare: true, group: 'participant', summary: 'Step out of the square.', details: ['done takes no message. Use express before leaving to send one.'] },
   {
     names: ['stream'], usage: 'stream [--ndjson [--for <name>] [--last <N> | --after <id>]]', usesSquare: true, hiddenFromIndex: true,
-    summary: 'Follow activity without marking it caught.',
+    summary: 'Follow activity without marking it perceived.',
     details: ['Options:', '  --ndjson       Emit one JSON event per line.', '  --for <name>   With --ndjson, emit notifications for one participant.', '  --last <N>     Emit the last N eligible activities first (default 10, maximum 100).', '  --after <id>   Resume after a canonical activity id (act/12).'],
   },
   {
@@ -75,7 +75,7 @@ const COMMANDS: readonly CommandHelp[] = [
   { names: ['claude-watch'], usage: '{command}', summary: 'Observe pending attention from a native async Stop hook.', hiddenFromIndex: true },
   {
     names: ['history'], usage: 'history [filters] [output]', usesSquare: true, group: 'participant',
-    summary: 'Read or search the archive without changing what you have caught.',
+    summary: 'Read or search the archive without changing what you have perceived.',
     details: ['Optional --as is accepted but does not change the archive or claim a name.', '', 'Filters:', '  --from <names>                  Match activities from participants.', '  --since <time>                  Match activities after a time.', '  --grep <regex> | --fixed <s>    Search activity ids, participants, and original bodies.', '  --mention <name>                Match direct attention for a participant.', '  --at <ids>                      Center on comma-separated activity ids; may repeat.', '  -B, -A, -C <N>                 Set non-negative context around every --at coordinate.', '  --before <id>                   Read the page immediately before an activity.', '  --after <id>                    Read the page immediately after an activity.', '', 'Results:', '  --limit <N>                     Page size (default 10, maximum 100).', '  --order <asc|desc>              Set display order (default oldest first).', '', 'Output:', '  --no-truncate  --json  --format <fields>', '  One result shows its full body; multiple results use previews.', '  --no-truncate shows every original body.'],
   },
   { names: ['status'], usage: '[--as <name>] status', usesSquare: true, group: 'participant', summary: 'Show who is present and what happened most recently.' },
@@ -115,7 +115,7 @@ function isHelpFlag(value: string): boolean {
 
 export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
-    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'listening', 'catch', 'history', 'status', 'done'] },
+    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'listening', 'perceive', 'history', 'status', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list', 'participants'] },
     { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor'] },
   ];
@@ -129,9 +129,9 @@ export function renderGlobalHelp(): string {
   ]);
   return [
     'Usage: square [--location <square>] [--as <name>] [--owner <id>] <command> [args...]',
-    'Environment: SQUARE_LOCATION sets the CLI local artifact path; square-accessing commands require it or --location. Use --as to select a participant.',
-    'Identity: --owner overrides SQUARE_OWNER, then a complete harness identity, then user:<OS user>@<host>. Incomplete or ambiguous harness identities refuse. Owners without wake use catch --idle.',
-    'Output: --json on join, express, catch, history, listen, ignore, unlisten, listening, done, status, participants and inbox prints the SDK result without observation; a participant handle becomes {name}.',
+    'Location: square-accessing commands require --location <square>. Use square list to find nearby squares and your joined names; use --as to select a participant.',
+    'Identity: --owner overrides SQUARE_OWNER, then a complete harness identity, then user:<OS user>@<host>. Incomplete or ambiguous harness identities refuse. Owners without wake use perceive --idle.',
+    'Output: --json on join, express, perceive, history, listen, ignore, unlisten, listening, done, status, participants and inbox prints the SDK result without observation; a participant handle becomes {name}.',
     'History emits one JSON document; stream --ndjson emits one SDK record per line.',
     '',
     ...commandLines,

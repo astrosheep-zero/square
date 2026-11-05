@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { Square, selectOwnSeat } from '../dist/square-api.js';
+import { Square, selectOwnSeat, discover } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from '../dist/claude-mcp-context.js';
@@ -27,7 +27,7 @@ async function fixture(participant = 'rei', options = {}) {
   await square.close();
   const env = { ...process.env, SQUARE_INDEX: path.join(cwd, 'index.ndjsonl'), CODEX_THREAD_ID: `mcp-${participant}` };
   const body = "codex" + ":" + `mcp-${participant}`;
-  return { cwd, squarePath, env, body, server: createSquareMcpServer({ cwd, env, path: squarePath, owner: body }) };
+  return { cwd, squarePath, env, body, server: createSquareMcpServer({ cwd, env, owner: body }) };
 }
 
 async function connectedClient(server) {
@@ -46,11 +46,11 @@ test('CLI, MCP and Pi tools share addressless Pi seats despite Paseo in the envi
   const cli = spawnSync(process.execPath, [path.resolve('dist/square.js'), '--location', squarePath, '--as', 'Cli', 'join'], { env, encoding: 'utf8' });
   assert.equal(cli.status, 0, cli.stderr);
   const identity = commandIdentity(env);
-  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, path: squarePath, ...identity }));
+  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, ...identity }));
   const artifact = createArtifactPort(squarePath);
   const square = await Square.at({ path: squarePath, env });
   t.after(async () => { await close(); await artifact.close(); await square.close(); });
-  const joined = await client.callTool({ name: 'join', arguments: { as: 'Mcp' } });
+  const joined = await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'Mcp' } });
   assert.equal(joined.isError, undefined);
   const before = (await artifact.read(facts => facts.seat('Cli'))).value;
   const keys = ['SQUARE_INDEX', 'PASEO_AGENT_ID', 'PI_SESSION_ID', 'CODEX_THREAD_ID', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION', 'OPENCODE_SESSION_ID', 'SQUARE_OWNER'];
@@ -83,28 +83,39 @@ test('CLI, MCP and Pi tools share addressless Pi seats despite Paseo in the envi
 });
 
 test('MCP tools validate JSON arguments and return only CLI text', async () => {
-  const { server } = await fixture();
+  const { server, squarePath } = await fixture();
   const { client, close } = await connectedClient(server);
   try {
     assert.deepEqual(client.getServerVersion(), { name: 'square', version: packageVersion });
     const tools = (await client.listTools()).tools;
     assert.deepEqual(tools.map((tool) => tool.name), [
-      'join', 'express', 'catch', 'history', 'attention', 'done', 'status',
+      'list', 'join', 'express', 'perceive', 'history', 'attention', 'done', 'status',
     ]);
-    for (const tool of tools) assert.equal(tool.outputSchema, undefined);
-    const invalid = await client.callTool({ name: 'express', arguments: { body: 7 } });
+    for (const tool of tools) {
+      assert.equal(tool.outputSchema, undefined);
+      assert.equal(tool.inputSchema.required?.includes('location') ?? false, !['list', 'express'].includes(tool.name));
+      assert.equal('location' in tool.inputSchema.properties, tool.name !== 'list');
+    }
+    for (const name of ['join', 'perceive', 'history', 'attention', 'done', 'status']) {
+      assert.equal((await client.callTool({ name, arguments: {} })).isError, true, `${name} requires location`);
+    }
+    const missingLocation = await client.callTool({ name: 'express', arguments: { body: 'no location' } });
+    assert.equal(missingLocation.isError, true);
+    assert.match(missingLocation.content[0].text, /Square needs a location/);
+    assert.doesNotMatch(missingLocation.content[0].text, /draft kept/);
+    const invalid = await client.callTool({ name: 'express', arguments: { location: squarePath, body: 7 } });
     assert.equal(invalid.isError, true);
 
-    const joined = await client.callTool({ name: 'join', arguments: { as: 'rei' } });
+    const joined = await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'rei' } });
     assert.match(joined.content[0].text, /you stepped into the square/);
     assert.match(joined.content[0].text, /MCP scene/);
-    const reconnected = await client.callTool({ name: 'join', arguments: { as: 'rei' } });
+    const reconnected = await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'rei' } });
     assert.match(reconnected.content[0].text, /already in the square/);
-    const expressed = await client.callTool({ name: 'express', arguments: { body: '*waves*', mentions: [] } });
+    const expressed = await client.callTool({ name: 'express', arguments: { location: squarePath, body: '*waves*', mentions: [] } });
     assert.match(expressed.content[0].text, /your gesture lands/);
-    const history = await client.callTool({ name: 'history', arguments: { after: 'act/0' } });
+    const history = await client.callTool({ name: 'history', arguments: { location: squarePath, after: 'act/0' } });
     assert.match(history.content[0].text, /\*waves\*/);
-    const status = await client.callTool({ name: 'status', arguments: {} });
+    const status = await client.callTool({ name: 'status', arguments: { location: squarePath } });
     assert.match(status.content[0].text, /not turned toward anyone/);
     for (const result of [invalid, joined, reconnected, expressed, history, status]) {
       assert.equal(result.structuredContent, undefined);
@@ -115,17 +126,49 @@ test('MCP tools validate JSON arguments and return only CLI text', async () => {
   } finally { await close(); }
 });
 
+test('MCP list discovers without location and shows only the caller’s joined seats and pending counts', async t => {
+  const { cwd, squarePath, env, body, server } = await fixture();
+  const { client, close } = await connectedClient(server);
+  t.after(async () => { await close(); fs.rmSync(cwd, { recursive: true, force: true }); });
+  const square = await Square.at({ path: squarePath, env });
+  try {
+    const rei = (await square.join('rei', { owner: body })).participant;
+    const bob = (await square.join('bob', { owner: body })).participant;
+    const departed = (await square.join('departed', { owner: body })).participant;
+    await departed.done();
+    const foreign = (await square.join('foreign', { owner: 'other:owner' })).participant;
+    await foreign.express('waiting for rei', { mentions: ['rei'], force: true });
+    const joinedSeats = (await discover({ cwd }, { owner: body })).items[0].joined;
+    assert.deepEqual(new Map(joinedSeats.map(seat => [seat.name, seat.pending])), new Map([['rei', 1], ['bob', 0]]));
+    const listed = await client.callTool({ name: 'list', arguments: {} });
+    assert.equal(listed.isError, undefined, listed.content[0].text);
+    const joined = listed.content[0].text.split('\n').find(line => line.includes('joined'));
+    assert.match(joined, /@rei \(1 waiting\)/);
+    assert.match(joined, /@bob/);
+    assert.doesNotMatch(joined, /departed|foreign|@bob \(0 waiting\)/);
+    const cli = spawnSync(process.execPath, [path.resolve('dist/square.js'), 'list'], { cwd, env, encoding: 'utf8' });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.equal(listed.content[0].text, cli.stdout);
+    assert.equal((await rei.pending()).activities.length, 1, 'list does not consume');
+    const otherOwner = await client.callTool({ name: 'list', arguments: {}, _meta: { threadId: 'new-owner' } });
+    assert.doesNotMatch(otherOwner.content[0].text, /joined/);
+    await rei.perceive();
+    const perceived = await client.callTool({ name: 'list', arguments: { depth: 0, limit: 1 } });
+    assert.doesNotMatch(perceived.content[0].text, /waiting/);
+    const after = await client.callTool({ name: 'list', arguments: { after: 'square.square' } });
+    assert.doesNotMatch(after.content[0].text, /@rei/);
+    for (const arguments_ of [{ location: squarePath }, { depth: 17 }, { limit: 0 }, { after: '' }]) {
+      assert.equal((await client.callTool({ name: 'list', arguments: arguments_ })).isError, true);
+    }
+  } finally { await square.close(); }
+});
+
 test('MCP retries an unsent express from an in-memory draft without repeating its arguments', async (t) => {
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);
   const { cwd, squarePath, env, body: owner } = await fixture();
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
-  const defaultPath = path.join(cwd, 'default.square');
-  const other = await Square.build({ path: defaultPath, markdown: 'default' });
-  await other.close();
-  const { client, close } = await connectedClient(createSquareMcpServer({
-    cwd, env, path: defaultPath, owner,
-  }));
+  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, owner }));
   try {
     await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'rei' } });
     await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'bob' } });
@@ -138,7 +181,7 @@ test('MCP retries an unsent express from an in-memory draft without repeating it
     } });
     assert.equal(refused.isError, true);
     assert.match(refused.content[0].text, /your words stay unsent/);
-    assert.match(refused.content[0].text, /catch the pending activity/);
+    assert.match(refused.content[0].text, /perceive the pending activity/);
     const token = refused.content[0].text.match(/draft kept in memory: (dr_\S+)/)?.[1];
     assert.ok(token, refused.content[0].text);
     assert.doesNotMatch(refused.content[0].text, /a long answer/);
@@ -147,7 +190,7 @@ test('MCP retries an unsent express from an in-memory draft without repeating it
     const foreign = await client.callTool({ name: 'express', arguments: { draft: token }, _meta: { threadId: 'foreign' } });
     assert.equal(foreign.isError, true);
     assert.match(foreign.content[0].text, /Unknown, expired, or inaccessible/);
-    await client.callTool({ name: 'catch', arguments: { location: squarePath, as: 'rei' } });
+    await client.callTool({ name: 'perceive', arguments: { location: squarePath, as: 'rei' } });
     const retry = await client.callTool({ name: 'express', arguments: { draft: token } });
     assert.equal(retry.isError, undefined, retry.content[0].text);
     const history = await client.callTool({ name: 'history', arguments: { location: squarePath, limit: 10 } });
@@ -170,26 +213,26 @@ test('one MCP server accepts per-call participants without a configured default'
   const baseEnv = { ...env };
   const beforeProcessEnv = { ...process.env };
   const beforeBaseEnv = { ...baseEnv };
-  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env: baseEnv, owner: body }));
+  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: baseEnv, owner: body }));
   try {
     const tools = (await client.listTools()).tools;
-    for (const name of ['join', 'express', 'catch', 'attention', 'done', 'status']) {
+    for (const name of ['join', 'express', 'perceive', 'attention', 'done', 'status']) {
       const schema = tools.find((tool) => tool.name === name).inputSchema;
       assert.equal(schema.properties.as.type, 'string');
       assert.equal(schema.properties.as.description, name === 'status' ? 'Whose listening to show. Leave it out if you hold exactly one name here.' : name === 'join' ? 'Your name in the square. Give it explicitly when joining.' : 'Your name in the square. Leave it out if you hold exactly one name here.');
       assert.equal(schema.required?.includes('as') ?? false, false);
       assert.equal('session' in schema.properties, false);
     }
-    const missing = await client.callTool({ name: 'join', arguments: {} });
+    const missing = await client.callTool({ name: 'join', arguments: { location: squarePath } });
     assert.equal(missing.isError, true);
     assert.match(missing.content[0].text, /explicit participant name/);
     for (const as of ['alice', 'bob']) {
-      const joined = await client.callTool({ name: 'join', arguments: { as } });
+      const joined = await client.callTool({ name: 'join', arguments: { location: squarePath, as } });
       assert.equal(joined.isError, undefined);
-      const expressed = await client.callTool({ name: 'express', arguments: { as, body: `${as} speaks`, force: true } });
+      const expressed = await client.callTool({ name: 'express', arguments: { location: squarePath, as, body: `${as} speaks`, force: true } });
       assert.match(expressed.content[0].text, /your words land.*act\/\d+/);
     }
-    const history = await client.callTool({ name: 'history', arguments: {} });
+    const history = await client.callTool({ name: 'history', arguments: { location: squarePath } });
     const square = await Square.at({ path: squarePath, env: baseEnv });
     try {
       assert.deepEqual((await square.history()).activities.filter((activity) => activity.kind === 'say').map(({ actor, body }) => ({ actor, body })), [
@@ -198,13 +241,13 @@ test('one MCP server accepts per-call participants without a configured default'
     } finally { await square.close(); }
     assert.match(history.content[0].text, /alice speaks/);
     assert.match(history.content[0].text, /bob speaks/);
-    await client.callTool({ name: 'attention', arguments: { as: 'alice', action: 'listen', target: 'bob' } });
-    const listening = await client.callTool({ name: 'status', arguments: { as: 'alice' } });
+    await client.callTool({ name: 'attention', arguments: { location: squarePath, as: 'alice', action: 'listen', target: 'bob' } });
+    const listening = await client.callTool({ name: 'status', arguments: { location: squarePath, as: 'alice' } });
     assert.match(listening.content[0].text, /you listen to\n  · @bob/);
-    await client.callTool({ name: 'attention', arguments: { as: 'alice', action: 'ignore', target: 'bob' } });
-    assert.match((await client.callTool({ name: 'status', arguments: { as: 'alice' } })).content[0].text, /not turned toward anyone/);
-    for (const [name, args] of [['catch', {}], ['done', {}]]) {
-      const result = await client.callTool({ name, arguments: { as: 'alice', ...args } });
+    await client.callTool({ name: 'attention', arguments: { location: squarePath, as: 'alice', action: 'ignore', target: 'bob' } });
+    assert.match((await client.callTool({ name: 'status', arguments: { location: squarePath, as: 'alice' } })).content[0].text, /not turned toward anyone/);
+    for (const [name, args] of [['perceive', {}], ['done', {}]]) {
+      const result = await client.callTool({ name, arguments: { location: squarePath, as: 'alice', ...args } });
       assert.equal(result.isError, undefined, JSON.stringify(result));
       assert.equal(result.structuredContent, undefined);
     }
@@ -221,7 +264,7 @@ test('MCP request metadata binds the participant seat to the live call body', as
       const configuredBody = "configured" + ":" + `startup-${channel}`;
       const beforeProcessEnv = { ...process.env };
       const beforeBaseEnv = { ...env };
-      const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: { ...env, PASEO_AGENT_ID: 'managed-agent', CODEX_HOME: '/recipient/codex', SQUARE_CODEX_ENDPOINT: ' unix:///recipient/control.sock ' }, path: squarePath, owner: configuredBody,
+      const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: { ...env, PASEO_AGENT_ID: 'managed-agent', CODEX_HOME: '/recipient/codex', SQUARE_CODEX_ENDPOINT: ' unix:///recipient/control.sock ' }, owner: configuredBody,
         wakeAddress: { kind: 'paseo', address: { agentId: 'managed-agent' } } }));
       const artifact = createArtifactPort(squarePath);
       const readSeats = () => artifact.read(facts => ({
@@ -230,7 +273,7 @@ test('MCP request metadata binds the participant seat to the live call body', as
         configuredBodySeats: facts.seatsForOwner(configuredBody),
       }));
       try {
-        const callJoin = (session) => client.callTool({ name: 'join', arguments: { as: 'rei' }, _meta: { [key]: session } });
+        const callJoin = (session) => client.callTool({ name: 'join', arguments: { location: squarePath, as: 'rei' }, _meta: { [key]: session } });
         const callBody = { channel, session: `${channel}-first` };
         const joined = await callJoin(callBody.session);
         assert.match(joined.content[0].text, /you stepped into the square/);
@@ -253,9 +296,9 @@ test('MCP request metadata binds the participant seat to the live call body', as
 
         const reconnected = await callJoin(callBody.session);
         assert.match(reconnected.content[0].text, /already in the square/);
-        const fallback = await client.callTool({ name: 'join', arguments: { as: 'rei' } });
+        const fallback = await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'rei' } });
         assert.equal(fallback.isError, true);
-        const startupJoin = await client.callTool({ name: 'join', arguments: { as: 'Startup' } });
+        const startupJoin = await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'Startup' } });
         assert.match(startupJoin.content[0].text, /you stepped into the square/);
         seats = (await readSeats()).value;
         assert.deepEqual(seats.configuredBodySeats.map(({ participant }) => participant), ['Startup']);
@@ -275,7 +318,7 @@ test('MCP call-local identities supply distinct bodies and keep configured body 
   const { cwd, squarePath, env } = await fixture();
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const configuredBody = "configured" + ":" + ('configured-session') + ":agent:configured-agent";
-  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env, owner: configuredBody }));
+  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, owner: configuredBody }));
   const identities = [
     { as: 'Codex', metadata: { threadId: 'call-codex' }, owner: 'codex:call-codex' },
     { as: 'OpenCode', metadata: { 'ai.opencode/sessionID': 'call-opencode' }, owner: 'opencode:call-opencode' },
@@ -287,7 +330,7 @@ test('MCP call-local identities supply distinct bodies and keep configured body 
   };
   try {
     const joins = await Promise.all(identities.map(({ as, metadata }) => client.callTool({
-      name: 'join', arguments: { as }, _meta: metadata,
+      name: 'join', arguments: { location: squarePath, as }, _meta: metadata,
     })));
     for (const joined of joins) {
       assert.equal(joined.isError, undefined, JSON.stringify(joined));
@@ -295,7 +338,7 @@ test('MCP call-local identities supply distinct bodies and keep configured body 
     }
     await Promise.all(identities.map(({ as, owner }) => recognizes(owner, as)));
 
-    const configured = await client.callTool({ name: 'join', arguments: { as: 'Configured' } });
+    const configured = await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'Configured' } });
     assert.equal(configured.isError, undefined, JSON.stringify(configured));
     await recognizes(configuredBody, 'Configured');
   } finally { await close(); }
@@ -306,7 +349,7 @@ test('MCP Claude child call body retains agent ownership', async (t) => {
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const claudeEnv = { ...env, SQUARE_CLAUDE_MCP_CONTEXT: '1' };
   const call = { toolUseId: 'mcp-child-call', sessionId: 'claude-call-session', cwd, agentId: 'child-agent' };
-  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, path: squarePath, env: claudeEnv }));
+  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: claudeEnv }));
   let token;
   const childBody = `claude-code:${call.sessionId}:agent:${call.agentId}`;
   const recognizes = async (body) => {
@@ -317,7 +360,7 @@ test('MCP Claude child call body retains agent ownership', async (t) => {
   try {
     ({ token } = await beginClaudeMcpCall(call, claudeEnv));
     const joined = await client.callTool({
-      name: 'join', arguments: { as: 'ClaudeChild' }, _meta: { 'claudecode/toolUseId': call.toolUseId },
+      name: 'join', arguments: { location: squarePath, as: 'ClaudeChild' }, _meta: { 'claudecode/toolUseId': call.toolUseId },
     });
     assert.equal(joined.isError, undefined, JSON.stringify(joined));
     assert.equal((await recognizes(childBody)).name, 'ClaudeChild');
@@ -329,22 +372,22 @@ test('MCP Claude child call body retains agent ownership', async (t) => {
 });
 
 test('MCP tool schemas reject unknown fields and malformed activity ids', async () => {
-  const { server } = await fixture('kite');
+  const { server, squarePath } = await fixture('kite');
   const { client, close } = await connectedClient(server);
   try {
-    const unknownField = await client.callTool({ name: 'join', arguments: { as: 'kite', takeover: false, bogus: 1 } });
+    const unknownField = await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'kite', takeover: false, bogus: 1 } });
     assert.equal(unknownField.isError, true);
 
-    const sessionField = await client.callTool({ name: 'join', arguments: { as: 'kite', session: 'not-a-schema-field' } });
+    const sessionField = await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'kite', session: 'not-a-schema-field' } });
     assert.equal(sessionField.isError, true);
 
-    const malformed = await client.callTool({ name: 'history', arguments: { after: 'act/01' } });
+    const malformed = await client.callTool({ name: 'history', arguments: { location: squarePath, after: 'act/01' } });
     assert.equal(malformed.isError, true);
 
-    const joined = await client.callTool({ name: 'join', arguments: { as: 'kite', takeover: false } });
+    const joined = await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'kite', takeover: false } });
     assert.equal(joined.isError, undefined);
-    await client.callTool({ name: 'express', arguments: { body: 'schema check' } });
-    const history = await client.callTool({ name: 'history', arguments: { after: 'act/0' } });
+    await client.callTool({ name: 'express', arguments: { location: squarePath, body: 'schema check' } });
+    const history = await client.callTool({ name: 'history', arguments: { location: squarePath, after: 'act/0' } });
     assert.equal(history.isError, undefined);
     assert.match(history.content[0].text, /schema check/);
   } finally { await close(); }
@@ -355,9 +398,9 @@ test('MCP shares location and noMention parameters with native tools', async (t)
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const { client, close } = await connectedClient(server);
   try {
-    await client.callTool({ name: 'join', arguments: { as: 'rei' } });
-    await client.callTool({ name: 'join', arguments: { as: 'bob' } });
-    const bare = await client.callTool({ name: 'express', arguments: { as: 'rei', body: 'literal @bob', noMention: true, force: true } });
+    await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'rei' } });
+    await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'bob' } });
+    const bare = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: 'literal @bob', noMention: true, force: true } });
     assert.match(bare.content[0].text, /your words land/);
     const other = await Square.build({ path: path.join(cwd, 'other.square'), markdown: 'Other square' });
     await other.close();
@@ -368,13 +411,13 @@ test('MCP shares location and noMention parameters with native tools', async (t)
     const square = await Square.at({ path: squarePath, env });
     try {
       const bareActivity = (await square.history()).activities.at(-1);
-      const directed = await client.callTool({ name: 'express', arguments: { as: 'rei', body: '@Eve', noMention: true, mentions: ['bob'], reply: bareActivity.id, force: true } });
+      const directed = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@Eve', noMention: true, mentions: ['bob'], reply: bareActivity.id, force: true } });
       assert.match(directed.content[0].text, /you walk over to @bob/);
       assert.doesNotMatch(directed.content[0].text, /isn't standing here/);
-      const bell = await client.callTool({ name: 'express', arguments: { as: 'rei', body: '@bob @Eve', reach: 'bell', force: true } });
+      const bell = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@bob @Eve', reach: 'bell', force: true } });
       assert.match(bell.content[0].text, /you ring the bell/);
       assert.doesNotMatch(bell.content[0].text, /isn't standing here/);
-      const original = await client.callTool({ name: 'history', arguments: {} });
+      const original = await client.callTool({ name: 'history', arguments: { location: squarePath } });
       assert.match(original.content[0].text, /@bob @Eve/);
       const activities = (await square.history()).activities;
       assert.deepEqual(bareActivity.mentions, []);
@@ -387,27 +430,27 @@ test('MCP shares location and noMention parameters with native tools', async (t)
 });
 
 test('MCP cancellation reaches an in-progress application operation', async () => {
-  const { server } = await fixture('aoi', { throttlePerMinute: 1 });
+  const { server, squarePath } = await fixture('aoi', { throttlePerMinute: 1 });
   const { client, close } = await connectedClient(server);
   try {
-    await client.callTool({ name: 'join', arguments: { as: 'aoi' } });
-    await client.callTool({ name: 'express', arguments: { body: 'first word' } });
+    await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'aoi' } });
+    await client.callTool({ name: 'express', arguments: { location: squarePath, body: 'first word' } });
     const controller = new AbortController();
-    const pending = client.callTool({ name: 'express', arguments: { body: 'waiting' } }, undefined, { signal: controller.signal });
+    const pending = client.callTool({ name: 'express', arguments: { location: squarePath, body: 'waiting' } }, undefined, { signal: controller.signal });
     await new Promise((resolve) => setTimeout(resolve, 20));
     controller.abort();
     await assert.rejects(() => pending);
-    const history = await client.callTool({ name: 'history', arguments: {} });
+    const history = await client.callTool({ name: 'history', arguments: { location: squarePath } });
     assert.doesNotMatch(history.content[0].text, /waiting/);
   } finally { await close(); }
 });
 
-test('stdio disconnect aborts throttled express and idle catch without later mutation or consumption', async (t) => {
+test('stdio disconnect aborts throttled express and idle perceive without later mutation or consumption', async (t) => {
   const { cwd, squarePath, env, body } = await fixture('disconnected', { throttlePerMinute: 1 });
   const app = await Square.at({ cwd, path: squarePath, env });
   t.after(() => app.close());
   const child = spawn(process.execPath, [path.resolve('dist/square.js'), '--as', 'disconnected', 'mcp-server'], {
-    cwd, env: { ...env, SQUARE_LOCATION: squarePath }, stdio: ['pipe', 'pipe', 'pipe'],
+    cwd, env, stdio: ['pipe', 'pipe', 'pipe'],
   });
   const exited = once(child, 'exit');
   const responses = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
@@ -433,11 +476,11 @@ test('stdio disconnect aborts throttled express and idle catch without later mut
   };
   await request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'disconnect-test', version: '1' } });
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-  await request('tools/call', { name: 'join', arguments: { as: 'disconnected' } });
-  await request('tools/call', { name: 'express', arguments: { body: 'first word' } });
-  await request('tools/call', { name: 'catch', arguments: {} });
-  send('tools/call', { name: 'express', arguments: { body: 'orphan expression' } });
-  send('tools/call', { name: 'catch', arguments: { idle: 60_000 } });
+  await request('tools/call', { name: 'join', arguments: { location: squarePath, as: 'disconnected' } });
+  await request('tools/call', { name: 'express', arguments: { location: squarePath, body: 'first word' } });
+  await request('tools/call', { name: 'perceive', arguments: { location: squarePath } });
+  send('tools/call', { name: 'express', arguments: { location: squarePath, body: 'orphan expression' } });
+  send('tools/call', { name: 'perceive', arguments: { location: squarePath, idle: 60_000 } });
   await request('ping');
   await sleep(100);
 
@@ -446,12 +489,12 @@ test('stdio disconnect aborts throttled express and idle catch without later mut
   assert.deepEqual(await disconnected, [0, null], stderr);
   assert.equal((await app.history()).activities.some((activity) => activity.body === 'orphan expression'), false);
   const writerBody = "codex" + ":" + ('mcp-writer');
-  const writer = await Square.at({ cwd, path: squarePath, env: { ...env, CODEX_THREAD_ID: 'mcp-writer' } });
+  const writer = await Square.at({ cwd, path: squarePath, env: { ...env, CODEX_THREAD_ID: 'mcp-writer', SQUARE_NOW_MS: String(Date.now() + 61_000) } });
   t.after(() => writer.close());
   const { participant } = await writer.join('writer', { owner: writerBody });
   const expressed = await participant.express('after disconnect', { force: true, mentions: ['disconnected'] });
-  const caught = await (await app.participant('disconnected', { owner: body })).catch();
-  assert.ok(caught.activities.some((activity) => activity.id === expressed.activity.id));
+  const perceived = await (await app.participant('disconnected', { owner: body })).perceive();
+  assert.ok(perceived.activities.some((activity) => activity.id === expressed.activity.id));
 });
 
 test('square mcp-server starts without a fixed location and speaks newline-delimited JSON-RPC', async () => {
@@ -464,7 +507,7 @@ test('square mcp-server starts without a fixed location and speaks newline-delim
   ].map((message) => JSON.stringify(message)).join('\n') + '\n';
   const child = spawnSync(process.execPath, [path.resolve('dist/square.js'), 'mcp-server'], {
     cwd,
-    env: { ...env, SQUARE_LOCATION: '' },
+    env,
     input,
     encoding: 'utf8',
     timeout: 5000,
@@ -473,12 +516,12 @@ test('square mcp-server starts without a fixed location and speaks newline-delim
   const responses = child.stdout.trim().split('\n').map((line) => JSON.parse(line));
   assert.deepEqual(responses.map((response) => response.id), [1, 2, 3]);
   assert.deepEqual(responses[0].result.serverInfo, { name: 'square', version: packageVersion });
-  assert.equal(responses[1].result.tools[0].name, 'join');
+  assert.equal(responses[1].result.tools[0].name, 'list');
   assert.deepEqual(responses[2].result, {});
 
   const help = spawnSync(process.execPath, [path.resolve('dist/square.js'), 'mcp-server', '--help'], { cwd, encoding: 'utf8', timeout: 5000 });
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /^Usage: square \[--location <square>\] mcp-server$/m);
+  assert.match(help.stdout, /^Usage: square mcp-server$/m);
   assert.match(help.stdout, /Participant tools accept as on each call/);
   assert.match(help.stdout, /_meta\.threadId/);
 });

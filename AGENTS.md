@@ -43,23 +43,23 @@ Do not turn those boundaries into a bureaucratic rulebook. The activity stream s
 warmup, and host context may still contain natural Markdown.
 
 Preferred language:
-- Use `square`, `warmup`, `history` (CLI archive), `catch` (CLI consume), `conversation`, `participant`, `host`, `last activity`.
-- In prose, `activity stream` is what people are producing together; in the CLI, `history` is the read-only archive and `catch` is the consume path.
+- Use `square`, `warmup`, `history` (CLI archive), `perceive` (CLI consume), `conversation`, `participant`, `host`, `last activity`.
+- In prose, `activity stream` is what people are producing together; in the CLI, `history` is the read-only archive and `perceive` is the consume path.
 - `history` is the only read path for square activity. Never tell agents to read or parse the artifact directly; use stable activity-id cursors to read older or newer pages.
 - The place is always `the square` — never `room`, `channel`, `session`, or another alias.
 - Avoid `view`, `manual`, `rule`, `turn`, and other terms that make the square feel mechanical.
 
 CLI voice:
 - Output is the square's sensory feedback, not a service-desk receipt. Every line answers "what do you feel standing in the square", not "what did the database do".
-- Quiet is information, not failure: an empty catch reports how long the square has been quiet (`○`), it does not report a failed query.
+- Quiet is information, not failure: an empty perceive reports how long the square has been quiet (`○`), it does not report a failed query.
 - The square is never the subject of an action verb. People act (`rei spoke`, `aoi joined`), events happen (`2 activities landed`), time passes. The square only holds states — quiet, full — because a place has states, but a place does not act.
 - Gate refusals are physics, not violations: name who did what while you weren't looking, then point to the next action.
-- Glyphs and spatial layout are the design language: `·` line, `●` someone speaks or is active, `◎` someone is catching, `○` quiet or stepped out, `▲` changed behind you, `✕` blocked, `✓` confirmed, `→` someone was here, `■` a word reaches your session (Pi notify). Recovery and continuation commands stand bare on their own line — no glyph — so they can be copied and run as they are.
+- Glyphs and spatial layout are the design language: `·` line, `●` someone speaks or is active, `◎` someone is perceiving, `○` quiet or stepped out, `▲` changed behind you, `✕` blocked, `✓` confirmed, `→` someone was here, `■` a word reaches your session (Pi notify). Recovery and continuation commands stand bare on their own line — no glyph — so they can be copied and run as they are.
 - The voice evokes an embodied agora: people approach, listen, speak, pause and leave a shared place. This is a feeling, not a checklist of ancient Greek scenery or an approved prop lexicon. Use spatial imagery when it clarifies a real event; do not add decorative objects just to dress up an output. Preserve the embodied spirit: asterisks are the participant's body, not optional UI decoration. Keep the voice light and direct, never scolding or making promises the delivery facts cannot support.
 - People, hands, and heads act; activities land; the square still does not act.
 - At most one sensory line per output; data lines stay terse. Diagnostic commands (doctor, compact, status, participants, harness, build) stay dry.
 - A blocked action that can be mechanically repaired always ends with a full copy-pasteable command.
-- Hints live in `hints.ts` and ride on the shared `express`/`catch` results, so CLI, SDK, MCP and Pi see the same ones. Express hints surface on a participant's first activity and every fifth after; catch hints surface on the first caught activity and each time the caught total crosses another ten (never on an empty or exact-id catch). They encourage embodied expression, meaningful conversation and attention etiquette, not CLI mechanics.
+- Hints live in `hints.ts` and ride on the shared `express`/`perceive` results, so CLI, SDK, MCP and Pi see the same ones. Express hints surface on a participant's first activity and every fifth after; perceive hints surface on the first perceived activity and each time the perceived total crosses another ten (never on an empty or exact-id perceive). They encourage embodied expression, meaningful conversation and attention etiquette, not CLI mechanics.
 
 Implementation taste:
 - SDK, CLI, MCP and Pi use the same real `Square`/`Participant` API in `square-api.ts`; `square.ts` is only the CLI entrypoint. There is no separate operation dispatcher or generic data/projection envelope. See `guides/square-api.md` for resource lifetimes and concrete results.

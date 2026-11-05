@@ -27,14 +27,14 @@ async function readRecord(file: string): Promise<z.infer<typeof record> | undefi
 
 // Only publishers/cleanup mutate this private transport directory. Readers see an
 // immutable record via atomic rename, so they need neither a lock nor housekeeping.
-async function mutate<T>(env: NodeJS.ProcessEnv, fn: (root: string) => Promise<T>): Promise<T> {
+async function mutate<T>(env: NodeJS.ProcessEnv, fn: (root: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
   const root = storeRoot(env);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
   await fs.chmod(root, 0o700);
-  return withFileLock(path.join(root, 'store.lock'), { retryMs: 10, signal: AbortSignal.timeout(2000) }, () => fn(root));
+  return withFileLock(path.join(root, 'store.lock'), { retryMs: 10, signal: signal ?? AbortSignal.timeout(2000) }, () => fn(root));
 }
 
-export async function beginClaudeMcpCall(input: ClaudeMcpCall, env: NodeJS.ProcessEnv = process.env): Promise<{ token: string }> {
+export async function beginClaudeMcpCall(input: ClaudeMcpCall, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<{ token: string }> {
   const parsed = coordinate.safeParse(input);
   if (!parsed.success) throw unavailable();
   return mutate(env, async root => {
@@ -54,7 +54,7 @@ export async function beginClaudeMcpCall(input: ClaudeMcpCall, env: NodeJS.Proce
       await fs.rename(temporary, file);
     } finally { await fs.rm(temporary, { force: true }); }
     return { token };
-  });
+  }, signal);
 }
 
 export async function endClaudeMcpCall(toolUseId: string, token: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -66,13 +66,13 @@ export async function endClaudeMcpCall(toolUseId: string, token: string, env: No
   });
 }
 
-export async function endClaudeMcpCallForSession(toolUseId: string, sessionId: string, env: NodeJS.ProcessEnv = process.env, agentId?: string): Promise<void> {
+export async function endClaudeMcpCallForSession(toolUseId: string, sessionId: string, env: NodeJS.ProcessEnv = process.env, agentId?: string, signal?: AbortSignal): Promise<void> {
   if (!text.safeParse(toolUseId).success || !text.safeParse(sessionId).success) throw unavailable();
   await mutate(env, async root => {
     const file = callFile(root, toolUseId);
     const stored = await readRecord(file);
     if (stored?.toolUseId === toolUseId && stored.sessionId === sessionId && stored.agentId === agentId) await fs.unlink(file);
-  });
+  }, signal);
 }
 export async function readClaudeMcpCall(toolUseId: unknown, env: NodeJS.ProcessEnv = process.env): Promise<ClaudeMcpCall> {
   if (!text.safeParse(toolUseId).success) throw unavailable();

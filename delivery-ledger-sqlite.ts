@@ -25,7 +25,7 @@ export const { DatabaseSync } = await (process.versions.bun
     }))
   : import('node:sqlite')) as { DatabaseSync: typeof NodeDatabaseSync };
 type DatabaseSync = NodeDatabaseSync;
-import { inSqliteTransaction } from './sqlite-transaction.js';
+import { inSqliteTransaction, retrySqliteBusy, awaitSqliteQueue } from './sqlite-transaction.js';
 import { validateSchema } from './sqlite-framing.js';
 import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, SuppressionResult } from './delivery-ledger.js';
 
@@ -74,8 +74,12 @@ function holds(row: DeliveryAttempt): boolean { return !['failed', 'released'].i
 export class LedgerStore {
   private pending: Promise<unknown> = Promise.resolve();
   private closed = false;
+  private readonly cancellation = new AbortController();
+  private readonly ordinaryCancellation = new AbortController();
+  private closing?: Promise<void>;
   private constructor(readonly location: string, private readonly db: DatabaseSync, private readonly clock: () => number) {}
-  static async open(location: string, clock: () => number): Promise<LedgerStore> {
+  static async open(location: string, clock: () => number, signal?: AbortSignal): Promise<LedgerStore> {
+    signal?.throwIfAborted();
     try { await fs.access(location); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -84,13 +88,14 @@ export class LedgerStore {
       let initial: DatabaseSync | undefined;
       try {
         await (await fs.open(temporary, 'wx', 0o600)).close();
-        initial = new DatabaseSync(temporary);
+        initial = await retrySqliteBusy(() => new DatabaseSync(temporary), signal);
         await inSqliteTransaction(initial, true, () => undefined, () => {
           initial!.exec(SCHEMA);
           initial!.prepare('INSERT INTO meta VALUES(?,1)').run(FORMAT);
           initial!.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=${FORMAT}`);
-        });
+        }, signal);
         initial.close(); initial = undefined;
+        signal?.throwIfAborted();
         try { await fs.link(temporary, location); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
       } finally {
@@ -99,31 +104,44 @@ export class LedgerStore {
       }
     }
     // Existing formats are inspected on a read-only connection before any writable open.
-    const probe = new DatabaseSync(location, { readOnly: true });
-    try { validate(probe, location); } finally { probe.close(); }
-    const db = new DatabaseSync(location);
-    try { validate(db, location); return new LedgerStore(location, db, clock); }
+    const probe = await retrySqliteBusy(() => new DatabaseSync(location, { readOnly: true }), signal);
+    try { await retrySqliteBusy(() => validate(probe, location), signal); } finally { probe.close(); }
+    const db = await retrySqliteBusy(() => new DatabaseSync(location), signal);
+    try {
+      await retrySqliteBusy(() => { validate(db, location); db.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=FULL'); }, signal);
+      return new LedgerStore(location, db, clock);
+    }
     catch (error) { db.close(); throw error; }
   }
+  /** Stop ordinary work while captured effects retain access to settlement. */
+  retire(): void { this.ordinaryCancellation.abort(new Error('Delivery ledger is closed')); }
   close(): Promise<void> {
+    this.retire();
     this.closed = true;
-    return this.pending.then(() => this.db.close());
+    this.cancellation.abort(new Error('Delivery ledger is closed'));
+    return this.closing ??= this.pending.then(() => this.db.close());
   }
-  private transaction<T>(write: boolean, change: (now: number) => T, signal?: AbortSignal): Promise<T> {
-    if (this.closed) return Promise.reject(new Error('Delivery ledger is closed'));
-    const result = this.pending.then(() => inSqliteTransaction(this.db, write, () => validate(this.db, this.location), () => {
-      const now = this.clock();
-      if (!Number.isFinite(now)) throw new TypeError('Expected finite ledger time');
-      const changes = Number(this.db.prepare('SELECT total_changes() AS n').get()!.n);
-      const result = change(now);
-      if (write && Number(this.db.prepare('SELECT total_changes() AS n').get()!.n) > changes) {
-        this.normalize(now);
-        this.gc(now);
-      }
-      return result;
-    }, signal));
+  private transaction<T>(write: boolean, change: (now: number) => T, signal?: AbortSignal, settlement = false): Promise<T> {
+    if (this.closed || !settlement && this.ordinaryCancellation.signal.aborted) return Promise.reject(new Error('Delivery ledger is closed'));
+    signal = AbortSignal.any([this.cancellation.signal, ...(!settlement ? [this.ordinaryCancellation.signal] : []), ...(signal ? [signal] : [])]);
+    let started = false;
+    const result = this.pending.then(() => {
+      signal.throwIfAborted();
+      started = true;
+      return inSqliteTransaction(this.db, write, () => validate(this.db, this.location), () => {
+        const now = this.clock();
+        if (!Number.isFinite(now)) throw new TypeError('Expected finite ledger time');
+        const changes = Number(this.db.prepare('SELECT total_changes() AS n').get()!.n);
+        const result = change(now);
+        if (write && Number(this.db.prepare('SELECT total_changes() AS n').get()!.n) > changes) {
+          this.normalize(now);
+          this.gc(now);
+        }
+        return result;
+      }, signal);
+    });
     this.pending = result.catch(() => undefined);
-    return result;
+    return awaitSqliteQueue(result, signal, () => started);
   }
   private getSession(owner: string): DeliverySession | undefined {
     return session(this.db.prepare('SELECT * FROM sessions WHERE owner=?').get(owner) as Row | undefined);
@@ -186,19 +204,19 @@ export class LedgerStore {
     for (const row of old) this.deleteCard(row.seq as number, now);
     this.db.prepare('DELETE FROM receipts WHERE rowid IN (SELECT rowid FROM receipts WHERE at<? ORDER BY at LIMIT 100)').run(cutoff);
   }
-  session(owner: string): Promise<DeliverySession | undefined> { return this.transaction(false, () => this.getSession(owner)); }
-  sessions(): Promise<readonly DeliverySession[]> {
-    return this.transaction(false, () => (this.db.prepare('SELECT * FROM sessions ORDER BY owner').all() as Row[]).map(row => session(row)!));
+  session(owner: string, signal?: AbortSignal): Promise<DeliverySession | undefined> { return this.transaction(false, () => this.getSession(owner), signal); }
+  sessions(signal?: AbortSignal): Promise<readonly DeliverySession[]> {
+    return this.transaction(false, () => (this.db.prepare('SELECT * FROM sessions ORDER BY owner').all() as Row[]).map(row => session(row)!), signal);
   }
-  pendingCards(owner: string, generation: string): Promise<readonly DeliveryCard[]> {
+  pendingCards(owner: string, generation: string, signal?: AbortSignal): Promise<readonly DeliveryCard[]> {
     return this.transaction(false, now => this.attached(owner, generation)
-      ? (this.db.prepare('SELECT * FROM cards WHERE owner=? ORDER BY seq').all(owner) as Row[]).filter(row => this.eligible(row, now)).map(card) : []);
+      ? (this.db.prepare('SELECT * FROM cards WHERE owner=? ORDER BY seq').all(owner) as Row[]).filter(row => this.eligible(row, now)).map(card) : [], signal);
   }
-  handoffs(owner: string, generation: string): Promise<readonly DeliveryAttempt[]> {
+  handoffs(owner: string, generation: string, signal?: AbortSignal): Promise<readonly DeliveryAttempt[]> {
     return this.transaction(false, () => (this.db.prepare(`SELECT a.* FROM attempts a JOIN cards c ON c.seq=a.seq
-      WHERE c.owner=? AND a.generation=? AND a.track='handoff' ORDER BY a.rowid`).all(owner, generation) as Row[]).map(attempt));
+      WHERE c.owner=? AND a.generation=? AND a.track='handoff' ORDER BY a.rowid`).all(owner, generation) as Row[]).map(attempt), signal);
   }
-  attach(input: { owner: string; expectedGeneration: string | null; routes: readonly DeliveryRoute[] }): Promise<DeliverySession | false> {
+  attach(input: { owner: string; expectedGeneration: string | null; routes: readonly DeliveryRoute[] }, signal?: AbortSignal): Promise<DeliverySession | false> {
     const encoded = JSON.stringify(input.routes);
     return this.transaction(true, now => {
       const previous = this.getSession(input.owner);
@@ -207,25 +225,25 @@ export class LedgerStore {
       this.db.prepare(`INSERT INTO sessions VALUES(?,?,'attached',?,?) ON CONFLICT(owner)
         DO UPDATE SET generation=excluded.generation,state=excluded.state,routes_json=excluded.routes_json,at=excluded.at`).run(input.owner, generation, encoded, now);
       return this.getSession(input.owner)!;
-    });
+    }, signal);
   }
-  updateRoutes(input: { owner: string; generation: string; routes: readonly DeliveryRoute[] }): Promise<boolean> {
+  updateRoutes(input: { owner: string; generation: string; routes: readonly DeliveryRoute[] }, signal?: AbortSignal): Promise<boolean> {
     const encoded = JSON.stringify(input.routes);
     return this.transaction(true, now => {
       if (!this.attached(input.owner, input.generation)) return false;
       this.db.prepare('UPDATE sessions SET routes_json=?,at=? WHERE owner=?').run(encoded, now, input.owner);
       return true;
-    });
+    }, signal);
   }
-  lifecycle(input: { owner: string; generation: string }, state: 'detached' | 'deleted'): Promise<boolean> {
+  lifecycle(input: { owner: string; generation: string }, state: 'detached' | 'deleted', signal?: AbortSignal): Promise<boolean> {
     return this.transaction(true, now => {
       const s = this.getSession(input.owner);
       if (!s || s.generation !== input.generation || s.state === 'deleted') return false;
       this.db.prepare('UPDATE sessions SET state=?,at=? WHERE owner=?').run(state, now, input.owner);
       return true;
-    });
+    }, signal);
   }
-  post(input: { owner: string; key: string; text: string; details: string | null }): Promise<PostResult> {
+  post(input: { owner: string; key: string; text: string; details: string | null }, signal?: AbortSignal): Promise<PostResult> {
     return this.transaction(true, now => {
       const s = this.getSession(input.owner);
       if (!s) return { status: 'unknown-session' };
@@ -242,9 +260,9 @@ export class LedgerStore {
       this.db.prepare('UPDATE meta SET next_seq=?').run(seq + 1);
       this.db.prepare('INSERT INTO cards VALUES(?,?,?,?,?,?)').run(seq, input.owner, input.key, input.text, input.details, now);
       return { status: suppressed ? 'suppressed' : 'posted' };
-    });
+    }, signal);
   }
-  suppress(input: { owner: string; key: string; scope: 'exact' | 'prefix'; expiresAt?: number }): Promise<SuppressionResult> {
+  suppress(input: { owner: string; key: string; scope: 'exact' | 'prefix'; expiresAt?: number }, signal?: AbortSignal): Promise<SuppressionResult> {
     return this.transaction(true, now => {
       const permanentId = input.scope === 'exact' && input.expiresAt === undefined
         ? (this.db.prepare("SELECT id FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL").get(input.owner, input.key) as Row | undefined)?.id as string | undefined
@@ -258,21 +276,21 @@ export class LedgerStore {
         if (!this.awaitingEffect(row.seq as number)) this.deleteCard(row.seq as number);
       }
       return { id, status: inCustody ? 'in-custody' : 'suppressed' };
-    });
+    }, signal);
   }
-  renewSuppression(input: { owner: string; id: string; expiresAt: number }): Promise<boolean> {
-    return this.transaction(true, now => this.db.prepare('UPDATE suppressions SET expires_at=? WHERE owner=? AND id=? AND (expires_at IS NULL OR expires_at>?)').run(input.expiresAt, input.owner, input.id, now).changes > 0);
+  renewSuppression(input: { owner: string; id: string; expiresAt: number }, signal?: AbortSignal): Promise<boolean> {
+    return this.transaction(true, now => this.db.prepare('UPDATE suppressions SET expires_at=? WHERE owner=? AND id=? AND (expires_at IS NULL OR expires_at>?)').run(input.expiresAt, input.owner, input.id, now).changes > 0, signal);
   }
-  releaseSuppression(input: { owner: string; id: string }): Promise<boolean> {
-    return this.transaction(true, () => this.db.prepare('DELETE FROM suppressions WHERE owner=? AND id=?').run(input.owner, input.id).changes > 0);
+  releaseSuppression(input: { owner: string; id: string }, signal?: AbortSignal): Promise<boolean> {
+    return this.transaction(true, () => this.db.prepare('DELETE FROM suppressions WHERE owner=? AND id=?').run(input.owner, input.id).changes > 0, signal);
   }
-  cancel(input: { owner: string; generation: string }): Promise<boolean> {
+  cancel(input: { owner: string; generation: string }, signal?: AbortSignal): Promise<boolean> {
     return this.transaction(true, () => {
       if (!this.attached(input.owner, input.generation)) return false;
       this.db.prepare(`INSERT INTO cancellations VALUES(?,?,(SELECT next_seq-1 FROM meta))
         ON CONFLICT(owner) DO UPDATE SET generation=excluded.generation,through_seq=MAX(through_seq,excluded.through_seq)`).run(input.owner, input.generation);
       return true;
-    });
+    }, signal);
   }
   private isSuppressed(owner: string, key: string, now: number): boolean {
     return !!this.db.prepare(`SELECT 1 FROM suppressions WHERE owner=? AND (expires_at IS NULL OR expires_at>?)
@@ -356,7 +374,7 @@ export class LedgerStore {
     this.receipt(handoff.seq, now);
     return true;
   }
-  settle(tokens: readonly string[], outcome: Exclude<DeliveryOutcome, 'dispatching'>): Promise<boolean> {
+  settle(tokens: readonly string[], outcome: Exclude<DeliveryOutcome, 'dispatching'>, signal?: AbortSignal): Promise<boolean> {
     return this.transaction(true, now => {
       const attempts = tokens.map(token => this.getAttempt(token));
       if (attempts.some(a => !a || a.track === 'presentation' && outcome === 'accepted'
@@ -376,7 +394,7 @@ export class LedgerStore {
         }
       }
       return true;
-    });
+    }, signal, true);
   }
   private handoffFacts(token: string): { attempt: DeliveryAttempt; row: Row; ref: DeliveryHandoffRef & { routeKind: string } } | undefined {
     const a = this.getAttempt(token);
@@ -396,24 +414,24 @@ export class LedgerStore {
     const s = this.attached(facts.ref.owner, facts.ref.generation);
     return facts.attempt.expiresAt > now && !!s && s.routes.some(route => route.kind === facts.ref.routeKind) && this.eligible(facts.row, now);
   }
-  handoff(token: string): Promise<(DeliveryHandoffRef & { routeKind: string }) | undefined> {
-    return this.transaction(false, () => this.handoffFacts(token)?.ref);
+  handoff(token: string, signal?: AbortSignal): Promise<(DeliveryHandoffRef & { routeKind: string }) | undefined> {
+    return this.transaction(false, () => this.handoffFacts(token)?.ref, signal);
   }
-  guardHandoff(ref: DeliveryHandoffRef): Promise<boolean> {
+  guardHandoff(ref: DeliveryHandoffRef, signal?: AbortSignal): Promise<boolean> {
     return this.transaction(false, now => {
       const facts = this.matchingHandoff(ref);
       return !!facts && ['dispatching', 'unknown'].includes(facts.attempt.outcome) && this.currentHandoff(facts, now);
-    });
+    }, signal);
   }
-  acceptHandoff(ref: DeliveryHandoffRef): Promise<boolean> {
+  acceptHandoff(ref: DeliveryHandoffRef, signal?: AbortSignal): Promise<boolean> {
     return this.transaction(true, now => {
       const a = this.matchingHandoff(ref)?.attempt;
       if (!a || !['dispatching', 'unknown', 'accepted'].includes(a.outcome)) return false;
       if (a.outcome !== 'accepted') this.db.prepare("UPDATE attempts SET outcome='accepted',settled_at=? WHERE token=?").run(now, a.token);
       return true;
-    });
+    }, signal);
   }
-  observePresentation(handoff: string | DeliveryHandoffRef, options?: { readonly requireCurrent?: boolean }): Promise<boolean> {
+  observePresentation(handoff: string | DeliveryHandoffRef, options?: { readonly requireCurrent?: boolean }, signal?: AbortSignal): Promise<boolean> {
     return this.transaction(true, now => {
       const facts = typeof handoff === 'string' ? undefined : this.matchingHandoff(handoff);
       if (options?.requireCurrent) {
@@ -424,14 +442,14 @@ export class LedgerStore {
       }
       const a = typeof handoff === 'string' ? this.getAttempt(handoff) : facts?.attempt;
       return a ? this.confirm(a, now) : false;
-    });
+    }, signal);
   }
-  receipts(owner: string, options: { keys?: readonly string[]; since?: number }): Promise<readonly DeliveryReceipt[]> {
+  receipts(owner: string, options: { keys?: readonly string[]; since?: number }, signal?: AbortSignal): Promise<readonly DeliveryReceipt[]> {
     return this.transaction(false, () => (this.db.prepare('SELECT * FROM receipts WHERE owner=? AND at>=? ORDER BY at,key').all(owner, options.since ?? -Number.MAX_VALUE) as Row[])
       .filter(row => options.keys === undefined || options.keys.includes(row.key as string))
-      .map(row => ({ owner: row.owner as string, key: row.key as string, at: row.at as number })));
+      .map(row => ({ owner: row.owner as string, key: row.key as string, at: row.at as number })), signal);
   }
-  health(owner?: string): Promise<DeliveryHealth> {
+  health(owner?: string, signal?: AbortSignal): Promise<DeliveryHealth> {
     return this.transaction(false, now => {
       const all = (this.db.prepare('SELECT a.* FROM attempts a JOIN cards c ON c.seq=a.seq WHERE (? IS NULL OR c.owner=?) ORDER BY a.started_at,a.token').all(owner ?? null, owner ?? null) as Row[]).map(attempt);
       const repeatedFailures = (this.db.prepare(`SELECT c.owner,c.key,COUNT(*) AS count FROM attempts a JOIN cards c ON c.seq=a.seq
@@ -441,6 +459,6 @@ export class LedgerStore {
       return { unknownAttempts: all.filter(a => a.outcome === 'unknown' || a.outcome === 'dispatching' && a.expiresAt <= now)
         .map(a => a.outcome === 'dispatching' ? { ...a, outcome: 'unknown' as const } : a), repeatedFailures,
         sessionsWithoutRoute: sessions.filter(s => s.routes.length === 0).map(s => s.owner) };
-    });
+    }, signal);
   }
 }

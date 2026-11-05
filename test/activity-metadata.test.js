@@ -19,7 +19,7 @@ async function localSquare() {
   return Square.inMemory({ markdown: 'metadata test', force: true });
 }
 
-test('activity metadata lands as an immutable fact through local reads and directed catch', async () => {
+test('activity metadata lands as an immutable fact through local reads and directed perceive', async () => {
   const square = await localSquare();
   try {
     const alice = (await square.join('Alice', { owner: body('local') })).participant;
@@ -41,13 +41,13 @@ test('activity metadata lands as an immutable fact through local reads and direc
     const directed = await alice.express({ metadata: metadataOnly, mentions: ['Bob'], force: true });
     assert.equal(directed.activity.body, undefined);
     assert.deepEqual(directed.activity.metadata, metadataOnly);
-    const caught = await bob.catch();
-    assert.deepEqual(caught.activities[0].metadata, metadataOnly);
-    assert.equal(caught.activities[0].body, undefined);
+    const perceived = await bob.perceive();
+    assert.deepEqual(perceived.activities[0].metadata, metadataOnly);
+    assert.equal(perceived.activities[0].body, undefined);
 
     await bob.listen('Alice');
     const listened = await alice.express({ metadata: { bare: true }, force: true });
-    assert.deepEqual((await bob.catch()).activities[0].metadata, listened.activity.metadata);
+    assert.deepEqual((await bob.perceive()).activities[0].metadata, listened.activity.metadata);
 
     const history = await square.history({ limit: null });
     assert.deepEqual(history.activities.at(-1)?.metadata, listened.activity.metadata);
@@ -160,7 +160,7 @@ test('the shared express tool accepts a body or draft token and rejects metadata
   assert.equal(definition.inputSchema.parse({ draft: 'dr_test' }).draft, 'dr_test');
 });
 
-test('shared history and directed catch render metadata-only activities without exposing metadata', async () => {
+test('shared history and directed perceive render metadata-only activities without exposing metadata', async () => {
   const square = await localSquare();
   try {
     const alice = (await square.join('Alice', { owner: body('local') })).participant;
@@ -170,13 +170,13 @@ test('shared history and directed catch render metadata-only activities without 
     assert.deepEqual(directed.activity.metadata, metadata);
     const shared = name => SQUARE_TOOLS.find(tool => tool.name === name);
 
-    const caught = await shared('catch').run(square, { as: 'Bob' }, {}, { owner: body('local') });
-    assert.equal(typeof caught, 'string');
-    assert.ok(caught.includes(directed.activity.id));
-    assert.match(caught, /structured activity/);
-    assert.doesNotMatch(caught, /"nested"|"wake"|"values"/);
+    const perceived = await shared('perceive').run(square, { location: square.location, as: 'Bob' }, {}, { owner: body('local') });
+    assert.equal(typeof perceived, 'string');
+    assert.ok(perceived.includes(directed.activity.id));
+    assert.match(perceived, /structured activity/);
+    assert.doesNotMatch(perceived, /"nested"|"wake"|"values"/);
 
-    const history = await shared('history').run(square, {}, {}, { owner: body('local') });
+    const history = await shared('history').run(square, { location: square.location }, {}, { owner: body('local') });
     assert.ok(history.includes(directed.activity.id));
     assert.match(history, /structured activity/);
     assert.doesNotMatch(history, /"nested"|"wake"|"values"/);

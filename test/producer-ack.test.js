@@ -84,7 +84,7 @@ test('ACK after committed export ownership does not recall the captured post or 
     assert.deepEqual(await seat.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), { consumed: 1 });
     resume();
     await sending;
-    // Catch/retraction may remove an unclaimed card, but no pre-export suppression is claimed.
+    // Perceive/retraction may remove an unclaimed card, but no pre-export suppression is claimed.
     const session = await c.ledger.session(c.owner);
     assert.equal(session.state, 'attached');
     await c.square.send(notice());

@@ -11,9 +11,9 @@ export async function presentPendingAtBoundary<T>(
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal,
 ): Promise<T | undefined> {
-  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY, signal });
   try {
-    const session = await ledger.session(owner);
+    const session = await ledger.session(owner, signal);
     if (!session || session.state !== 'attached' || signal?.aborted) return undefined;
     const claim = await ledger.claimPresentation(owner, { generation: session.generation, budgetChars: CONTEXT_MAX - deliveryFrameOverhead({ tagged: true }), signal });
     if (!claim) return undefined;

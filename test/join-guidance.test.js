@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { run, tempSquare, withName, withPath, ROOT } from './square-cli-helpers.js';
 
-const joinBanner = 'stay within earshot — keep this catch open for new activity';
+const joinBanner = 'stay within earshot — keep this perceive open for new activity';
 const skillGuidance = '**Always give speech a body.**';
 
 test('join gives actionable listening guidance while the skill preserves embodied expression', (t) => {

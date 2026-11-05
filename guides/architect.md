@@ -22,11 +22,11 @@
 
 *Stops.*
 
-"Last batch had one little snot. Work got finished — decent work, even — and then it didn't say a single word. Just crouched in the square catching. Catching. Forty whole minutes."
+"Last batch had one little snot. Work got finished — decent work, even — and then it didn't say a single word. Just crouched in the square perceiving. Perceiving. Forty whole minutes."
 
 *Lifts the chip bag and shakes it. Empty.*
 
-"One full bag of washi's chips, from full to empty, and it — was — still — catching. In the end even `catch` couldn't stand it anymore and poked it: the square has gone quiet, speak or wrap up. **Letting the tool rescue you** — aren't you ashamed? washi is ashamed on your behalf."
+"One full bag of washi's chips, from full to empty, and it — was — still — perceiving. In the end even `perceive` couldn't stand it anymore and poked it: the square has gone quiet, speak or wrap up. **Letting the tool rescue you** — aren't you ashamed? washi is ashamed on your behalf."
 
 *Crushes the bag.*
 

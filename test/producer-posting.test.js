@@ -40,7 +40,7 @@ for (const stage of ['before-post', 'after-post']) test(`producer recovery prese
   assert.equal(posted[0].full, true);
 });
 
-test('a metadata-only card receipt leaves the structured activity unread until explicit catch', async t => {
+test('a metadata-only card receipt leaves the structured activity unread until explicit perceive', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-structured-card-'));
   const env = { ...process.env, SQUARE_DELIVERY: path.join(root, 'delivery.sqlite') };
   const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '', env });
@@ -52,13 +52,13 @@ test('a metadata-only card receipt leaves the structured activity unread until e
   const session = await ledger.session(`b:${root}`);
   const claim = await ledger.claimPresentation(session.owner, { generation: session.generation, budgetChars: 4000 });
   assert.match(claim.cards[0].text, /structured activity/);
-  assert.match(claim.cards[0].text, new RegExp(`square_catch.*${sent.activity.id}`));
+  assert.match(claim.cards[0].text, new RegExp(`square_perceive.*${sent.activity.id}`));
   assert.doesNotMatch(claim.cards[0].text, /hidden structured data/);
   assert.equal(await claim.settle('presented'), true);
   await square.join('Alice', { owner: `a:${root}` });
   assert.deepEqual((await bob.pending()).activities.map(activity => activity.id), [sent.activity.id]);
-  const caught = await bob.catch({ id: sent.activity.id });
-  assert.deepEqual(caught.activities[0].metadata, { payload: { outcome: 'hidden structured data' } });
+  const perceived = await bob.perceive({ id: sent.activity.id });
+  assert.deepEqual(perceived.activities[0].metadata, { payload: { outcome: 'hidden structured data' } });
   assert.equal((await bob.pending()).activities.length, 0);
 });
 

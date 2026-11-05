@@ -30,18 +30,18 @@ test('unlisten removes only its listen edge, preserves landed audience, and keep
   await alice.express('direct @Bob after unlisten', { force: true });
   const question = await bob.express('a question', { force: true });
   await alice.express('reply after unlisten', { reply: question.activity.id, force: true });
-  assert.deepEqual((await bob.catch()).activities.map(activity => activity.body), [
+  assert.deepEqual((await bob.perceive()).activities.map(activity => activity.body), [
     'before unlisten', 'direct @Bob after unlisten', 'reply after unlisten',
   ]);
 
   await bob.ignore('Alice');
   assert.equal((await bob.unlisten('Alice')).activity, null);
   await alice.express('blocked @Bob', { force: true });
-  assert.deepEqual((await bob.catch()).activities, []);
+  assert.deepEqual((await bob.perceive()).activities, []);
   await bob.listen('Alice');
   await alice.express('listening again', { force: true });
-  assert.deepEqual((await bob.catch()).activities.map(activity => activity.body), ['listening again']);
-  assert.equal((await bob.catch({ id: before.activity.id })).activities[0].body, 'before unlisten');
+  assert.deepEqual((await bob.perceive()).activities.map(activity => activity.body), ['listening again']);
+  assert.equal((await bob.perceive({ id: before.activity.id })).activities[0].body, 'before unlisten');
   const history = (await square.history({ limit: null })).activities;
   assert.equal(history.filter(activity => activity.kind === 'unlisten').length, 1);
   assert.equal(history.filter(activity => activity.kind === 'join').length, 3);

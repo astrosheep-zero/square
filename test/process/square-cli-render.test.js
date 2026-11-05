@@ -215,7 +215,7 @@ test('express does not surface delivery-health diagnostics during normal use', a
   assert.match(diagnosed.stdout, /delivery health.*unknown attempts.*repeated failures.*sessions without route/);
 });
 
-test('catch --mention renders matching says and suppresses room changes', async () => {
+test('perceive --mention renders matching says and suppresses room changes', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
     const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
@@ -224,7 +224,7 @@ test('catch --mention renders matching says and suppresses room changes', async 
     void alice;
   });
 
-  const watched = run(withName(file, 'Alice', ['catch', '--now', '--mention']), { env: { SQUARE_NOW_MS: '5000' } });
+  const watched = run(withName(file, 'Alice', ['perceive', '--now', '--mention']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(watched.status, 0, watched.stderr);
   assert.match(watched.stdout, /calls your name across the square — @Alice/);
   assert.match(watched.stdout, /@Bob\s+·/);
@@ -232,7 +232,7 @@ test('catch --mention renders matching says and suppresses room changes', async 
   assert.doesNotMatch(watched.stdout, /Cara stepped into the square/);
 });
 
-test('catch continuation preserves filters and page size', async () => {
+test('perceive continuation preserves filters and page size', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
     const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
@@ -241,16 +241,16 @@ test('catch continuation preserves filters and page size', async () => {
     for (let index = 0; index < 3; index += 1) await cara.express(`reply ${index} @Alice`, { force: true, mentions: ['Alice'] });
     void alice;
   });
-  const first = run(withName(file, 'Alice', ['catch', '--now', '--from', 'Bob,Cara', '--mention', '--limit', '5']));
+  const first = run(withName(file, 'Alice', ['perceive', '--now', '--from', 'Bob,Cara', '--mention', '--limit', '5']));
   assert.equal(first.status, 0, first.stderr);
   assert.match(first.stdout, /1 matching activity remains/);
-  assert.match(first.stdout, /catch --now --from Bob,Cara --mention --limit 5/);
-  assert.doesNotMatch(first.stdout, /catch --idle 30m/);
-  const invalidMention = run(withName(file, 'Alice', ['catch', '--now', '--mention', 'Bob']));
+  assert.match(first.stdout, /perceive --now --from Bob,Cara --mention --limit 5/);
+  assert.doesNotMatch(first.stdout, /perceive --idle 30m/);
+  const invalidMention = run(withName(file, 'Alice', ['perceive', '--now', '--mention', 'Bob']));
   assert.notEqual(invalidMention.status, 0);
 });
 
-test('catch --from renders named peers and rejects the removed --by flag', async () => {
+test('perceive --from renders named peers and rejects the removed --by flag', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
     const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
@@ -260,7 +260,7 @@ test('catch --from renders named peers and rejects the removed --by flag', async
     await bob.done();
   });
 
-  const watched = run(withName(file, 'Alice', ['catch', '--now', '--from', 'Bob']), { env: { SQUARE_NOW_MS: '7000' } });
+  const watched = run(withName(file, 'Alice', ['perceive', '--now', '--from', 'Bob']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(watched.status, 0, watched.stderr);
   assert.doesNotMatch(watched.stdout, /@Bob stepped into the square/);
   assert.match(watched.stdout, /@Bob\s+·/);
@@ -268,23 +268,23 @@ test('catch --from renders named peers and rejects the removed --by flag', async
   assert.doesNotMatch(watched.stdout, /Cara stepped into the square/);
   assert.doesNotMatch(watched.stdout, /hello from cara/);
 
-  const removed = run(withName(file, 'Alice', ['catch', '--now', '--by', 'Bob']));
+  const removed = run(withName(file, 'Alice', ['perceive', '--now', '--by', 'Bob']));
   assert.notEqual(removed.status, 0);
-  assert.match(removed.stderr, /✕ catch does not know --by/);
-  assert.match(removed.stderr, /square catch --help\n$/);
+  assert.match(removed.stderr, /✕ perceive does not know --by/);
+  assert.match(removed.stderr, /square perceive --help\n$/);
 });
 
-test('catch --now around the square excludes the current actor', async () => {
+test('perceive --now around the square excludes the current actor', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
     await square.join('Bob', { owner: body, wakeAddress });
     await square.join('Cara', { owner: body, wakeAddress });
   });
 
-  assert.equal(run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
-  assert.equal(run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['perceive', '--now']), { env: { SQUARE_NOW_MS: '4000' } }).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['perceive', '--now']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
 
-  const watched = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '6000' } });
+  const watched = run(withName(file, 'Alice', ['perceive', '--now']), { env: { SQUARE_NOW_MS: '6000' } });
   assert.equal(watched.status, 0, watched.stderr);
   assert.match(watched.stdout, /around the square/);
   assert.match(watched.stdout, /Bob/);
@@ -428,7 +428,7 @@ test('history hides read bookkeeping acts except in time and context windows', a
   }
 });
 
-test('ambient catch and history render full body to a mention target and presence to others', async () => {
+test('ambient perceive and history render full body to a mention target and presence to others', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
     await square.join('Bob', { owner: body, wakeAddress });
@@ -436,12 +436,12 @@ test('ambient catch and history render full body to a mention target and presenc
     await alice.express('secret reach phrase @Bob', { force: true, mentions: ['Bob'] });
   });
 
-  const bobWatch = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
+  const bobWatch = run(withName(file, 'Bob', ['perceive', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(bobWatch.status, 0, bobWatch.stderr);
   assert.match(bobWatch.stdout, /secret reach phrase/);
   assert.match(bobWatch.stdout, /@Alice\s+·/);
 
-  const caraWatch = run(withName(file, 'Cara', ['catch', '--now']), { env: { SQUARE_NOW_MS: '6000' } });
+  const caraWatch = run(withName(file, 'Cara', ['perceive', '--now']), { env: { SQUARE_NOW_MS: '6000' } });
   assert.equal(caraWatch.status, 0, caraWatch.stderr);
   assert.doesNotMatch(caraWatch.stdout, /talked to @Bob/);
   assert.doesNotMatch(caraWatch.stdout, /secret reach phrase/);
@@ -482,8 +482,8 @@ test('history anchors footprints at the last evidence of presence', async () => 
     await alice.express('shared coordinate @Bob', { force: true, mentions: ['Bob'] });
   });
 
-  const bobCatch = run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
-  assert.equal(bobCatch.status, 0, bobCatch.stderr);
+  const bobPerceive = run(withName(file, 'Bob', ['perceive', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(bobPerceive.status, 0, bobPerceive.stderr);
 
   const history = run(withPath(file, ['history', '--limit', '100']), { env: { SQUARE_NOW_MS: '6000' } });
   assert.equal(history.status, 0, history.stderr);
@@ -501,7 +501,7 @@ test('presence rendering omits a body when a bare say has no visible mention tar
     await alice.express('listener-only answer', { force: true });
   });
 
-  const caraWatch = run(withName(file, 'Cara', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
+  const caraWatch = run(withName(file, 'Cara', ['perceive', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(caraWatch.status, 0, caraWatch.stderr);
   assert.match(caraWatch.stdout, /● @Alice is nearby · just now/);
   assert.doesNotMatch(caraWatch.stdout, /\n  spoke/);
@@ -630,7 +630,7 @@ test('inbox stays read-only while codex admits pending attention once at a bound
     rows: [{ name: 'Bob', squarePath: fs.realpathSync(file), pending: 1 }],
     total: 1,
   });
-  assert.doesNotMatch(inspected1.stdout, /hey @Bob|notifications|catchLease/);
+  assert.doesNotMatch(inspected1.stdout, /hey @Bob|notifications|perceiveLease/);
 
   const textSnapshot = run(['inbox', '--for-owner', 'codex:sid-cli'], { cwd: root, env });
   assert.equal(textSnapshot.status, 0, textSnapshot.stderr);
@@ -802,7 +802,7 @@ test('status shows attention state and stable activity ids', async () => {
 
   const waiting = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '4000' } });
   assert.equal(waiting.status, 0, waiting.stderr);
-  assert.match(waiting.stdout, /@Alice.*caught up/);
+  assert.match(waiting.stdout, /@Alice.*up to date/);
   assert.match(waiting.stdout, /@Bob.*1 mention waiting/);
   assert.match(waiting.stdout, /● @Alice · act\/2 · .*\n    talked to @Bob/);
   assert.doesNotMatch(waiting.stdout, /please check @Bob/);
@@ -811,11 +811,11 @@ test('status shows attention state and stable activity ids', async () => {
   assert.match(personal.stdout, /@Bob.*1 mention waiting/);
   assert.match(personal.stdout, /please check @Bob/);
   assert.match(personal.stdout, /act\/\d+/);
-  assert.doesNotMatch(personal.stdout, /@Alice.*caught up/);
+  assert.doesNotMatch(personal.stdout, /@Alice.*up to date/);
 
-  assert.equal(run(withName(file, 'Bob', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
-  const caughtUp = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '6000' } });
-  assert.match(caughtUp.stdout, /@Bob.*caught up/);
+  assert.equal(run(withName(file, 'Bob', ['perceive', '--now']), { env: { SQUARE_NOW_MS: '5000' } }).status, 0);
+  const perceivedUp = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '6000' } });
+  assert.match(perceivedUp.stdout, /@Bob.*up to date/);
 });
 
 test('status header counts only participants still in the square', async () => {
@@ -829,14 +829,14 @@ test('status header counts only participants still in the square', async () => {
   assert.match(status.stdout, /— 1 in the square/);
 });
 
-test('historical body-bearing done events remain readable without becoming catch messages', async () => {
+test('historical body-bearing done events remain readable without becoming perceive messages', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
     await square.join('Bob', { owner: body, wakeAddress });
   });
-  const caught = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
-  assert.equal(caught.status, 0, caught.stderr);
-  assert.doesNotMatch(caught.stdout, /@Bob stepped into the square/);
+  const perceived = run(withName(file, 'Alice', ['perceive', '--now']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(perceived.status, 0, perceived.stderr);
+  assert.doesNotMatch(perceived.stdout, /@Bob stepped into the square/);
 
   // Old artifacts can contain a done body even though new departures are bodyless.
   const artifact = createArtifactPort(file);
@@ -845,7 +845,7 @@ test('historical body-bearing done events remain readable without becoming catch
     await artifact.transactAs({ kind: 'participant', seat: { participant: seat.participant, owner: seat.owner, generation: seat.generation } }, (facts) =>
       facts.land({ kind: 'done', actor: 'Bob', at: 6000, body: 'final note' }));
   } finally { await artifact.close(); }
-  const afterDone = run(withName(file, 'Alice', ['catch', '--now']), { env: { SQUARE_NOW_MS: '7000' } });
+  const afterDone = run(withName(file, 'Alice', ['perceive', '--now']), { env: { SQUARE_NOW_MS: '7000' } });
   assert.equal(afterDone.status, 0, afterDone.stderr);
   assert.match(afterDone.stdout, /✓ everyone else has left — the square is yours alone/);
   assert.equal((afterDone.stdout.match(/final note/g) ?? []).length, 0);
@@ -866,7 +866,7 @@ test('an unread join alone does not block express', async () => {
   assert.equal(expressed.status, 0, expressed.stderr);
   assert.match(expressed.stdout, /you walk over to @Bob — act\/\d+/);
   assert.doesNotMatch(expressed.stdout, /@Bob stepped into the square/);
-  assert.doesNotMatch(expressed.stdout, /catch --now/);
+  assert.doesNotMatch(expressed.stdout, /perceive --now/);
 });
 
 test('throttled, blocked, and capped activities preserve executable drafts', async () => {

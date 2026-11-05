@@ -1,15 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { randomUUID } from 'node:crypto';
 import { Square } from '../dist/square-api.js';
-import { createArtifactPort } from '../dist/artifact.js';
 
 const idsOf = (page) => page.activities.map((activity) => activity.id);
 
 async function createSquare(t) {
-  const artifact = createArtifactPort(':memory:', { hardCap: null, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
-  const square = await Square.at({ path: `/tmp/square-cursor-${randomUUID()}.square`, resources: { artifact: () => artifact, close: async () => {} } });
-  t.after(async () => { await square.close(); await artifact.close(); });
+  const square = Square.inMemory({ markdown: '' });
+  t.after(() => square.close());
   return square;
 }
 

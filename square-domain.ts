@@ -4,7 +4,7 @@ import { resolveAudience } from './attention.js';
 import type { ArtifactWriteAuthority, AttentionFact, LandedRecipient, ParticipantFact, SeatRef, SquareRead, SquareWrite } from './ports.js';
 import type { ProducerWrite } from './square-post.js';
 import { freshWatchLease } from './runtime.js';
-import { leaseOwnsNotification } from './catch-selection.js';
+import { leaseOwnsNotification } from './perceive-selection.js';
 
 export interface LandingEffect {
   readonly activity: ActDraft & { readonly index: number };

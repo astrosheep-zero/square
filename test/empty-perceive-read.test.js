@@ -22,16 +22,16 @@ async function fixture(t, extra = [], hardCap = null) {
   return { cell, artifact, square, bob: await square.participant('bOB', { owner: bobSeat.owner }), seats, bobSeat };
 }
 function withoutBodies(facts) {
-  return { ...facts, activity() { assert.fail('catch probe must not hydrate a body'); }, activities() { assert.fail('catch probe must not hydrate bodies'); } };
+  return { ...facts, activity() { assert.fail('perceive probe must not hydrate a body'); }, activities() { assert.fail('perceive probe must not hydrate bodies'); } };
 }
 function noParticipantWriter(cell) {
   return (authority, change, signal) => {
-    assert.notEqual(authority.kind, 'participant', 'empty catch must not acquire a participant writer');
+    assert.notEqual(authority.kind, 'participant', 'empty perceive must not acquire a participant writer');
     return cell.transactAs(authority, change, signal);
   };
 }
 
-test('an empty filtered catch returns its snapshot without bodies, a writer, or receipts', async t => {
+test('an empty filtered perceive returns its snapshot without bodies, a writer, or receipts', async t => {
   const { cell, artifact, bob } = await fixture(t, [
     { kind: 'join', actor: 'Cara', at: 2 },
     { kind: 'say', actor: 'Cara', at: 3, body: 'still pending', mentions: ['Bob'] },
@@ -40,7 +40,7 @@ test('an empty filtered catch returns its snapshot without bodies, a writer, or 
   const revision = await cell.revision();
   artifact.read = (select, signal) => cell.read(facts => select(withoutBodies(facts)), signal);
   artifact.transactAs = noParticipantWriter(cell);
-  const result = await bob.catch({ from: ['Alice'], mention: true, limit: 1, observe: true });
+  const result = await bob.perceive({ from: ['Alice'], mention: true, limit: 1, observe: true });
   assert.deepEqual({ ...result, observation: undefined }, { activities: [], remaining: 0, reason: 'capped', observation: undefined });
   const { observation } = result;
   assert.deepEqual([observation.participant, observation.standingCount, observation.now, observation.ownActivityCount, observation.hardCap], ['Bob', 3, 100, 1, 1]);
@@ -72,45 +72,45 @@ test('a nonempty probe records nothing; the writer reselects, hydrates once, and
     if (authority.kind === 'participant') writes++;
     return cell.transactAs(authority, facts => change({ ...facts, activities(indexes) { if (authority.kind === 'participant') hydrated.push([...indexes]); return facts.activities(indexes); } }), signal);
   };
-  const caught = await bob.catch({ from: ['alice'], mention: true, limit: 1, observe: true });
-  assert.deepEqual(caught.activities.map(({ id, body }) => ({ id, body })), [{ id: 'act/3', body: 'selected by writer' }]);
-  assert.equal(caught.remaining, 1);
-  assert.equal(caught.reason, 'drained');
-  assert.equal(caught.activities[0].via, 'mention');
+  const perceived = await bob.perceive({ from: ['alice'], mention: true, limit: 1, observe: true });
+  assert.deepEqual(perceived.activities.map(({ id, body }) => ({ id, body })), [{ id: 'act/3', body: 'selected by writer' }]);
+  assert.equal(perceived.remaining, 1);
+  assert.equal(perceived.reason, 'drained');
+  assert.equal(perceived.activities[0].via, 'mention');
   assert.equal(writes, 1);
   assert.deepEqual(hydrated, [[3]]);
   assert.deepEqual((await cell.read(facts => [facts.receipt('Bob', 2), facts.receipt('Bob', 3), facts.receipt('Bob', 4)])).value, [{ at: 50 }, { at: 100 }, undefined]);
 });
 
-test('exact-ID catches retain their repeatable receipt transaction and never use the empty probe', async t => {
+test('exact-ID perceive calls retain their repeatable receipt transaction and never use the empty probe', async t => {
   const { cell, artifact, bob } = await fixture(t, [{ kind: 'say', actor: 'Alice', at: 2, body: 'exact', mentions: ['Bob'] }]);
   const marked = [];
-  artifact.read = (select, signal) => cell.read(facts => select({ ...facts, directed() { assert.fail('ID catch must not probe a directed page'); } }), signal);
+  artifact.read = (select, signal) => cell.read(facts => select({ ...facts, directed() { assert.fail('ID perceive must not probe a directed page'); } }), signal);
   artifact.transactAs = (authority, change, signal) => cell.transactAs(authority, facts => change({
     ...facts, markSeen(name, indexes, at) { marked.push([...indexes]); return facts.markSeen(name, indexes, at); },
   }), signal);
-  const first = await bob.catch({ id: 'act/2' });
-  assert.deepEqual(await bob.catch({ id: 'act/2' }), first);
+  const first = await bob.perceive({ id: 'act/2' });
+  assert.deepEqual(await bob.perceive({ id: 'act/2' }), first);
   assert.deepEqual(marked, [[2], [2]]);
 });
 
-test('empty catch validates caller, filters, limits, and semantic time without a writer', async t => {
+test('empty perceive validates caller, filters, limits, and semantic time without a writer', async t => {
   const { cell, artifact, square } = await fixture(t);
   await assert.rejects(square.participant('Missing', { owner: bodyFor('Bob') }), { code: 'already_joined' });
   artifact.transactAs = noParticipantWriter(cell);
   const bob = await square.participant('Bob', { owner: bodyFor('Bob') });
-  await assert.rejects(bob.catch({ from: ['Missing'] }), error => error.code === 'invalid_args' && error.facts.reason === 'never_joined');
-  for (const limit of [0, 101, 1.5]) await assert.rejects(bob.catch({ limit }), { code: 'invalid_args' });
+  await assert.rejects(bob.perceive({ from: ['Missing'] }), error => error.code === 'invalid_args' && error.facts.reason === 'never_joined');
+  for (const limit of [0, 101, 1.5]) await assert.rejects(bob.perceive({ limit }), { code: 'invalid_args' });
   for (const at of [NaN, Infinity, '100', -0.5]) {
     const resource = await resourceWithArtifact(t, artifact, () => at);
     const participant = await resource.participant('Bob', { owner: bodyFor('Bob') });
-    if (at === -0.5) assert.equal((await participant.catch({ observe: true })).observation.now, at);
-    else await assert.rejects(participant.catch(), { code: 'invalid_args' });
+    if (at === -0.5) assert.equal((await participant.perceive({ observe: true })).observation.now, at);
+    else await assert.rejects(participant.perceive(), { code: 'invalid_args' });
   }
   assert.equal((await cell.read(facts => facts.receipt('Bob', 2))).value, undefined);
 });
 
-test('catch propagates cancellation through probe and writer but keeps a committed receipt result', async t => {
+test('perceive propagates cancellation through probe and writer but keeps a committed receipt result', async t => {
   const { cell, artifact, bob } = await fixture(t, [{ kind: 'say', actor: 'Alice', at: 2, body: 'pending', mentions: ['Bob'] }]);
   const controller = new AbortController(), reason = new Error('cancelled after probe');
   artifact.read = async (select, signal) => {
@@ -120,9 +120,9 @@ test('catch propagates cancellation through probe and writer but keeps a committ
     return result;
   };
   artifact.transactAs = (authority, change, signal) => cell.transactAs(authority, change, signal);
-  await assert.rejects(bob.catch({}, { signal: controller.signal }), error => error === reason);
+  await assert.rejects(bob.perceive({}, { signal: controller.signal }), error => error === reason);
   assert.equal((await cell.read(facts => facts.receipt('Bob', 2))).value, undefined);
-  await assert.rejects(bob.catch({}, { signal: controller.signal }), error => error === reason);
+  await assert.rejects(bob.perceive({}, { signal: controller.signal }), error => error === reason);
   artifact.read = cell.read;
   const late = new AbortController();
   artifact.transactAs = async (authority, change, signal) => {
@@ -130,12 +130,12 @@ test('catch propagates cancellation through probe and writer but keeps a committ
     if (authority.kind === 'participant') late.abort(new Error('response cancelled after commit'));
     return result;
   };
-  const committed = await bob.catch({}, { signal: late.signal });
+  const committed = await bob.perceive({}, { signal: late.signal });
   assert.equal(committed.activities[0].body, 'pending');
   assert.deepEqual((await cell.read(facts => facts.receipt('Bob', 2))).value, { at: 100 });
 });
 
-test('empty catch keeps its completed snapshot after late read cancellation', async t => {
+test('empty perceive keeps its completed snapshot after late read cancellation', async t => {
   const { cell, artifact, bob } = await fixture(t);
   const controller = new AbortController(), order = [];
   artifact.read = async (select, signal) => {
@@ -145,7 +145,7 @@ test('empty catch keeps its completed snapshot after late read cancellation', as
     return result;
   };
   artifact.transactAs = noParticipantWriter(cell);
-  assert.deepEqual((await bob.catch({}, { signal: controller.signal })).activities, []);
+  assert.deepEqual((await bob.perceive({}, { signal: controller.signal })).activities, []);
   assert.deepEqual(order, ['probe']);
   assert.equal(controller.signal.aborted, true);
 });

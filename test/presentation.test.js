@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { catchHint, expressHint } from '../dist/hints.js';
+import { perceiveHint, expressHint } from '../dist/hints.js';
 import test from 'node:test';
 
 import {
@@ -77,28 +77,28 @@ test('blocked activity output bounds unread participant summaries', () => {
   assert.match(output, /2 more participants have unread activity/);
 });
 
-test('active catches explain the existing lease and point to replacement', () => {
+test('active perceive calls explain the existing lease and point to replacement', () => {
   const output = renderWatchAlreadyActive({ squarePath: '.square/PUBLIC.square', name: 'codex-155777a843b6' });
-  assert.match(output, /you are already catching/);
-  assert.match(output, /active catch is already running for @codex-155777a843b6/);
-  assert.match(output, /--replace lets a new catch take over/);
-  assert.match(output, /catch --idle 30m --replace$/);
+  assert.match(output, /you are already perceiving/);
+  assert.match(output, /active perceive is already running for @codex-155777a843b6/);
+  assert.match(output, /--replace lets a new perceive take over/);
+  assert.match(output, /perceive --idle 30m --replace$/);
 });
 
-test('quiet graduates with the idle length and an empty catch never repeats its own command', () => {
-  const base = { squarePath: '.square/PUBLIC.square', name: 'Alice', showCatchHint: true };
+test('quiet graduates with the idle length and an empty perceive never repeats its own command', () => {
+  const base = { squarePath: '.square/PUBLIC.square', name: 'Alice', showPerceiveHint: true };
   assert.match(renderWatchStatus({ ...base, status: 'idle', idleMs: 45_000 }), /^○ only footsteps in the square — nothing new for you$/m);
   assert.match(renderWatchStatus({ ...base, status: 'idle', idleMs: 5 * 60_000 }), /^○ dust settles on the flagstones — 5m of quiet$/m);
   assert.match(renderWatchStatus({ ...base, status: 'idle', idleMs: 2 * 60 * 60_000 }), /^○ dust lies thick — 2h of quiet$/m);
 
   const empty = renderWatchStatus({ ...base, status: 'drained' });
   assert.match(empty, /^○ only footsteps in the square — nothing new for you$/m);
-  assert.match(empty, /catch --idle 30m/);
-  assert.doesNotMatch(empty, /catch --now/);
+  assert.match(empty, /perceive --idle 30m/);
+  assert.doesNotMatch(empty, /perceive --now/);
 
-  // A quiet catch repeats neither itself nor a second copy of the same command.
+  // A quiet perceive repeats neither itself nor a second copy of the same command.
   const stale = renderWatchStatus({ ...base, status: 'idle', idleMs: 45_000 });
-  assert.doesNotMatch(stale, /catch --now/);
+  assert.doesNotMatch(stale, /perceive --now/);
 });
 
 test('the capped status counts what was spoken and the throttle names its lull', () => {
@@ -119,17 +119,17 @@ test('express hints surface on the first activity and every fifth, rotating dist
   assert.equal(expressHint(2), undefined);
 });
 
-test('catch hints surface on the first catch and then once per ten caught', () => {
-  assert.equal(typeof catchHint(0, 3), 'string');
-  assert.equal(catchHint(3, 9), undefined);
-  assert.equal(typeof catchHint(9, 12), 'string');
-  assert.notEqual(catchHint(0, 3), catchHint(9, 12));
-  assert.equal(catchHint(12, 12), undefined);
+test('perceive hints surface on the first perceive and then once per ten perceived', () => {
+  assert.equal(typeof perceiveHint(0, 3), 'string');
+  assert.equal(perceiveHint(3, 9), undefined);
+  assert.equal(typeof perceiveHint(9, 12), 'string');
+  assert.notEqual(perceiveHint(0, 3), perceiveHint(9, 12));
+  assert.equal(perceiveHint(12, 12), undefined);
 });
 
-test('replace reports when there was no active catch to replace', () => {
+test('replace reports when there was no active perceive to replace', () => {
   const output = renderWatchReplaceMissing({ squarePath: '.square/PUBLIC.square', name: 'Alice' });
-  assert.match(output, /^· no catch stood here/);
+  assert.match(output, /^· no perceive stood here/);
   assert.match(output, /yours takes the spot/);
-  assert.equal(renderWatchForceTakeover({ squarePath: '.square/PUBLIC.square', name: 'Alice' }), '✓ your new catch takes over');
+  assert.equal(renderWatchForceTakeover({ squarePath: '.square/PUBLIC.square', name: 'Alice' }), '✓ your new perceive takes over');
 });

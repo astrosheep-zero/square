@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { renderCatchOutcome } from '../dist/cli/catch-presentation.js';
+import { renderPerceiveOutcome } from '../dist/cli/perceive-presentation.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
 import { createArtifactPort } from '../dist/artifact.js';
-import { catchPresence } from '../dist/views.js';
+import { perceivePresence } from '../dist/views.js';
 
 /** Counts artifact callbacks and the activity rows/selectors each read actually asks for. */
 function instrumentCell(cell) {
@@ -53,14 +53,14 @@ async function stateWithHistory(unrelatedSays, participants = 96) {
   return { cell, p0 };
 }
 
-test('catch hydrates only its page while the remaining count is a bounded fact read', async t => {
+test('perceive hydrates only its page while the remaining count is a bounded fact read', async t => {
   const { cell, p0 } = await stateWithHistory(900);
   const { counters, artifact } = instrumentCell(cell);
   const square = await resourceWithArtifact(t, artifact, () => 2_000);
   try {
-    const caught = await (await square.participant('P0', { owner: p0.owner })).catch();
-    assert.equal(caught.activities.length, 10);
-    assert.equal(caught.remaining, 890);
+    const perceived = await (await square.participant('P0', { owner: p0.owner })).perceive();
+    assert.equal(perceived.activities.length, 10);
+    assert.equal(perceived.remaining, 890);
     assert.deepEqual(counters.hydrated.flat(), Array.from({ length: 10 }, (_value, index) => index + 97));
     const remainingFact = counters.counts.find((entry) => entry.method === 'directedCount' && entry.filter.unseenOnly === true);
     assert.ok(remainingFact, 'remaining must come from an explicit unseen count, never from hydrated bodies');
@@ -79,10 +79,10 @@ test('recipient hot reads do not hydrate unrelated history as the square grows',
     const { counters, artifact } = instrumentCell(cell);
     try {
       const square = await resourceWithArtifact(t, artifact, () => 2_000);
-      const caught = await (await square.participant('P0', { owner: p0.owner })).catch();
+      const perceived = await (await square.participant('P0', { owner: p0.owner })).perceive();
       measurements.push({
-        delivered: caught.activities.length,
-        remaining: caught.remaining,
+        delivered: perceived.activities.length,
+        remaining: perceived.remaining,
         hydrated: counters.hydrated.flat().length,
         largestBatch: Math.max(0, ...counters.hydrated.map((batch) => batch.length)),
         headReads: counters.counts.filter((entry) => entry.method === 'activityCount').length,
@@ -98,26 +98,26 @@ test('recipient hot reads do not hydrate unrelated history as the square grows',
   assert.equal(measurements[0].headReads, measurements[1].headReads, 'selector cost must not scale with unrelated history');
 });
 
-test('catch keeps transaction-selected records and presence enrichment/rendering never rehydrates them', async t => {
+test('perceive keeps transaction-selected records and presence enrichment/rendering never rehydrates them', async t => {
   const { cell, p0 } = await stateWithHistory(900, 1);
   const { counters, artifact } = instrumentCell(cell);
   const square = await resourceWithArtifact(t, artifact, () => 100_000);
   const measurements = () => structuredClone(counters);
   try {
     const participant = await square.participant('P0', { owner: p0.owner });
-    const outcome = await participant.catch({ observe: true });
-    const caught = outcome.observation;
-    const caughtIds = Array.from({ length: 10 }, (_value, index) => `act/${index + 2}`);
-    assert.deepEqual(outcome.activities.map(activity => activity.id), caughtIds);
+    const outcome = await participant.perceive({ observe: true });
+    const perceived = outcome.observation;
+    const perceivedIds = Array.from({ length: 10 }, (_value, index) => `act/${index + 2}`);
+    assert.deepEqual(outcome.activities.map(activity => activity.id), perceivedIds);
     assert.equal(outcome.remaining, 890);
-    assert.equal(caught.standingCount, 2);
-    assert.deepEqual(counters.ordinals, [], 'catch does not query history ordinals');
-    assert.deepEqual(counters.hydrated.flat(), caughtIds.map((id) => Number(id.slice(4))));
+    assert.equal(perceived.standingCount, 2);
+    assert.deepEqual(counters.ordinals, [], 'perceive does not query history ordinals');
+    assert.deepEqual(counters.hydrated.flat(), perceivedIds.map((id) => Number(id.slice(4))));
 
-    const presence = (await artifact.read(facts => catchPresence(facts, 100_000))).value;
-    assert.deepEqual(counters.hydrated.flat(), caughtIds.map((id) => Number(id.slice(4))), 'nearby enrichment must not re-fetch the committed page');
+    const presence = (await artifact.read(facts => perceivePresence(facts, 100_000))).value;
+    assert.deepEqual(counters.hydrated.flat(), perceivedIds.map((id) => Number(id.slice(4))), 'nearby enrichment must not re-fetch the committed page');
     const beforeRender = measurements();
-    const output = renderCatchOutcome('memory', outcome);
+    const output = renderPerceiveOutcome('memory', outcome);
     assert.equal(output.exitCode, 0);
     assert.match(output.stdout, /dispatch 0 @P0/);
     assert.doesNotMatch(output.stdout, /dispatch 899 @P0/);
@@ -127,12 +127,12 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
     // A valid sender filter with no matching pending activity settles empty;
     // unrelated remaining activity cannot force body hydration for that result.
     const hydrationCount = counters.hydrated.length;
-    const emptyOutcome = await participant.catch({ from: ['P0'], observe: true });
+    const emptyOutcome = await participant.perceive({ from: ['P0'], observe: true });
     assert.deepEqual(emptyOutcome.activities, []);
     assert.equal(emptyOutcome.observation.standingCount, 2);
-    assert.equal(counters.hydrated.length, hydrationCount, 'empty catch must not request body hydration');
+    assert.equal(counters.hydrated.length, hydrationCount, 'empty perceive must not request body hydration');
     const beforeEmptyRender = measurements();
-    const emptyOutput = renderCatchOutcome('memory', emptyOutcome, { from: ['P0'] });
+    const emptyOutput = renderPerceiveOutcome('memory', emptyOutcome, { from: ['P0'] });
     assert.equal(emptyOutput.exitCode, 0);
     assert.doesNotMatch(emptyOutput.stdout, /dispatch \d+ @P0/);
     assert.deepEqual(measurements(), beforeEmptyRender);
@@ -141,7 +141,7 @@ test('catch keeps transaction-selected records and presence enrichment/rendering
   }
 });
 
-test('catch fences selection and captures the page facts in its receipt transaction', async t => {
+test('perceive fences selection and captures the page facts in its receipt transaction', async t => {
   const cell = createArtifactPort(':memory:', { hardCap: 5, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
   t.after(() => cell.close());
   const artifact = { ...cell };
@@ -163,7 +163,7 @@ test('catch fences selection and captures the page facts in its receipt transact
     }
     return result;
   };
-  const interrupted = await bob.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
+  const interrupted = await bob.perceive({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
   assert.equal(interrupted.reason, 'replaced');
   assert.equal(replaced, true);
   assert.equal((await cell.read(facts => facts.receipt('Bob', 2))).value, undefined, 'a replaced lease cannot insert a receipt');
@@ -179,23 +179,23 @@ test('catch fences selection and captures the page facts in its receipt transact
     }
     return result;
   };
-  const caught = await bob.catch({ limit: 1, observe: true });
-  assert.equal(typeof caught.hint, 'string', 'the first catch carries a hint');
-  assert.deepEqual(caught.activities, [{ id: 'act/2', kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], at: 100, perception: 'full', via: 'mention' }]);
-  assert.equal(caught.reason, 'drained');
-  assert.equal(caught.remaining, 1);
-  assert.equal(caught.observation.standingCount, 2);
-  assert.equal(caught.observation.now, 100);
-  assert.equal(caught.observation.ownActivityCount, 0);
-  assert.equal(caught.observation.hardCap, 5);
-  assert.equal(caught.observation.enrichmentUnavailable, true);
+  const perceived = await bob.perceive({ limit: 1, observe: true });
+  assert.equal(typeof perceived.hint, 'string', 'the first perceive carries a hint');
+  assert.deepEqual(perceived.activities, [{ id: 'act/2', kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], at: 100, perception: 'full', via: 'mention' }]);
+  assert.equal(perceived.reason, 'drained');
+  assert.equal(perceived.remaining, 1);
+  assert.equal(perceived.observation.standingCount, 2);
+  assert.equal(perceived.observation.now, 100);
+  assert.equal(perceived.observation.ownActivityCount, 0);
+  assert.equal(perceived.observation.hardCap, 5);
+  assert.equal(perceived.observation.enrichmentUnavailable, true);
   assert.deepEqual((await cell.read(facts => ({
     receipt: facts.receipt('Bob', 2), remaining: facts.directedCount('Bob', { unseenOnly: true }),
     ownActivityCount: facts.participant('Bob').sayCount,
   }))).value, { receipt: { at: 100 }, remaining: 2, ownActivityCount: 1 });
 });
 
-test('a capped idle catch through the shared SDK owner hydrates no bodies and writes no receipts', async t => {
+test('a capped idle perceive through the shared SDK owner hydrates no bodies and writes no receipts', async t => {
   const cell = createArtifactPort(':memory:', { hardCap: 1, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
   t.after(() => cell.close());
   const { counters, artifact } = instrumentCell(cell);
@@ -208,8 +208,8 @@ test('a capped idle catch through the shared SDK owner hydrates no bodies and wr
   const before = (await cell.read(facts => facts.receipt('P0', 2))).value;
   assert.equal(before, undefined);
   counters.hydrated = [];
-  const caught = await participant.catch({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
-  assert.deepEqual(caught, { activities: [], remaining: 1, reason: 'capped' });
+  const perceived = await participant.perceive({ idle: 1 }, { signal: AbortSignal.timeout(2000) });
+  assert.deepEqual(perceived, { activities: [], remaining: 1, reason: 'capped' });
   assert.equal(counters.hydrated.flat().length, 0);
   assert.equal((await cell.read(facts => facts.receipt('P0', 2))).value, before);
 });

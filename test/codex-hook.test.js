@@ -57,7 +57,7 @@ test('the actual CLI writes one hook response before recording its receipt', asy
   assert.equal(second.stdout, '');
 });
 
-test('actual PostToolUse presents event-correct context exactly once', async t => {
+for (const event of ['UserPromptSubmit', 'PostToolUse']) test(`actual ${event} presents event-correct context exactly once`, async t => {
   const { env, ledger, owner } = await fixture(t);
   const cli = fileURLToPath(new URL('../dist/square.js', import.meta.url));
   const event = 'PostToolUse';

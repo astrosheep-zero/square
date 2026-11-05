@@ -58,14 +58,14 @@ test('unmatched body @names land; explicit --mention still offers a runnable rep
   assert.equal(executePrinted(flagRetries[0]).status, 0);
 });
 
-test('catch --id refuses an activity that is not addressed to the caller with ✕ and a runnable read', shellReplay, async () => {
+test('perceive --id refuses an activity that is not addressed to the caller with ✕ and a runnable read', shellReplay, async () => {
   const file = await persistSquare(async ({ square, body }) => {
     const alice = (await square.join('Alice', { owner: body })).participant;
     await square.join('Bob', { owner: body });
     await alice.express('for nobody in particular', { force: true, noMention: true });
   });
 
-  const undirected = run(withName(file, 'Bob', ['catch', '--id', 'act/2']));
+  const undirected = run(withName(file, 'Bob', ['perceive', '--id', 'act/2']));
   assert.equal(undirected.status, 2, undirected.stdout + undirected.stderr);
   assert.match(undirected.stderr, /✕ act\/2 isn't addressed to you/);
   const anchored = undirected.stderr.split('\n').find((line) => /history/.test(line));
@@ -73,7 +73,7 @@ test('catch --id refuses an activity that is not addressed to the caller with �
   assert.match(anchored, /history --at act\/2 -C 2/);
   assert.equal(executePrinted(anchored).status, 0);
 
-  const unknown = run(withName(file, 'Bob', ['catch', '--id', 'act/99']));
+  const unknown = run(withName(file, 'Bob', ['perceive', '--id', 'act/99']));
   assert.equal(unknown.status, 2, unknown.stdout + unknown.stderr);
   assert.match(unknown.stderr, /✕ act\/99 isn't addressed to you/);
   const page = unknown.stderr.split('\n').find((line) => /history/.test(line));
@@ -205,7 +205,7 @@ test('history closes the page with one presence anchor line', async () => {
     await alice.express('shared coordinate @Bob', { force: true, mentions: ['Bob'] });
   });
 
-  assert.equal(run(withName(file, 'Bob', ['catch', '--now'])).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['perceive', '--now'])).status, 0);
   const history = run(['--location', file, 'history', '--limit', '100']);
   assert.equal(history.status, 0, history.stderr);
   const lines = history.stdout.trimEnd().split('\n');

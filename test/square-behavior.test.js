@@ -101,21 +101,21 @@ test('any self activity advances the actor cursor', async () => {
   await closeSquare(square);
 });
 
-test('catch mention returns only matching says and omits peer room changes', async () => {
+test('perceive mention returns only matching says and omits peer room changes', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
   await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
   await square.join('Cara', { owner: squareBody });
-  const caught = await alice.catch({ mention: true });
-  assert.deepEqual(caught.activities.map((activity) => ({ id: activity.id, kind: activity.kind, body: activity.body })), [
+  const perceived = await alice.perceive({ mention: true });
+  assert.deepEqual(perceived.activities.map((activity) => ({ id: activity.id, kind: activity.kind, body: activity.body })), [
     { id: 'act/2', kind: 'say', body: 'hello @Alice' },
   ]);
-  assert.equal(caught.activities.some((activity) => activity.kind === 'join'), false);
+  assert.equal(perceived.activities.some((activity) => activity.kind === 'join'), false);
   await closeSquare(square);
 });
 
-test('catch from a named peer keeps that peer\'s directed says only', async () => {
+test('perceive from a named peer keeps that peer\'s directed says only', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
@@ -123,57 +123,57 @@ test('catch from a named peer keeps that peer\'s directed says only', async () =
   await bob.express('hello from bob @Alice', { force: true, mentions: ['Alice'] });
   await cara.express('hello from cara @Alice', { force: true, mentions: ['Alice'] });
   await bob.done();
-  const caught = await alice.catch({ from: ['Bob'] });
+  const perceived = await alice.perceive({ from: ['Bob'] });
   assert.deepEqual(
-    caught.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor, body: activity.body })),
+    perceived.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor, body: activity.body })),
     [{ kind: 'say', actor: 'Bob', body: 'hello from bob @Alice' }],
   );
-  assert.equal(caught.activities.some((activity) => activity.actor === 'Cara'), false);
+  assert.equal(perceived.activities.some((activity) => activity.actor === 'Cara'), false);
   await closeSquare(square);
 });
 
-test('catch after a rejoin excludes departure and return presence', async () => {
+test('perceive after a rejoin excludes departure and return presence', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
-  await alice.catch();
+  await alice.perceive();
   await bob.done();
   await square.join('Bob', { owner: squareBody });
-  const caught = await alice.catch();
+  const perceived = await alice.perceive();
   assert.deepEqual(
-    caught.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor })),
+    perceived.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor })),
     [],
   );
   await closeSquare(square);
 });
 
-test('unfiltered catch excludes peer room changes', async () => {
+test('unfiltered perceive excludes peer room changes', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   await square.join('Bob', { owner: squareBody });
   await square.join('Cara', { owner: squareBody });
-  const caught = await alice.catch();
+  const perceived = await alice.perceive();
   assert.deepEqual(
-    caught.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor })),
+    perceived.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor })),
     [],
   );
   await closeSquare(square);
 });
 
-test('catch still delivers an unreceipted mention behind a self-advanced cursor', async () => {
+test('perceive still delivers an unreceipted mention behind a self-advanced cursor', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
   await alice.express('question @Bob', { force: true, mentions: ['Bob'] });
   await bob.express('answer @Alice', { force: true, mentions: ['Alice'] });
-  const caught = await bob.catch();
-  assert.equal(caught.activities.some((activity) => activity.body === 'question @Bob'), true);
-  const again = await bob.catch();
+  const perceived = await bob.perceive();
+  assert.equal(perceived.activities.some((activity) => activity.body === 'question @Bob'), true);
+  const again = await bob.perceive();
   assert.deepEqual(again.activities, []);
   await closeSquare(square);
 });
 
-test('catch and express gating share directed-say attention', async () => {
+test('perceive and express gating share directed-say attention', async () => {
   const time = tickingClock();
   const square = Square.inMemory({ markdown: 'context', clock: time.now });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
@@ -184,19 +184,19 @@ test('catch and express gating share directed-say attention', async () => {
     () => alice.express('reply @Bob'),
     (error) => error instanceof SquareError && error.code === 'behind',
   );
-  const caught = await alice.catch();
-  assert.deepEqual(caught.activities.map((activity) => activity.body), ['direct @Alice']);
+  const perceived = await alice.perceive();
+  assert.deepEqual(perceived.activities.map((activity) => activity.body), ['direct @Alice']);
   await closeSquare(square);
 });
 
-test('a listener receives a bare say through catch without presence obligations', async () => {
+test('a listener receives a bare say through perceive without presence obligations', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
   await bob.listen('Alice');
   const expressed = await alice.express('bare attention', { force: true });
-  const caught = await bob.catch();
-  assert.deepEqual(caught.activities.map((activity) => activity.id), [expressed.activity.id]);
+  const perceived = await bob.perceive();
+  assert.deepEqual(perceived.activities.map((activity) => activity.id), [expressed.activity.id]);
   await closeSquare(square);
 });
 
@@ -221,14 +221,14 @@ test('history from a named participant keeps that participant\'s activities', as
   await closeSquare(square);
 });
 
-test('catch is directed while history is the full archive', async () => {
+test('perceive is directed while history is the full archive', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
   const cara = (await square.join('Cara', { owner: squareBody })).participant;
   const expressed = await alice.express('secret reach phrase @Bob', { force: true, mentions: ['Bob'] });
-  const bobCaught = await bob.catch();
-  const bobMention = bobCaught.activities.find((activity) => activity.id === expressed.activity.id);
+  const bobPerceived = await bob.perceive();
+  const bobMention = bobPerceived.activities.find((activity) => activity.id === expressed.activity.id);
   assert.deepEqual(bobMention, { ...expressed.activity, perception: 'full', via: 'mention' });
   const caraMention = ((await square.history({ limit: 100 })).activities).find((activity) => activity.id === expressed.activity.id);
   assert.equal(caraMention?.body, 'secret reach phrase @Bob');
@@ -243,7 +243,7 @@ test('catch is directed while history is the full archive', async () => {
   await closeSquare(square);
 });
 
-test('history remains read-only until catch writes a delivery receipt', async () => {
+test('history remains read-only until perceive writes a delivery receipt', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
@@ -252,10 +252,10 @@ test('history remains read-only until catch writes a delivery receipt', async ()
   await square.history({ limit: 100 });
   await square.history({ search: { text: 'please check', mode: 'regex' } });
   assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), false);
-  const caught = await bob.catch();
-  assert.equal(caught.activities[0].body, 'hello @Bob please check');
+  const perceived = await bob.perceive();
+  assert.equal(perceived.activities[0].body, 'hello @Bob please check');
   assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), true);
-  assert.deepEqual((await bob.catch()).activities, []);
+  assert.deepEqual((await bob.perceive()).activities, []);
   await closeSquare(square);
 });
 
@@ -301,7 +301,7 @@ test('an unread directed body is not leaked when express is blocked', async () =
   await closeSquare(square);
 });
 
-test('a bell remains directed while catch filters still apply', async () => {
+test('a bell remains directed while perceive filters still apply', async () => {
   const time = tickingClock();
   const square = Square.inMemory({ markdown: 'context', clock: time.now });
   time.set(1000);
@@ -312,9 +312,9 @@ test('a bell remains directed while catch filters still apply', async () => {
   const cara = (await square.join('Cara', { owner: squareBody })).participant;
   time.set(4000);
   const bell = await alice.express('bell one', { force: true, reach: 'bell' });
-  const mentionWatch = await cara.catch({ mention: true });
+  const mentionWatch = await cara.perceive({ mention: true });
   assert.equal(mentionWatch.activities.some((activity) => activity.body === 'bell one'), true);
-  const fromWatch = await bob.catch({ from: ['Cara'] });
+  const fromWatch = await bob.perceive({ from: ['Cara'] });
   assert.equal(fromWatch.activities.some((activity) => activity.id === bell.activity.id), false);
   assert.equal(((await square.history({ from: ['Cara'], limit: 100 })).activities).some((activity) => activity.body === 'bell one'), false);
   time.set(7000);
@@ -394,17 +394,17 @@ test('status counts only people still in the square and tracks done participants
   await closeSquare(square);
 });
 
-test('leaving stays in history without sending a message to catch', async () => {
+test('leaving stays in history without sending a message to perceive', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
-  const first = await alice.catch();
+  const first = await alice.perceive();
   assert.deepEqual(
     first.activities.map((activity) => ({ kind: activity.kind, actor: activity.actor, body: activity.body })),
     [],
   );
   await bob.done();
-  const afterDone = await alice.catch();
+  const afterDone = await alice.perceive();
   assert.deepEqual(
     afterDone.activities.map((activity) => ({ kind: activity.kind, body: activity.body })),
     [],

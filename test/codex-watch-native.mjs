@@ -23,7 +23,7 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-codex-native-'));
 const cli = fileURLToPath(new URL('../dist/square.js', import.meta.url));
 const evidence = { root, version, checks: [], requests: [], events: [], limitations: [
   'Interrupt was exercised through turn/interrupt RPC; physical TUI Esc is not verified.',
-  'Native idle reads and external queue are not atomic. Already-admitted messages cannot be recalled.',
+  'Queue admission needs no native idle reads; the hosting process arbitrates idle consumption. Already-admitted messages cannot be recalled.',
   'This short smoke does not prove 24-hour lifetime, crash-idle recovery or arbitrary resume behavior.',
 ] };
 const save = () => fs.writeFile(path.join(root, 'evidence.json'), JSON.stringify(evidence, null, 2));
@@ -61,7 +61,7 @@ const queueWrapper = path.join(root, 'queue');
 await fs.writeFile(queueWrapper, `#!/bin/sh\nprintf '%s\\n' "$$" >> ${shell(queueLog)}\nexec ${shell(binary)} "$@"\n`, { mode: 0o700 });
 env.SQUARE_CODEX_BIN = queueWrapper;
 const hooks = JSON.parse(await fs.readFile(new URL('../plugins/codex/hooks/hooks.json', import.meta.url), 'utf8'));
-assert.deepEqual(Object.keys(hooks.hooks).sort(), ['Interrupt', 'PostToolUse', 'SessionEnd', 'SessionStart', 'Stop'].sort());
+assert.deepEqual(Object.keys(hooks.hooks).sort(), ['Interrupt', 'PostToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'UserPromptSubmit'].sort());
 const stopHooks = hooks.hooks.Stop.flatMap(group => group.hooks);
 assert.equal(stopHooks.length, 1);
 assert.equal(stopHooks[0].command, 'square codex-watch');
@@ -177,37 +177,43 @@ try {
   holdNext = true;
   const interruptTurn = await call('turn/start', { threadId, input: [{ type: 'text', text: 'interrupt native turn', text_elements: [] }] });
   await until(() => held.has(5), 'interrupt native request');
+  // Wait for the active-turn prompt hook to retire the idle watcher first: the
+  // turn/start -> UserPromptSubmit window is otherwise a real admission race.
+  await until(async () => (await readHooks()).some(row => row.event === 'UserPromptSubmit' && row.turn === interruptTurn.turn.id && row.stage === 'exit'), 'interrupt turn prompt hook');
   await postAndDispatch(ledger, { owner, key: 'cancelled-card', text: 'NATIVE_CANCELLED_CARD_086c' }, { env });
+  await pause(1300);
+  assert.equal((await queues()).length, 2, 'active turn leaves the cancelled card unqueued');
   await call('turn/interrupt', { threadId, turnId: interruptTurn.turn.id });
   await until(async () => (await readHooks()).some(row => row.event === 'Interrupt' && row.stage === 'exit' && row.code === 0), 'synchronous native Interrupt');
   const session = await ledger.session(owner);
   assert.deepEqual(await ledger.pending(owner, { generation: session.generation }), []);
   check('native turn/interrupt hook cancelled captured pending batch');
   await ledger.post({ owner, key: 'future-card', text: 'NATIVE_FUTURE_CARD_086c' });
+  // An interrupted turn emits no Stop, so no watcher is armed until a later Stop.
   await pause(1300);
   assert.equal((await queues()).length, 2);
   await call('turn/start', { threadId, input: [{ type: 'text', text: 'resume after interrupt', text_elements: [] }] });
   await until(() => evidence.requests.length >= 6, 'new prompt after interrupt');
-  assert.doesNotMatch(JSON.stringify(evidence.requests[5].body), /NATIVE_(?:FUTURE|CANCELLED)_CARD_086c/);
-  await until(() => evidence.requests.length >= 7, 'future card queued after new Stop');
-  assert.match(JSON.stringify(evidence.requests[6].body), /NATIVE_FUTURE_CARD_086c/);
-  assert.doesNotMatch(JSON.stringify(evidence.requests[6].body), /NATIVE_CANCELLED_CARD_086c/);
-  assert.equal((await queues()).length, 3);
+  // UserPromptSubmit presents the future card synchronously: no queue is needed.
+  assert.match(JSON.stringify(evidence.requests[5].body), /NATIVE_FUTURE_CARD_086c/);
+  assert.doesNotMatch(JSON.stringify(evidence.requests[5].body), /NATIVE_CANCELLED_CARD_086c/);
+  assert.equal((await ledger.receipts(owner, { keys: ['future-card'] })).length, 1);
+  assert.equal((await queues()).length, 2);
   await until(idle, 'last native turn completed');
-  check('new Stop queued future card; cancelled card did not revive');
+  check('UserPromptSubmit after interrupt presented future card; cancelled card did not revive');
 
   holdNext = true;
   const toolTurn = await call('turn/start', { threadId, input: [{ type: 'text', text: 'native tool delivery', text_elements: [] }] });
-  const toolRequest = await until(() => [...held.keys()].find(n => n > 7), 'held native tool request');
+  const toolRequest = await until(() => [...held.keys()].find(n => n > 6), 'held native tool request');
   await postAndDispatch(ledger, { owner, key: 'active-card', text: 'NATIVE_ACTIVE_CARD_086c' }, { env });
-  assert.equal((await queues()).length, 3);
+  assert.equal((await queues()).length, 2);
   complete(held.get(toolRequest), toolRequest, true); held.delete(toolRequest);
   await until(() => evidence.requests.length > toolRequest, 'model request after native tool result');
   const afterTool = JSON.stringify(evidence.requests[toolRequest].body);
   assert.match(afterTool, /native_probe/);
   assert.match(afterTool, /NATIVE_ACTIVE_CARD_086c/);
   assert.equal((await ledger.receipts(owner, { keys: ['active-card'] })).length, 1);
-  assert.equal((await queues()).length, 3);
+  assert.equal((await queues()).length, 2);
   assert.ok((await readHooks()).some(row => row.event === 'PostToolUse' && row.stage === 'exit' && row.code === 0));
   await until(idle, 'native tool turn completed');
   check('real PostToolUse presented active card and recorded receipt without queue');

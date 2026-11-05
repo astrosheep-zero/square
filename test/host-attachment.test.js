@@ -34,7 +34,7 @@ test('ledger detach projects away while retaining audience and unread; attach re
   assert.deepEqual(await ledger.pending('test:bob', { generation: session.generation }), []);
   await assert.rejects(bob.express('cannot write', { force: true }));
   assert.ok(await ledger.attach({ owner: 'test:bob', expectedGeneration: session.generation, routes: [] }));
-  assert.deepEqual((await bob.catch()).activities.map(a => a.id), [sent.id]);
+  assert.deepEqual((await bob.perceive()).activities.map(a => a.id), [sent.id]);
 });
 
 test('ledger deletion is overlaid on reads and lands done only on the next mutation', async t => {

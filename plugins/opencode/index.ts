@@ -59,8 +59,8 @@ export default {
       return async () => {};
     }
     const env = { ...process.env };
-    const discovery = await observeOpenCodeSessions(env);
     const lifetime = new AbortController();
+    const discovery = await observeOpenCodeSessions(env, lifetime.signal);
     const receivers = new Map<string, Receiver>(); // Operational handles only; presence owns membership.
     const interrupting = new Set<string>();
     const cancellationFailed = new Set<string>();
@@ -90,7 +90,7 @@ export default {
       return target;
     };
     const reconcile = async (activeSession?: string) => {
-      const candidates = new Set(await listOpenCodeSessions(env));
+      const candidates = new Set(await listOpenCodeSessions(env, lifetime.signal));
       if (activeSession) candidates.add(activeSession);
       for (const sessionId of candidates) {
         if (lifetime.signal.aborted) return;
@@ -99,7 +99,7 @@ export default {
         if (!target) {
           const receiver = receivers.get(sessionId);
           stop(sessionId);
-          if (receiver) await detachOpenCodeSession(sessionId, receiver.generation, env);
+          if (receiver) await detachOpenCodeSession(sessionId, receiver.generation, env, lifetime.signal);
           continue;
         }
         const existing = receivers.get(sessionId);
@@ -158,7 +158,7 @@ export default {
         else if (event.type === 'session.moved') await coordinate(async () => {
           const receiver = receivers.get(sessionId);
           stop(sessionId);
-          if (receiver) await detachOpenCodeSession(sessionId, receiver.generation, env);
+          if (receiver) await detachOpenCodeSession(sessionId, receiver.generation, env, lifetime.signal);
           await reconcile();
         });
         else if (event.type === 'session.execution.interrupted' && event.data.reason === 'user') {

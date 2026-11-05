@@ -38,7 +38,7 @@ test('inbox is a bounded, ordered snapshot without notification internals', asyn
   assert.equal(snapshot.rows.length, names.length * 2);
   for (const row of snapshot.rows) assert.deepEqual(Object.keys(row).sort(), ['name', 'pending', 'squarePath']);
   assert.equal(snapshot.rows.some(row => row.name === names[1] && row.squarePath === fs.realpathSync(files[1])), true);
-  assert.doesNotMatch(result.stdout, /notification body|notifications|catchLease|route|actIndex/);
+  assert.doesNotMatch(result.stdout, /notification body|notifications|perceiveLease|route|actIndex/);
 
   const text = run(['inbox', '--for-owner', 'codex:inbox-snapshot'], { env, cwd: root });
   assert.equal(text.status, 0, text.stderr);

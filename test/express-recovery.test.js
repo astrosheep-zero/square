@@ -177,7 +177,7 @@ test('throttle recovery remains no-wait and does not add force', shellReplay, as
   assert.equal((await says(file)).at(-1).body, body.trim());
 });
 
-test('behind recovery offers catch then an ordinary retry without promoting a bypass', shellReplay, async () => {
+test('behind recovery offers perceive then an ordinary retry without promoting a bypass', shellReplay, async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
     const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
@@ -189,11 +189,11 @@ test('behind recovery offers catch then an ordinary retry without promoting a by
   assert.doesNotMatch(saved.commands[0], /--force/);
   assert.match(saved.commands[0], /--no-wait --mention 'Bob' --reply act\/2 -/);
   assert.doesNotMatch(saved.output, /optional: express over unread activity with --force/);
-  assert.match(saved.output, /catch\n  · take it in, then retry:/);
-  assert.doesNotMatch(saved.output, /catch --now/);
-  assert.ok(saved.output.indexOf('catch') < saved.output.indexOf(saved.commands[0]));
+  assert.match(saved.output, /perceive\n  · take it in, then retry:/);
+  assert.doesNotMatch(saved.output, /perceive --now/);
+  assert.ok(saved.output.indexOf('perceive') < saved.output.indexOf(saved.commands[0]));
   assert.equal(executeRecovery(saved.commands[0]).status, 1);
-  assert.equal(run(withName(file, 'Alice', ['catch', '--now'])).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['perceive', '--now'])).status, 0);
   assert.equal(executeRecovery(saved.commands[0]).status, 0);
   assert.equal((await says(file)).at(-1).reply, 'act/2');
 });

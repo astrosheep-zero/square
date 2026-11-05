@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createArtifactPort } from './artifact.js';
 import { listPresentation } from './views.js';
 import { SquareError } from './model.js';
-import type { DiscoveryResult, DiscoveryOptions, OpenOptions, OperationControl, SquareListItem } from './square-facade.js';
+import type { DiscoveryResult, DiscoveryOptions, OperationControl, SquareListItem } from './square-facade.js';
 
 export const DEFAULT_LIST_DEPTH = 4;
 export const MAX_LIST_DEPTH = 16;
@@ -13,14 +13,14 @@ export const MAX_LIST_LIMIT = 100;
 const LIST_DISCOVERY_BUDGET = 10_000;
 const LIST_SKIP_DIRS = new Set(['.git', 'node_modules', 'dist']);
 
-async function readSquareListItem(filePath: string, root: string, options: OpenOptions, control?: OperationControl): Promise<SquareListItem | null> {
+async function readSquareListItem(filePath: string, root: string, options: DiscoveryOptions, control?: OperationControl): Promise<SquareListItem | null> {
   if (!filePath.endsWith('.square')) return null;
   try {
     control?.signal?.throwIfAborted();
     const stat = await fs.promises.stat(filePath);
     const artifact = createArtifactPort(filePath, undefined, control?.signal);
     let projection;
-    try { projection = (await artifact.read(listPresentation, control?.signal)).value; }
+    try { projection = (await artifact.read(facts => listPresentation(facts, options.owner), control?.signal)).value; }
     finally { await artifact.close(); }
     return {
       path: path.relative(root, filePath) || path.basename(filePath),
@@ -28,6 +28,7 @@ async function readSquareListItem(filePath: string, root: string, options: OpenO
       context: [...projection.context].map((line) => line.trim()).filter(Boolean),
       participants: [...projection.participants],
       activities: projection.activities,
+      ...(projection.joined === undefined ? {} : { joined: projection.joined }),
     };
   } catch (error) {
     control?.signal?.throwIfAborted();
@@ -37,7 +38,7 @@ async function readSquareListItem(filePath: string, root: string, options: OpenO
 }
 
 /** Bounded deterministic discovery for the public resource API. */
-export async function discoverSquares(root: string, options: DiscoveryOptions = {}, control?: OperationControl, openOptions: OpenOptions = {}): Promise<DiscoveryResult> {
+export async function discoverSquares(root: string, options: DiscoveryOptions = {}, control?: OperationControl): Promise<DiscoveryResult> {
   const depth = options.depth ?? DEFAULT_LIST_DEPTH;
   const limit = options.limit ?? DEFAULT_LIST_LIMIT;
   if (!Number.isSafeInteger(depth) || depth < 0 || depth > MAX_LIST_DEPTH
@@ -64,7 +65,7 @@ export async function discoverSquares(root: string, options: DiscoveryOptions = 
       if (entry.isDirectory()) {
         if (!stopped && level < depth && !LIST_SKIP_DIRS.has(entry.name)) await walk(fullPath, level + 1);
       } else if (entry.isFile()) {
-        const item = await readSquareListItem(fullPath, root, openOptions, control);
+        const item = await readSquareListItem(fullPath, root, options, control);
         if (item !== null) items.push(item);
       }
     }

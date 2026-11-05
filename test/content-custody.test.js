@@ -33,6 +33,6 @@ for (const [label, body, full] of [['full', 'short body', true], ['clipped', 'x'
     // Receipt folding happens on mutation, not on reads.
     await square.join('Alice', { owner: 'test:alice' });
     assert.deepEqual((await bob.pending()).activities.map(a => a.id), full ? [] : [activity.id]);
-    assert.deepEqual((await bob.catch()).activities.map(a => a.id), full ? [] : [activity.id]);
+    assert.deepEqual((await bob.perceive()).activities.map(a => a.id), full ? [] : [activity.id]);
   });
 }

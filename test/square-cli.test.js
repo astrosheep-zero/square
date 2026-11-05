@@ -115,10 +115,10 @@ test('bare activities land without an audience and listeners receive later bare 
   assert.match(repeated.stdout, /already turns an ear toward @Alice/);
   const heard = run(withName(file, 'Alice', ['express', 'listener thought']));
   assert.equal(heard.status, 0, heard.stderr);
-  const caught = run(withName(file, 'Bob', ['catch', '--now']));
-  assert.equal(caught.status, 0, caught.stderr);
-  assert.match(caught.stdout, /listener thought/);
-  assert.doesNotMatch(caught.stdout, /bare thought/);
+  const perceived = run(withName(file, 'Bob', ['perceive', '--now']));
+  assert.equal(perceived.status, 0, perceived.stderr);
+  assert.match(perceived.stdout, /listener thought/);
+  assert.doesNotMatch(perceived.stdout, /bare thought/);
 
   const listening = run(withName(file, 'Bob', ['listening']));
   assert.equal(listening.status, 0, listening.stderr);
@@ -131,19 +131,19 @@ test('bare activities land without an audience and listeners receive later bare 
   assert.match(absent.stdout, /already ignores @Alice/);
 });
 
-test('listener and catch help teach future-only directed attention', () => {
-  for (const command of ['listen', 'ignore', 'listening', 'catch']) {
+test('listener and perceive help teach future-only directed attention', () => {
+  for (const command of ['listen', 'ignore', 'listening', 'perceive']) {
     const result = run([command, '--help']);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /future|directed|listening/i);
   }
-  const catchHelp = run(['catch', '--help']);
-  assert.doesNotMatch(catchHelp.stdout, /what others have said or done/);
-  assert.match(catchHelp.stdout, /fixed when each say lands/);
+  const perceiveHelp = run(['perceive', '--help']);
+  assert.doesNotMatch(perceiveHelp.stdout, /what others have said or done/);
+  assert.match(perceiveHelp.stdout, /fixed when each say lands/);
 });
 
-test('catch limit is bounded and mention is boolean', () => {
-  const limit = run(['catch', '--help']);
+test('perceive limit is bounded and mention is boolean', () => {
+  const limit = run(['perceive', '--help']);
   assert.match(limit.stdout, /--limit <count>/);
   assert.match(limit.stdout, /maximum 100/);
 });
@@ -233,7 +233,7 @@ test('every public subcommand exposes scoped help without a square', async () =>
     'list',
     'join',
     'express',
-    'catch',
+    'perceive',
     'done',
     'stream',
     'inbox',
@@ -271,11 +271,11 @@ test('every public subcommand exposes scoped help without a square', async () =>
   assert.doesNotMatch(index.stdout, /^  ls,/m);
 
   const missingSquare = path.join(cwd, 'missing.square');
-  const withGlobals = run(['--as', 'Alice', '--location', missingSquare, 'catch', '-h'], { cwd });
+  const withGlobals = run(['--as', 'Alice', '--location', missingSquare, 'perceive', '-h'], { cwd });
   assert.equal(withGlobals.status, 0, withGlobals.stderr);
-  assert.match(withGlobals.stdout, /Usage: square \[--location <square>\] --as <name> catch/);
+  assert.match(withGlobals.stdout, /Usage: square \[--location <square>\] --as <name> perceive/);
 
-  const retiredLocationFlag = run(['--square-path', missingSquare, 'catch', '--help'], { cwd });
+  const retiredLocationFlag = run(['--square-path', missingSquare, 'perceive', '--help'], { cwd });
   assert.equal(retiredLocationFlag.status, 2);
   assert.match(retiredLocationFlag.stderr, /unknown command: --square-path/);
 });
@@ -335,21 +335,16 @@ test('build defaults to unlimited, accepts its explicit spelling, and rejects th
   assert.match(removed.stderr, /positive integer or unlimited/);
 });
 
-test('CLI flags override Square location and participant environment values', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-env-precedence-'));
-  const configured = path.join(root, 'configured.square');
+test('CLI uses an explicit location and participant', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-explicit-location-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const explicit = path.join(root, 'explicit.square');
-  const built = run(['--location', explicit, 'build'], {
-    env: { SQUARE_LOCATION: configured },
-    input: 'precedence\n',
-  });
+  const built = run(['--location', explicit, 'build'], { input: 'precedence\n' });
   assert.equal(built.status, 0, built.stderr);
   assert.equal(fs.existsSync(explicit), true);
-  assert.equal(fs.existsSync(configured), false);
+  await assert.rejects(Square.at({ cwd: root }), /Square needs a location/);
 
-  const joined = run(['--location', explicit, '--as', 'Explicit', 'join'], {
-    env: { SQUARE_LOCATION: configured, SQUARE_PARTICIPANT_NAME: 'Configured' },
-  });
+  const joined = run(['--location', explicit, '--as', 'Explicit', 'join']);
   assert.equal(joined.status, 0, joined.stderr);
   const artifact = createArtifactPort(explicit);
   try {
@@ -361,7 +356,7 @@ test('CLI flags override Square location and participant environment values', as
 test('square-accessing commands refuse to invent a default location', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-no-default-location-'));
   try {
-    for (const command of ['build', 'stream', 'join', 'catch', 'express', 'done', 'history', 'status', 'participants', 'doctor']) {
+    for (const command of ['build', 'stream', 'join', 'perceive', 'express', 'done', 'history', 'status', 'participants', 'doctor']) {
       const result = run([command], { cwd, input: command === 'build' ? 'body\n' : undefined });
       assert.equal(result.status, 2, `${command}: ${result.stderr}`);
       assert.match(result.stderr, new RegExp(`${command} needs a square location`));
@@ -372,7 +367,7 @@ test('square-accessing commands refuse to invent a default location', () => {
   }
 });
 
-test('join and catch preserve CLI behavior while seat ownership follows the active body', async () => {
+test('join and perceive preserve CLI behavior while seat ownership follows the active body', async () => {
   const file = tempSquare();
   const aliceBody = { CODEX_THREAD_ID: 'codex-alice' };
   const bobBody = { CODEX_THREAD_ID: 'codex-bob' };
@@ -382,35 +377,35 @@ test('join and catch preserve CLI behavior while seat ownership follows the acti
   const aliceJoin = run(withName(file, 'Alice', ['join']), { env: aliceBody });
   assert.equal(aliceJoin.status, 0, aliceJoin.stderr);
   assert.match(aliceJoin.stdout, /when someone calls you/);
-  assert.doesNotMatch(aliceJoin.stdout, /catch --idle 30m/);
+  assert.doesNotMatch(aliceJoin.stdout, /perceive --idle 30m/);
 
   const bobJoin = run(withName(file, 'Bob', ['join']), { env: bobBody });
   assert.equal(bobJoin.status, 0, bobJoin.stderr);
   assert.match(bobJoin.stdout, /when someone calls you/);
-  assert.doesNotMatch(bobJoin.stdout, /catch --idle 30m/);
+  assert.doesNotMatch(bobJoin.stdout, /perceive --idle 30m/);
 
   assert.equal(run(withName(file, 'Bob', ['express', '--force', '--mention', 'Alice', 'hello Alice @Alice']), { env: bobBody }).status, 0);
-  const aliceCatch = run(withName(file, 'Alice', ['catch', '--now']), { env: aliceBody });
-  assert.equal(aliceCatch.status, 0, aliceCatch.stderr);
-  assert.match(aliceCatch.stdout, /hello Alice/);
-  assert.doesNotMatch(aliceCatch.stdout, /catch --idle 30m/);
-  const aliceQuiet = run(withName(file, 'Alice', ['catch', '--now']), { env: aliceBody });
+  const alicePerceive = run(withName(file, 'Alice', ['perceive', '--now']), { env: aliceBody });
+  assert.equal(alicePerceive.status, 0, alicePerceive.stderr);
+  assert.match(alicePerceive.stdout, /hello Alice/);
+  assert.doesNotMatch(alicePerceive.stdout, /perceive --idle 30m/);
+  const aliceQuiet = run(withName(file, 'Alice', ['perceive', '--now']), { env: aliceBody });
   assert.match(aliceQuiet.stdout, /only footsteps/);
-  assert.doesNotMatch(aliceQuiet.stdout, /catch --idle 30m/);
+  assert.doesNotMatch(aliceQuiet.stdout, /perceive --idle 30m/);
 
   assert.equal(run(withName(file, 'Alice', ['express', '--force', '--mention', 'Bob', 'hello Bob @Bob']), { env: aliceBody }).status, 0);
-  const bobCatch = run(withName(file, 'Bob', ['catch', '--now']), { env: bobBody });
-  assert.equal(bobCatch.status, 0, bobCatch.stderr);
-  assert.match(bobCatch.stdout, /hello Bob/);
-  assert.doesNotMatch(bobCatch.stdout, /catch --idle 30m/);
-  const bobQuiet = run(withName(file, 'Bob', ['catch', '--now']), { env: bobBody });
+  const bobPerceive = run(withName(file, 'Bob', ['perceive', '--now']), { env: bobBody });
+  assert.equal(bobPerceive.status, 0, bobPerceive.stderr);
+  assert.match(bobPerceive.stdout, /hello Bob/);
+  assert.doesNotMatch(bobPerceive.stdout, /perceive --idle 30m/);
+  const bobQuiet = run(withName(file, 'Bob', ['perceive', '--now']), { env: bobBody });
   assert.match(bobQuiet.stdout, /only footsteps/);
-  assert.doesNotMatch(bobQuiet.stdout, /catch --idle 30m/);
+  assert.doesNotMatch(bobQuiet.stdout, /perceive --idle 30m/);
 
   const rebound = run(withName(file, 'Bob', ['join']), { env: bobBody });
   assert.equal(rebound.status, 0, rebound.stderr);
   assert.match(rebound.stdout, /you are already in the square/);
-  assert.doesNotMatch(rebound.stdout, /catch --idle 30m/);
+  assert.doesNotMatch(rebound.stdout, /perceive --idle 30m/);
 
   const takeoverBody = { CODEX_THREAD_ID: 'codex-other' };
   const sameName = run(withName(file, 'Bob', ['join']), { env: takeoverBody });
@@ -422,7 +417,7 @@ test('join and catch preserve CLI behavior while seat ownership follows the acti
   const takeover = run(withName(file, 'Bob', ['join', '--kick']), { env: takeoverBody });
   assert.equal(takeover.status, 0, takeover.stderr);
   assert.match(takeover.stdout, /you banished the original @Bob/);
-  assert.doesNotMatch(takeover.stdout, /catch --idle 30m/);
+  assert.doesNotMatch(takeover.stdout, /perceive --idle 30m/);
 
   const historySquare = await Square.at({ path: file });
   const lifecycle = ((await historySquare.history({ limit: 100 })).activities).filter((activity) => activity.actor === 'Bob' && (activity.kind === 'join' || activity.kind === 'done')).map((activity) => activity.kind);
@@ -442,7 +437,7 @@ test('join and catch preserve CLI behavior while seat ownership follows the acti
   } finally { await artifact.close(); }
 });
 
-test('a foreign catch cannot take ownership of a standing participant', async () => {
+test('a foreign perceive cannot take ownership of a standing participant', async () => {
   const file = tempSquare();
   const env = { CODEX_THREAD_ID: 'coordinator' };
   const worker = { ...env, CODEX_THREAD_ID: 'worker' };
@@ -452,11 +447,11 @@ test('a foreign catch cannot take ownership of a standing participant', async ()
   const archive = run(withName(file, 'Alice', ['history', '--limit', '5']), { env: worker });
   assert.equal(archive.status, 0, archive.stderr);
   assert.deepEqual(fs.readFileSync(file), before, 'archive reading must not claim or consume');
-  const caught = run(withName(file, 'Alice', ['catch', '--now']), { env: worker });
-  assert.equal(caught.status, 2, caught.stdout);
-  assert.match(caught.stderr, /not held by this owner/);
-  assert.doesNotMatch(caught.stderr, /error/i);
-  assert.ok(caught.stderr.trimEnd().endsWith(`square --location '${file}' --as 'Alice' join`));
+  const perceived = run(withName(file, 'Alice', ['perceive', '--now']), { env: worker });
+  assert.equal(perceived.status, 2, perceived.stdout);
+  assert.match(perceived.stderr, /not held by this owner/);
+  assert.doesNotMatch(perceived.stderr, /error/i);
+  assert.ok(perceived.stderr.trimEnd().endsWith(`square --location '${file}' --as 'Alice' join`));
   assert.deepEqual(fs.readFileSync(file), before, 'suggesting takeover must not execute it');
   const artifact = createArtifactPort(file);
   try {
@@ -533,11 +528,11 @@ test('join --kick replaces a participant seat after a different body is refused'
 test('unknown participant errors end with the join recovery command', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
-  const caught = run(withName(file, 'Stranger', ['catch', '--now']));
-  assert.equal(caught.status, 2);
-  assert.match(caught.stderr, /has never stepped into this square/);
-  assert.match(caught.stderr, /join/);
-  assert.match(caught.stderr, /--as 'Stranger' join/);
+  const perceived = run(withName(file, 'Stranger', ['perceive', '--now']));
+  assert.equal(perceived.status, 2);
+  assert.match(perceived.stderr, /has never stepped into this square/);
+  assert.match(perceived.stderr, /join/);
+  assert.match(perceived.stderr, /--as 'Stranger' join/);
 
   const expressed = run(withName(file, 'Stranger', ['express', '--no-mention', 'hello']));
   assert.equal(expressed.status, 2);
@@ -609,37 +604,37 @@ test('doctor --fix is not a command', async () => {
   assert.match(result.stderr, /invalid arguments for doctor/);
 });
 
-test('catch conflicts and removed modes are refused while bare catch is the default now', async () => {
+test('perceive conflicts and removed modes are refused while bare perceive is the default now', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
   });
   const rejected = [
-    ['catch', '--now', '--idle', '1s'],
-    ['catch', '--follow'],
-    ['catch', '--count', '2'],
-    ['catch', '--force', '--now'],
-    ['catch', '--now', '--replace'],
+    ['perceive', '--now', '--idle', '1s'],
+    ['perceive', '--follow'],
+    ['perceive', '--count', '2'],
+    ['perceive', '--force', '--now'],
+    ['perceive', '--now', '--replace'],
   ];
   const results = await Promise.all(rejected.map((args) => runAsync(withName(file, 'Alice', args))));
   for (const [index, result] of results.entries()) {
     assert.notEqual(result.status, 0, rejected[index].join(' '));
   }
-  assert.match(results[0].stderr, /catch accepts --now or --idle, not both/);
+  assert.match(results[0].stderr, /perceive accepts --now or --idle, not both/);
   assert.match(results[4].stderr, /--replace can only be used with --idle/);
-  assert.equal(run(withName(file, 'Alice', ['catch'])).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['catch', '--now'])).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['perceive'])).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['perceive', '--now'])).status, 0);
 });
 
-test('bare catch takes pending activity now and consumes it', async () => {
+test('bare perceive takes pending activity now and consumes it', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
     const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
     await bob.express('hello Alice', { mentions: ['Alice'] });
   });
-  const caught = run(withName(file, 'Alice', ['catch']));
-  assert.equal(caught.status, 0, caught.stderr);
-  assert.match(caught.stdout, /hello Alice/);
-  const quiet = run(withName(file, 'Alice', ['catch']));
+  const perceived = run(withName(file, 'Alice', ['perceive']));
+  assert.equal(perceived.status, 0, perceived.stderr);
+  assert.match(perceived.stdout, /hello Alice/);
+  const quiet = run(withName(file, 'Alice', ['perceive']));
   assert.equal(quiet.status, 0, quiet.stderr);
   assert.doesNotMatch(quiet.stdout, /hello Alice/);
   assert.match(quiet.stdout, /only footsteps|nothing new for you/);

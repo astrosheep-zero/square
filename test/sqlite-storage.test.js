@@ -37,6 +37,38 @@ async function until(predicate) {
   while (!predicate()) { if (Date.now() > deadline) throw new Error('probe did not become ready'); await sleep(10); }
 }
 
+test('busy artifact open resumes and queued cancellation returns without later running the callback', { timeout: 3000 }, async t => {
+  const { file, port } = await fixture(t), writer = new DatabaseSync(file);
+  t.after(() => writer.close());
+  writer.exec('BEGIN EXCLUSIVE');
+  let opened = false, cancelledCalls = 0;
+  const opening = port.read(r => r.header()).then(result => { opened = true; return result; });
+  await sleep(30);
+  assert.equal(opened, false);
+  const abort = new AbortController(), reason = new Error('cancel queued read');
+  const queued = assert.rejects(port.read(r => { cancelledCalls++; return r.header(); }, abort.signal), error => error === reason);
+  abort.abort(reason);
+  await queued;
+  assert.equal(opened, false);
+  writer.exec('ROLLBACK');
+  assert.equal((await opening).value.revision, 0);
+  assert.equal(await port.revision(), 0);
+  assert.equal(cancelledCalls, 0);
+});
+
+test('cancelled artifact opening closes its probe and permits a later open on the same resource', { timeout: 3000 }, async t => {
+  const { file, port } = await fixture(t), writer = new DatabaseSync(file);
+  t.after(() => writer.close());
+  writer.exec('BEGIN EXCLUSIVE');
+  const abort = new AbortController(), reason = new Error('cancel validation');
+  const opening = assert.rejects(port.revision(abort.signal), error => error === reason);
+  await sleep(30);
+  abort.abort(reason);
+  await opening;
+  writer.exec('ROLLBACK');
+  assert.equal(await port.revision(), 0);
+});
+
 test('a blocked COMMIT retries the same callback/result and releases the event loop', async t => {
   const { file, port } = await fixture(t);
   const reader = new DatabaseSync(file, { readOnly: true });

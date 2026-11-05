@@ -27,7 +27,7 @@ async function fixture(t, options = {}) {
   const tools = registeredTools();
   const context = (id = 'pi-tools-first', directory = cwd) => ({ cwd: directory, sessionManager: { getSessionId: () => id } });
   const call = async (name, args = {}, ctx = context(), signal) => {
-    const result = await tools.get(`square_${name}`).execute('test', { ...(args.draft === undefined ? { location: 'test.square' } : {}), ...args }, signal, undefined, ctx);
+    const result = await tools.get(`square_${name}`).execute('test', { ...(name !== 'list' && args.draft === undefined ? { location: 'test.square' } : {}), ...args }, signal, undefined, ctx);
     assert.equal(result.structuredContent, undefined);
     assert.equal(result.content.length, 1);
     assert.equal(result.content[0].type, 'text');
@@ -54,6 +54,8 @@ test('Pi registers the shared contract as namespaced codemode tools', () => {
     assert.equal(tool.description, shared.description);
     assert.equal(tool.parameters.type, 'object');
     assert.equal(tool.parameters.additionalProperties, false);
+    assert.equal(tool.parameters.required?.includes('location') ?? false, !['list', 'express'].includes(shared.name));
+    assert.equal('location' in tool.parameters.properties, shared.name !== 'list');
     assert.equal('session' in tool.parameters.properties, false);
     assert.equal(tool.outputSchema, undefined);
     for (const [name, schema] of Object.entries(tool.parameters.properties)) {
@@ -108,10 +110,10 @@ test('Pi calls use live context, preserve environment, and return human text and
   assert.match(bare.content[0].text, /your words land.*act\/\d+/);
   const directed = await call('express', { as: 'rei', body: 'hello', noMention: true, mentions: ['bob'], force: true });
   assert.match(directed.content[0].text, /you walk over to @bob/);
-  const caught = await call('catch', { as: 'bob' });
-  assert.match(caught.content[0].text, /hello/);
-  assert.doesNotMatch(caught.content[0].text, /literal @bob/);
-  await call('catch', { as: 'bob' });
+  const perceived = await call('perceive', { as: 'bob' });
+  assert.match(perceived.content[0].text, /hello/);
+  assert.doesNotMatch(perceived.content[0].text, /literal @bob/);
+  await call('perceive', { as: 'bob' });
   const history = await call('history');
   assert.match(history.content[0].text, /literal @bob/);
   assert.match(history.content[0].text, /hello/);
@@ -124,14 +126,31 @@ test('Pi calls use live context, preserve environment, and return human text and
   assert.deepEqual({ ...process.env }, before);
 });
 
+test('Pi list uses live owner and cwd, while single-square calls require location', async t => {
+  const { cwd, tools, context, call } = await fixture(t);
+  const missing = await tools.get('square_express').execute('test', { body: 'no destination' }, undefined, undefined, context());
+  assert.equal(missing.isError, true);
+  assert.match(missing.content[0].text, /Square needs a location/);
+  assert.doesNotMatch(missing.content[0].text, /draft kept/);
+  await call('join', { as: 'rei' });
+  await call('join', { as: 'bob' });
+  await call('express', { as: 'bob', body: 'for rei', mentions: ['rei'], force: true });
+  const listed = await call('list');
+  assert.equal(listed.isError, undefined, listed.content[0].text);
+  const joined = listed.content[0].text.split('\n').find(line => line.includes('joined'));
+  assert.match(joined, /@rei \(1 waiting\)/);
+  assert.match(joined, /@bob/);
+  const foreign = await call('list', {}, context('other-owner'));
+  assert.doesNotMatch(foreign.content[0].text, /joined/);
+  const subdir = path.join(cwd, 'empty');
+  fs.mkdirSync(subdir);
+  assert.match((await call('list', {}, context('pi-tools-first', subdir))).content[0].text, /no squares found/);
+  assert.match((await call('perceive', { as: 'rei' })).content[0].text, /for rei/);
+  assert.doesNotMatch((await call('list')).content[0].text, /waiting/);
+});
+
 test('Pi retains a blocked express in memory and retries only by draft token', async (t) => {
   const { cwd, squarePath, context, call } = await fixture(t);
-  const defaultPath = path.join(cwd, 'default.square');
-  const other = await Square.build({ path: defaultPath, markdown: 'default' });
-  await other.close();
-  const previousLocation = process.env.SQUARE_LOCATION;
-  process.env.SQUARE_LOCATION = defaultPath;
-  t.after(() => { if (previousLocation === undefined) delete process.env.SQUARE_LOCATION; else process.env.SQUARE_LOCATION = previousLocation; });
   await call('join', { as: 'rei' });
   await call('join', { as: 'bob' });
   await call('express', { as: 'bob', body: 'question for rei', mentions: ['rei'] });
@@ -148,7 +167,7 @@ test('Pi retains a blocked express in memory and retries only by draft token', a
   const foreign = await call('express', { draft: token }, context('another-session'));
   assert.equal(foreign.isError, true);
   assert.match(foreign.content[0].text, /Unknown, expired, or inaccessible/);
-  await call('catch', { as: 'rei' });
+  await call('perceive', { as: 'rei' });
   const retry = await call('express', { draft: token });
   assert.equal(retry.isError, undefined, retry.content[0].text);
   const history = await call('history', { limit: 10 });

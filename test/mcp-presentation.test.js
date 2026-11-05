@@ -43,14 +43,14 @@ async function seed(squarePath, setup) {
 async function openMcp(t, squarePath) {
   const body = bodyFor(squarePath);
   const server = createSquareMcpServer({
-    cwd: path.dirname(squarePath), env: envFor(squarePath), path: squarePath, owner: body,
+    cwd: path.dirname(squarePath), env: envFor(squarePath), owner: body,
     wakeAddress: { kind: 'codex-queue', address: { threadId: path.resolve(squarePath), codexHome: path.join(os.homedir(), '.codex') } },
   });
   const client = new Client({ name: 'square-mcp-presentation-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
-  return (name, args = {}) => client.callTool({ name, arguments: args });
+  return (name, args = {}) => client.callTool({ name, arguments: name === 'list' ? args : { location: squarePath, ...args } });
 }
 
 /** Square paths differ between the paired artifacts; everything else must be byte-identical. */
@@ -118,11 +118,11 @@ test('mutating tools print the same result as the CLI', async (t) => {
     await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'express', 'hello @bob'], 'express',
       { as: 'rei', body: 'hello @bob' });
   });
-  await t.test('catch', async (t) => {
+  await t.test('perceive', async (t) => {
     await assertTextParity(t, async (square, body) => {
       await joinReiAndBob(square, body);
       await (await square.participant('bob', { owner: body })).express('@rei ping', { force: true });
-    }, ['--as', 'rei', 'catch'], 'catch', { as: 'rei' });
+    }, ['--as', 'rei', 'perceive'], 'perceive', { as: 'rei' });
   });
   await t.test('listen', async (t) => {
     await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'listen', 'bob'], 'attention', { as: 'rei', action: 'listen', target: 'bob' });
@@ -145,10 +145,10 @@ test('mutating tools print the same result as the CLI', async (t) => {
 test('failures print the CLI recovery lines instead of JSON', async (t) => {
   const cliPath = await buildSquare(t);
   const mcpPath = await buildSquare(t);
-  const result = cli(cliPath, ['--as', 'ghost', 'catch']);
+  const result = cli(cliPath, ['--as', 'ghost', 'perceive']);
   assert.equal(result.status, 2, result.stdout + result.stderr);
   const call = await openMcp(t, mcpPath);
-  const response = await call('catch', { as: 'ghost' });
+  const response = await call('perceive', { as: 'ghost' });
   assert.equal(response.isError, true);
   const text = response.content[0].text;
   assert.equal(response.structuredContent, undefined);

@@ -2,14 +2,13 @@ import type { MetadataMatch } from './delivery-deferral.js';
 export type { MetadataMatch, MetadataScalar } from './delivery-deferral.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
 import type { Owner, HydratedAct, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
-import type { SquareResourceOwner } from './ports.js';
 import type { OperationControl } from './neutral.js';
 export interface ActivitySearch { readonly text: string; readonly mode: 'literal' | 'regex' }
 export interface AckResult { readonly consumed: number }
 import type { FutureAck } from './square-post.js';
 export type { NotificationId, SendInput, SendResult, FutureAck } from './square-post.js';
 export interface HeldSeat { readonly name: string; readonly generation: string }
-export type { CatchWaitStart, OperationProgress, OperationControl, OperationFailureDetail, OperationError } from './neutral.js';
+export type { PerceiveWaitStart, OperationProgress, OperationControl, OperationFailureDetail, OperationError } from './neutral.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
 export type { Owner, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
@@ -69,7 +68,7 @@ export interface LifecycleResult {
   readonly activity: Activity;
   readonly observation?: SquareObservation;
 }
-export interface CatchOptions extends ObservationOptions {
+export interface PerceiveOptions extends ObservationOptions {
   readonly id?: ActivityId;
   readonly idle?: number;
   readonly from?: readonly string[];
@@ -98,14 +97,14 @@ export interface PendingResult {
   /** Matching unconsumed activities outside this page. */
   readonly remaining: number;
 }
-export type CatchReason = 'drained' | 'idle' | 'capped' | 'quorum' | 'replaced' | 'already-active';
-export interface CatchResult {
+export type PerceiveReason = 'drained' | 'idle' | 'capped' | 'quorum' | 'replaced' | 'already-active';
+export interface PerceiveResult {
   readonly activities: readonly PerceivedActivity[];
   readonly remaining: number;
-  readonly reason: CatchReason;
+  readonly reason: PerceiveReason;
   /** Occasional participant-facing nudge; not part of any activity. */
   readonly hint?: string;
-  readonly observation?: CatchObservation;
+  readonly observation?: PerceiveObservation;
 }
 export interface HistoryQuery extends ActivityQuery, ObservationOptions {
   /** Ten by default; null explicitly reads the full archive. */
@@ -128,10 +127,7 @@ export interface SquareLocation {
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
 }
-export interface SquareAtInput extends SquareLocation, OpenOptions {
-  /** A caller-owned connection; closing this Square never closes its owner. */
-  readonly resources?: SquareResourceOwner;
-}
+export interface SquareAtInput extends SquareLocation, OpenOptions {}
 export interface SquareBuildInput extends SquareAtInput {
   readonly markdown: string;
   readonly hardCap?: number | null;
@@ -160,7 +156,7 @@ export interface Participant {
   ignore(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   unlisten(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   listening(options?: ObservationOptions, control?: OperationControl): Promise<ListeningResult>;
-  catch(options?: CatchOptions, control?: OperationControl): Promise<CatchResult>;
+  perceive(options?: PerceiveOptions, control?: OperationControl): Promise<PerceiveResult>;
   pending(options?: PendingOptions, control?: OperationControl): Promise<PendingResult>;
   /** Local custody only: ledger-only detach/delete is observed on privileged reconciliation. */
   ack(ids: readonly ActivityId[], control?: OperationControl): Promise<AckResult>;
@@ -198,11 +194,13 @@ export interface ParticipantsResult {
   readonly observation?: ParticipantsObservation;
 }
 export interface DiscoveryOptions {
+  readonly owner?: Owner;
   readonly depth?: number;
   readonly limit?: number;
   readonly after?: string;
 }
 export interface SquareListItem {
+  readonly joined?: readonly { readonly name: string; readonly pending: number }[];
   readonly path: string;
   readonly lastActiveAt: number;
   readonly context: readonly string[];
@@ -261,7 +259,7 @@ export interface PresenceClassification {
   readonly lingeringCount: number;
   readonly classificationByName: Readonly<Record<string, 'here' | 'lingering' | 'away' | 'done' | 'not-joined'>>;
 }
-export interface CatchPresence {
+export interface PerceivePresence {
   readonly participants: readonly ParticipantSummary[];
   readonly now: number;
 }
@@ -290,10 +288,10 @@ export interface ExpressObservation extends SquareObservation, ExpressionObserva
   readonly participant: string;
   readonly context: ExpressContext;
 }
-export interface CatchObservation extends SquareObservation, ExpressionObservation {
+export interface PerceiveObservation extends SquareObservation, ExpressionObservation {
   readonly deliveryAvailable: boolean;
   readonly participant: string;
-  readonly presence?: CatchPresence;
+  readonly presence?: PerceivePresence;
   readonly enrichmentUnavailable?: true;
 }
 export interface HistoryContinuation {

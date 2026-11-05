@@ -1,4 +1,4 @@
-export { Square, squareLocation, squareClock, createSquareResourceOwner, discover, inbox, diagnoseSquare } from './square-api.js';
+export { Square, squareLocation, squareClock, discover, inbox, diagnoseSquare } from './square-api.js';
 export { SquareError, ACTIVITY_METADATA_MAX_BYTES } from './model.js';
 export { selectOwnSeat, requireOwner, requireJoinName, localUserOwner, harnessOwner, decodeHarnessOwner } from './square-api.js';
 export { postAndDispatch, dispatchEligibleCards } from './notifications.js';

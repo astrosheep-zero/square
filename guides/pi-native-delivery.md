@@ -5,7 +5,7 @@ the shared Pi send leaf for native injection. A receiver-pull presentation and p
 compete through ledger attempt state, not route declarations. Accepted or uncertain handoff is not a
 presentation receipt and must not be blindly replayed. The boundary's bounded batch renderer records
 receipts only for presented cards. Square folds a receipt into read state only when its activity card
-contained the full body; shortened cards point to catch.
+contained the full body; shortened cards point to perceive.
 
 Display items come directly from validated producer-neutral card details (`origin`, optional `author`,
 `ref` and `badge`, and full Markdown `body`). Display never opens Square history. Missing or invalid

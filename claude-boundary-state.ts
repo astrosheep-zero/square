@@ -16,10 +16,10 @@ export function claudeBoundaryStore(session: string, env: NodeJS.ProcessEnv) {
   const root = path.join(path.dirname(deliveryLedgerLocation(env)), 'claude-hooks');
   const key = createHash('sha256').update(session).digest('hex');
   const file = path.join(root, `${key}.json`);
-  async function mutate<T>(change: (state: ClaudeBoundary | undefined, save: (state: ClaudeBoundary) => Promise<void>) => Promise<T>): Promise<T> {
+  async function mutate<T>(change: (state: ClaudeBoundary | undefined, save: (state: ClaudeBoundary) => Promise<void>) => Promise<T>, signal?: AbortSignal): Promise<T> {
     await fs.mkdir(root, { recursive: true, mode: 0o700 });
     await fs.chmod(root, 0o700);
-    return withFileLock(path.join(root, `${key}.lock`), { retryMs: 10, signal: AbortSignal.timeout(2500) }, async () => {
+    return withFileLock(path.join(root, `${key}.lock`), { retryMs: 10, signal: signal ?? AbortSignal.timeout(2500) }, async () => {
       let state: ClaudeBoundary | undefined;
       try { state = stateSchema.parse(JSON.parse(await fs.readFile(file, 'utf8'))); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
@@ -35,32 +35,32 @@ export function claudeBoundaryStore(session: string, env: NodeJS.ProcessEnv) {
   const matches = (state: ClaudeBoundary | undefined, captured: ClaudeBoundary) => !!state && !state.ended && !state.consumed
     && state.generation === captured.generation && state.promptId === captured.promptId && state.stopEpoch === captured.stopEpoch;
   return {
-    async start(attach: () => Promise<string | false>): Promise<void> {
+    async start(attach: () => Promise<string | false>, signal?: AbortSignal): Promise<void> {
       await mutate(async (state, save) => {
         if (state) await save({ ...state, promptId: undefined, ended: true, stopEpoch: randomUUID() });
         const generation = await attach();
         if (generation) await save({ generation, stopEpoch: randomUUID(), consumed: false, ended: false });
-      });
+      }, signal);
     },
-    async end(): Promise<ClaudeBoundary | undefined> {
+    async end(signal?: AbortSignal): Promise<ClaudeBoundary | undefined> {
       return mutate(async (state, save) => {
         if (state) await save({ ...state, ended: true, stopEpoch: randomUUID() });
         return state;
-      });
+      }, signal);
     },
-    async prompt(promptId: string | undefined): Promise<void> {
+    async prompt(promptId: string | undefined, signal?: AbortSignal): Promise<void> {
       await mutate(async (state, save) => {
         if (state && !state.ended) await save({ ...state, promptId, stopEpoch: randomUUID(), consumed: false });
-      });
+      }, signal);
     },
-    capture(promptId: string): Promise<ClaudeBoundary | undefined> {
-      return mutate(async state => state && !state.ended && !state.consumed && state.promptId === promptId ? state : undefined);
+    capture(promptId: string, signal?: AbortSignal): Promise<ClaudeBoundary | undefined> {
+      return mutate(async state => state && !state.ended && !state.consumed && state.promptId === promptId ? state : undefined, signal);
     },
-    current(captured: ClaudeBoundary): Promise<boolean> { return mutate(async state => matches(state, captured)); },
-    async consume(captured: ClaudeBoundary): Promise<void> {
+    current(captured: ClaudeBoundary, signal?: AbortSignal): Promise<boolean> { return mutate(async state => matches(state, captured), signal); },
+    async consume(captured: ClaudeBoundary, signal?: AbortSignal): Promise<void> {
       await mutate(async (state, save) => {
         if (matches(state, captured)) await save({ ...state!, consumed: true });
-      });
+      }, signal);
     },
     async watch<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
       await fs.mkdir(root, { recursive: true, mode: 0o700 });

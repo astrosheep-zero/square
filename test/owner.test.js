@@ -63,7 +63,7 @@ test('a plain terminal speaks under its local owner and explicit owner survives 
   const explicit = "script:owner's copy";
   const joined = run(['--owner', explicit, '--as', 'Script', 'join']);
   assert.equal(joined.status, 0, joined.stderr);
-  assert.match(joined.stdout, /--owner 'script:owner'\\''s copy' catch --idle/);
+  assert.match(joined.stdout, /--owner 'script:owner'\\''s copy' perceive --idle/);
   const wrong = run(['--owner', explicit, '--as', 'me', 'express', 'keep this draft']);
   assert.equal(wrong.status, 2, wrong.stdout + wrong.stderr);
   assert.match(wrong.stderr, /--owner 'script:owner'\\''s copy' join/);

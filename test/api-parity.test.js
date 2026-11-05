@@ -25,13 +25,13 @@ async function fixture(t, label) {
   return { cwd, path: squarePath, env, body, square };
 }
 async function mcp(t, options) {
-  const server = createSquareMcpServer({ cwd: options.cwd, path: options.path, env: options.env, owner: options.body });
+  const server = createSquareMcpServer({ cwd: options.cwd, env: options.env, owner: options.body });
   const client = new Client({ name: 'square-parity-test', version: '1' });
   const [left, right] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(right), client.connect(left)]);
   t.after(async () => { await client.close(); await server.close(); });
   return async (name, args = {}) => {
-    const result = await client.callTool({ name, arguments: args });
+    const result = await client.callTool({ name, arguments: { location: options.path, ...args } });
     assert.equal(result.isError, undefined, JSON.stringify(result));
     assert.equal(result.structuredContent, undefined);
     assert.equal(typeof result.content[0].text, 'string');
@@ -66,9 +66,9 @@ test('SDK, CLI and MCP land the same join, directed reply, listener and departur
   await alice.listen('Bob');
   cli(terminal, 'Alice', ['listen', 'Bob']);
   await call('attention', { as: 'Alice', action: 'listen', target: 'Bob' });
-  await alice.catch();
-  cli(terminal, 'Alice', ['catch']);
-  assert.match(await call('catch', { as: 'Alice' }), /answer/);
+  await alice.perceive();
+  cli(terminal, 'Alice', ['perceive']);
+  assert.match(await call('perceive', { as: 'Alice' }), /answer/);
   const stopped = await alice.unlisten('Bob');
   assert.equal(stopped.activity.kind, 'unlisten');
   cli(terminal, 'Alice', ['unlisten', 'Bob']);
@@ -115,14 +115,14 @@ test('SDK, CLI and MCP bare expressions land without an audience and reach liste
   cli(terminal, 'Alice', ['express', '--force', 'cli bare for listener']);
   await call('express', { as: 'Alice', body: 'mcp bare for listener', force: true });
 
-  const sdkCaught = await (await direct.square.participant('Bob', { owner: direct.body })).catch();
-  assert.deepEqual(sdkCaught.activities.map((activity) => activity.body), ['sdk bare for listener']);
-  const cliCaught = cli(terminal, 'Bob', ['catch', '--now']);
-  assert.match(cliCaught, /cli bare for listener/);
-  assert.doesNotMatch(cliCaught, /cli bare without listener/);
-  const mcpCaught = await call('catch', { as: 'Bob' });
-  assert.match(mcpCaught, /mcp bare for listener/);
-  assert.doesNotMatch(mcpCaught, /mcp bare without listener/);
+  const sdkPerceived = await (await direct.square.participant('Bob', { owner: direct.body })).perceive();
+  assert.deepEqual(sdkPerceived.activities.map((activity) => activity.body), ['sdk bare for listener']);
+  const cliPerceived = cli(terminal, 'Bob', ['perceive', '--now']);
+  assert.match(cliPerceived, /cli bare for listener/);
+  assert.doesNotMatch(cliPerceived, /cli bare without listener/);
+  const mcpPerceived = await call('perceive', { as: 'Bob' });
+  assert.match(mcpPerceived, /mcp bare for listener/);
+  assert.doesNotMatch(mcpPerceived, /mcp bare without listener/);
 
   for (const options of [direct, terminal, json]) {
     const bodies = (await options.square.history({ limit: 100 })).activities
@@ -167,11 +167,11 @@ test('a stale participant handle cannot speak after departure; rejoining establi
   assert.ok(confirmation.includes(expressed.activity.id));
   assert.match(confirmation, /your words land/);
   await assert.rejects(direct.square.participant('Never', { owner: direct.body }), error => error.code === 'already_joined' && error.facts?.reason === 'needs_seat');
-  const client = new Client({ name: 'square-parity-error', version: '1' }), server = createSquareMcpServer({ cwd: json.cwd, path: json.path, env: json.env, owner: json.body });
+  const client = new Client({ name: 'square-parity-error', version: '1' }), server = createSquareMcpServer({ cwd: json.cwd, env: json.env, owner: json.body });
   const [left, right] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(right), client.connect(left)]);
   t.after(async () => { await client.close(); await server.close(); });
-  const refused = await client.callTool({ name: 'express', arguments: { as: 'Never', body: 'unsent' } });
+  const refused = await client.callTool({ name: 'express', arguments: { location: json.path, as: 'Never', body: 'unsent' } });
   assert.equal(refused.isError, true);
   assert.equal(refused.structuredContent, undefined);
   assert.match(refused.content[0].text, /@Never has never stepped into this square/);
@@ -221,13 +221,13 @@ test('optional observations add only requested reads; rendering transports pay f
   assert.equal(plainExpress.value.observation, undefined);
   assert.equal(plainExpress.hydrated, 0, 'a plain express does not read the optional feed');
   assert.deepEqual(fullExpress.value.observation.context.activities.map((act) => act.preview), ['for Alice']);
-  const caught = await measure(() => call('catch', { as: 'Alice' }));
-  assert.match(caught.value, /for Alice/);
-  assert.equal(caught.hydrated, 1, 'catch hydrates exactly its selected page');
-  const plainEmpty = await measure(() => alice.catch()), fullEmpty = await measure(() => alice.catch({ observe: true }));
+  const perceived = await measure(() => call('perceive', { as: 'Alice' }));
+  assert.match(perceived.value, /for Alice/);
+  assert.equal(perceived.hydrated, 1, 'perceive hydrates exactly its selected page');
+  const plainEmpty = await measure(() => alice.perceive()), fullEmpty = await measure(() => alice.perceive({ observe: true }));
   const { observation: presence, ...empty } = fullEmpty.value;
   assert.deepEqual(plainEmpty.value, empty);
-  assert.equal(plainEmpty.hydrated, 0, 'an empty catch does not hydrate activities');
+  assert.equal(plainEmpty.hydrated, 0, 'an empty perceive does not hydrate activities');
   assert.ok(presence.presence);
   const archive = await measure(() => call('history'));
   assert.ok(archive.hydrated > 0);
@@ -235,13 +235,13 @@ test('optional observations add only requested reads; rendering transports pay f
   assert.equal(await call('status'), renderStatusResult(options.path, await square.status({ viewer: undefined, observe: true })));
 });
 
-test('catch resolves caller and all filters in one read, retaining canonical error subjects', async (t) => {
-  const options = await fixture(t, 'catch-names'), { square } = options;
+test('perceive resolves caller and all filters in one read, retaining canonical error subjects', async (t) => {
+  const options = await fixture(t, 'perceive-names'), { square } = options;
   for (const name of ['Alice', 'Bob', 'Cara', 'Dan']) await square.join(name, { owner: options.body });
   await (await square.participant('Dan', { owner: options.body })).done();
   const alice = await square.participant('aLiCe', { owner: options.body }), measure = measureArtifact(t, options.path);
-  const one = await measure(() => alice.catch({ from: ['BOB'] }));
-  const many = await measure(() => alice.catch({ from: ['BOB', 'cara', 'Dan', 'BOB'] }));
+  const one = await measure(() => alice.perceive({ from: ['BOB'] }));
+  const many = await measure(() => alice.perceive({ from: ['BOB', 'cara', 'Dan', 'BOB'] }));
   assert.equal(one.reads, many.reads);
   assert.deepEqual(one.value, many.value);
   assert.equal(many.value.observation, undefined);
@@ -249,10 +249,10 @@ test('catch resolves caller and all filters in one read, retaining canonical err
     && error.facts?.reason === 'needs_seat' && typeof error.facts.join === 'string');
   for (const [name, from, subject, canonical] of [['aLiCe', ['Unknown'], 'filter', 'Alice']]) {
     const participant = await square.participant(name, { owner: options.body });
-    await assert.rejects(participant.catch({ from }), (error) => {
+    await assert.rejects(participant.perceive({ from }), (error) => {
       assert.equal(error.code, 'invalid_args');
       assert.equal(error.facts.reason, 'never_joined');
-      assert.deepEqual(error.operation, { operation: 'catch', subject, participant: canonical });
+      assert.deepEqual(error.operation, { operation: 'perceive', subject, participant: canonical });
       return true;
     });
   }

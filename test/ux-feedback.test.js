@@ -11,8 +11,8 @@ test('join guidance follows delivery capability, not a blanket instruction to wa
   const native = renderJoinResult({ ...base, observation: { ...base.observation, deliveryAvailable: true } });
   const manual = renderJoinResult({ ...base, observation: { ...base.observation, deliveryAvailable: false } });
   assert.match(native, /when someone calls you, you’ll hear them here/);
-  assert.doesNotMatch(native, /catch --idle/);
-  assert.match(manual, /catch --idle 30m/);
+  assert.doesNotMatch(native, /perceive --idle/);
+  assert.match(manual, /perceive --idle 30m/);
   assert.match(manual, /stay within earshot/);
   for (const output of [native, manual]) assert.doesNotMatch(output, /every word here lands on a real ear/);
 });

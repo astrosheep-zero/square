@@ -50,7 +50,7 @@ test('request operations abort under an exclusive artifact lock without a deferr
   database.exec('BEGIN EXCLUSIVE');
   const controller = new AbortController();
   const requests = [
-    async square => (await square.participant('Reader', { owner: readerBody })).catch({}, { signal: controller.signal }),
+    async square => (await square.participant('Reader', { owner: readerBody })).perceive({}, { signal: controller.signal }),
     async square => (await square.participant('Writer', { owner: writerBody })).express('cancelled', { force: true }, { signal: controller.signal }),
     async square => square.join('Newcomer', { owner: body('newcomer') }),
   ];
@@ -125,19 +125,19 @@ test('a published build keeps its result when cancellation follows publication',
   assert.equal((await readSquareSnapshot(location)).state.hardCap, 3);
 });
 
-test('idle catch aborts without consuming activity added later', async () => {
+test('idle perceive aborts without consuming activity added later', async () => {
   const square = Square.inMemory({ markdown: 'context' });
   const alice = (await square.join('Alice', { owner: body('memory') })).participant;
   const bob = (await square.join('Bob', { owner: body('memory') })).participant;
-  await bob.catch();
+  await bob.perceive();
   const controller = new AbortController();
-  const waiting = bob.catch({ idle: 60_000 }, { signal: controller.signal });
+  const waiting = bob.perceive({ idle: 60_000 }, { signal: controller.signal });
   await new Promise(resolve => setImmediate(resolve));
   controller.abort(new Error('cancelled'));
   await assert.rejects(waiting, /cancelled/);
   const activity = await alice.express('after cancellation', { force: true, mentions: ['Bob'] });
-  const caught = await bob.catch();
-  assert.equal(caught.activities[0].id, activity.activity.id);
+  const perceived = await bob.perceive();
+  assert.equal(perceived.activities[0].id, activity.activity.id);
   await square.close();
 });
 
@@ -188,14 +188,14 @@ test('post-commit express preserves its result after response cancellation', asy
   assert.equal((await square.history()).activities.at(-1).body, 'committed');
 });
 
-test('post-commit catch preserves its receipt and result before return cancellation', async t => {
+test('post-commit perceive preserves its receipt and result before return cancellation', async t => {
   const artifact = createArtifactPort(':memory:', prepareSquareBuild({}, 'context'));
   t.after(() => artifact.close());
   const square = await resourceWithArtifact(t, artifact);
   const alice = (await square.join('Alice', { owner: body('memory') })).participant;
   const bob = (await square.join('Bob', { owner: body('memory') })).participant;
-  await bob.catch();
-  await alice.express('boundary catch', { force: true, mentions: ['Bob'] });
+  await bob.perceive();
+  await alice.express('boundary perceive', { force: true, mentions: ['Bob'] });
   const controller = new AbortController();
   const transactAs = artifact.transactAs.bind(artifact);
   artifact.transactAs = async (authority, fn, signal) => {
@@ -204,10 +204,10 @@ test('post-commit catch preserves its receipt and result before return cancellat
     if (authority.kind === 'participant' && marked) controller.abort(new Error('response discarded'));
     return result;
   };
-  const result = await bob.catch({ observe: true }, { signal: controller.signal });
-  assert.equal(result.activities[0].body, 'boundary catch');
+  const result = await bob.perceive({ observe: true }, { signal: controller.signal });
+  assert.equal(result.activities[0].body, 'boundary perceive');
   assert.equal(result.observation.enrichmentUnavailable, true);
-  assert.deepEqual((await bob.catch()).activities, []);
+  assert.deepEqual((await bob.perceive()).activities, []);
 });
 
 test('a result-assembly failure after express commit retains landed certainty and its activity id', async t => {

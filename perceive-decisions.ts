@@ -3,13 +3,13 @@ import { terminalStatusFor } from './runtime.js';
 import { SquareError, type HydratedAct } from './model.js';
 import { resolveKnownName } from './decisions.js';
 import type { ActivityIndex, DirectedFilter, SquareRead, SquareWrite } from './ports.js';
-import type { CatchOptions, CatchReason, PerceivedActivity } from './square-facade.js';
+import type { PerceiveOptions, PerceiveReason, PerceivedActivity } from './square-facade.js';
 import { toPerceivedActivity } from './views.js';
-import { catchHint } from './hints.js';
+import { perceiveHint } from './hints.js';
 import { consumeReceived, ReceiveError, selectReceivedHeads, type Selection } from './receive.js';
 import { squareReceiveRead } from './square-receive.js';
 
-export interface CatchSelection {
+export interface PerceiveSelection {
   readonly participant: string;
   readonly activities: readonly PerceivedActivity[];
   readonly remaining: number;
@@ -18,13 +18,13 @@ export interface CatchSelection {
   readonly now: number;
   readonly ownActivityCount: number;
   readonly hardCap: number | null;
-  readonly terminalStatus: Extract<CatchReason, 'capped' | 'quorum'> | undefined;
+  readonly terminalStatus: Extract<PerceiveReason, 'capped' | 'quorum'> | undefined;
   readonly hint?: string;
 }
 
 /** Capture a selected page (or an empty completion) without opening another resource. */
-export function observeCatchSelection(facts: SquareRead, participant: string, activities: readonly HydratedAct[], filter: DirectedFilter, at: number, remaining?: number): CatchSelection {
-  if (typeof at !== 'number' || !Number.isFinite(at)) throw new SquareError('invalid_args', 'Catch time must be a finite number.');
+export function observePerceiveSelection(facts: SquareRead, participant: string, activities: readonly HydratedAct[], filter: DirectedFilter, at: number, remaining?: number): PerceiveSelection {
+  if (typeof at !== 'number' || !Number.isFinite(at)) throw new SquareError('invalid_args', 'Perceive time must be a finite number.');
   const counts = facts.participantCounts(), header = facts.header(), current = facts.participant(participant)!;
   return {
     participant, activities: activities.map(activity => toPerceivedActivity(facts, activity, participant)),
@@ -35,48 +35,48 @@ export function observeCatchSelection(facts: SquareRead, participant: string, ac
     terminalStatus: terminalStatusFor(current, header.hardCap, counts),
   };
 }
-export const CATCH_DEFAULT_LIMIT = 10;
-export const CATCH_MAX_LIMIT = 100;
-export function catchLimit(value: number | undefined): number {
-  const limit = value ?? CATCH_DEFAULT_LIMIT;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > CATCH_MAX_LIMIT) {
-    throw new SquareError('invalid_args', `Catch limit must be a positive integer no greater than ${CATCH_MAX_LIMIT}.`);
+export const PERCEIVE_DEFAULT_LIMIT = 10;
+export const PERCEIVE_MAX_LIMIT = 100;
+export function perceiveLimit(value: number | undefined): number {
+  const limit = value ?? PERCEIVE_DEFAULT_LIMIT;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > PERCEIVE_MAX_LIMIT) {
+    throw new SquareError('invalid_args', `Perceive limit must be a positive integer no greater than ${PERCEIVE_MAX_LIMIT}.`);
   }
   return limit;
 }
 
-function catchPageSelection(facts: SquareRead, requestedName: string, options: CatchOptions) {
+function perceivePageSelection(facts: SquareRead, requestedName: string, options: PerceiveOptions) {
   const participant = resolveKnownName(facts, requestedName);
-  const limit = catchLimit(options.limit);
+  const limit = perceiveLimit(options.limit);
   const senders = options.from?.map(name => resolveKnownName(facts, name));
   const filter: DirectedFilter = { kinds: ['say'], unseenOnly: true, ...(senders === undefined ? {} : { senders }), ...(options.mention === true ? { attentionOnly: true } : {}) };
   return { participant, filter, selection: { kind: 'page' as const, query: filter, limit } };
 }
 
-/** Select non-ID catch coordinates without hydrating bodies or recording receipts. */
-export function selectCatchPage(facts: SquareRead, requestedName: string, options: CatchOptions): {
+/** Select non-ID perceive coordinates without hydrating bodies or recording receipts. */
+export function selectPerceivePage(facts: SquareRead, requestedName: string, options: PerceiveOptions): {
   readonly participant: string;
   readonly indexes: readonly ActivityIndex[];
   readonly filter: DirectedFilter;
 } {
-  const { participant, filter, selection } = catchPageSelection(facts, requestedName, options);
+  const { participant, filter, selection } = perceivePageSelection(facts, requestedName, options);
   return { participant, indexes: selectReceivedHeads(squareReceiveRead(facts), participant, selection).map(item => item.key), filter };
 }
 
 /** Selection, receipts and resulting cursor belong to one artifact write transaction. */
-export function decideCatch(facts: SquareWrite, requestedName: string, options: CatchOptions, at: number): CatchSelection {
+export function decidePerceive(facts: SquareWrite, requestedName: string, options: PerceiveOptions, at: number): PerceiveSelection {
   let viewer: string;
   let filter: DirectedFilter = { kinds: ['say'], unseenOnly: true };
   let selection: Selection<number, DirectedFilter>;
   if (options.id !== undefined) {
     viewer = resolveKnownName(facts, requestedName);
-    catchLimit(options.limit);
-    if (['idle', 'from', 'mention', 'limit'].some((key) => Object.hasOwn(options, key))) throw new SquareError('invalid_args', 'Catch id cannot be combined with idle, from, mention or limit.');
+    perceiveLimit(options.limit);
+    if (['idle', 'from', 'mention', 'limit'].some((key) => Object.hasOwn(options, key))) throw new SquareError('invalid_args', 'Perceive id cannot be combined with idle, from, mention or limit.');
     const index = parseActivityId(options.id);
-    if (index === undefined) throw new SquareError('invalid_args', 'Invalid catch id: expected an activity id like act/12.');
+    if (index === undefined) throw new SquareError('invalid_args', 'Invalid perceive id: expected an activity id like act/12.');
     selection = { kind: 'exact', key: index, remainingQuery: filter };
   } else {
-    const page = catchPageSelection(facts, requestedName, options);
+    const page = perceivePageSelection(facts, requestedName, options);
     viewer = page.participant;
     filter = page.filter;
     selection = page.selection;
@@ -103,10 +103,10 @@ export function decideCatch(facts: SquareWrite, requestedName: string, options: 
     });
   }
   const delivered = consumed.items.map(item => item.data);
-  const observed = observeCatchSelection(facts, viewer, delivered, filter, at, consumed.remaining);
-  // Receipts are the durable catch count: everything directed here minus what is still unseen.
-  const caught = facts.directedCount(viewer, { kinds: ['say'] }) - facts.directedCount(viewer, { kinds: ['say'], unseenOnly: true });
-  // An exact id catch is a targeted fetch and stays repeatable, so it carries no nudge.
-  const hint = options.id === undefined ? catchHint(caught - consumed.newlyConsumed, caught) : undefined;
+  const observed = observePerceiveSelection(facts, viewer, delivered, filter, at, consumed.remaining);
+  // Receipts are the durable perceive count: everything directed here minus what is still unseen.
+  const perceived = facts.directedCount(viewer, { kinds: ['say'] }) - facts.directedCount(viewer, { kinds: ['say'], unseenOnly: true });
+  // An exact id perceive is a targeted fetch and stays repeatable, so it carries no nudge.
+  const hint = options.id === undefined ? perceiveHint(perceived - consumed.newlyConsumed, perceived) : undefined;
   return hint === undefined ? observed : { ...observed, hint };
 }

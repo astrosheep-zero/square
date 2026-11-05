@@ -27,21 +27,28 @@ not authorization credentials. Adapters resolve their own harness identity witho
 environment. Membership is explicit; `PUBLIC.square` is an ordinary filename. A participant handle
 captures owner and join generation; rejoin or takeover fences old handles. `done` ends membership;
 host attachment is separate, as described in [participant-ownership.md](participant-ownership.md).
+Each opened Square owns its artifact connection; `close()` releases it. File operations require an
+explicit `path`. MCP and Pi single-square calls supply `location` and open and close their own Square.
+
+`discover({cwd}, {owner?, depth?, limit?, after?})` finds nearby squares without selecting one. When
+`owner` is supplied, each item includes that owner's joined names and their pending directed activity
+counts; discovery does not consume them. The CLI `square list`, MCP `list`, and Pi `square_list` share
+this discovery and its rendered text.
 
 ## Activity and delivery
 
 `Participant.express` lands activity in Square, with optional immutable JSON `metadata` (maximum
 16 KiB). Mentions, replies, bells, listening and ignores determine the landed audience. Activity IDs
-are `act/N`. `Square.history` is the read-only archive; `Participant.catch` consumes directed activity,
+are `act/N`. `Square.history` is the read-only archive; `Participant.perceive` consumes directed activity,
 and `Participant.pending` reads addressed unconsumed says without consuming them. `listen`, `unlisten`,
 `ignore`, `listening` and `done` operate on the participant. History, status and participants are
 Square operations. `OperationControl` can carry cancellation; a committed mutation is not undone by
 later cancellation.
 
-A live idle catch owns matching activity notifications before producer export ownership is acquired.
+A live idle perceive owns matching activity notifications before producer export ownership is acquired.
 Matching uses its sender and directed-attention filters against the activity's landed delivery route;
 other activities and direct notices remain eligible. Release or expiry permits still-unconsumed activity
-at the next ordinary posting opportunity; caught or ACKed activity is not exported. Starting a catch
+at the next ordinary posting opportunity; perceived or ACKed activity is not exported. Starting a perceive
 cannot recall or retroactively suppress export ownership already committed.
 
 After landing, Square renders and posts a card per audience member to the host delivery ledger using
@@ -49,11 +56,11 @@ After landing, Square renders and posts a card per audience member to the host d
 Notices use the analogous `notice/N` key. The recipient and participant join generation are frozen at
 landing; ledger attachment rotation does not change the key. Post, receipt lookup and suppression use
 the same captured coordinates. A later mutating operation retries unposted work idempotently. Directed
-activity cards bound the body to 200 characters and point to `square_catch` when shortened. Square records which cards contain
-the full activity. Unread means after the read horizon, not caught, and without a ledger receipt for
-a full card. Square folds retained receipts lazily during privileged producer operations; catch permanently suppresses
+activity cards bound the body to 200 characters and point to `square_perceive` when shortened. Square records which cards contain
+the full activity. Unread means after the read horizon, not perceived, and without a ledger receipt for
+a full card. Square folds retained receipts lazily during privileged producer operations; perceive permanently suppresses
 the corresponding ledger cards when possible. Ledger receipt evidence has finite retention: after proof
-expires, locally unproved activity remains unread until explicit catch or ACK. Missing evidence proves
+expires, locally unproved activity remains unread until explicit perceive or ACK. Missing evidence proves
 neither consumption nor non-delivery. A shortened card cannot consume the full activity. Handoff
 acceptance is not presentation; a boundary receipt is not proof of comprehension.
 
@@ -99,7 +106,7 @@ again; no TTL or first-admission cutoff is required. Producer bookkeeping record
 A claim is recoverable when its process dies or its 60-second ownership expires; settlement is fenced
 to the captured token. An abandoned uncertain export at or beyond the ledger's minimum 30-day identity
 retention window is not automatically reinserted. Clock or boundary uncertainty is treated conservatively.
-This limit is not a source TTL: it does not reject or expire never-exported sources, and catch and ACK
+This limit is not a source TTL: it does not reject or expire never-exported sources, and perceive and ACK
 remain available. A crash between export and bookkeeping leaves honest uncertainty. A token-fenced
 initial attempt proved not to have invoked insertion, or given a definite insertion refusal, releases
 its export bookkeeping while keeping the source pending. Recovering a prior uncertain attempt never

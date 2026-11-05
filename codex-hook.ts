@@ -3,13 +3,13 @@ import { presentPendingAtBoundary } from './boundary-presentation.js';
 import { DeliveryLedger } from './delivery-ledger.js';
 import { harnessOwner } from './owner.js';
 import { attachDeliverySessionRoutes, detachDeliverySession } from './session-lifecycle.js';
-import { codexWakeAddress } from './codex-address.js';
+import { codexWakeAddress, codexBoundaryStore } from './codex-address.js';
 
 export type HookTrace = (line: string) => void;
 export const CODEX_HOOK_BUDGET_MS = 4500;
 const defaultTrace: HookTrace = line => { process.stderr.write(`${line}\n`); };
 
-/** Active delivery uses PostToolUse only; each async Stop owns its own wait. */
+/** Active delivery uses UserPromptSubmit and PostToolUse; each async Stop owns its own wait. */
 export async function codexHookResponse(
   value: unknown,
   sink: ((text: string) => void | Promise<void>) | undefined,
@@ -23,20 +23,25 @@ export async function codexHookResponse(
     Number.isFinite(configured) && configured > 0 ? configured : CODEX_HOOK_BUDGET_MS);
   const signal = AbortSignal.timeout(timeoutMs);
   const owner = harnessOwner({ channel: 'codex', session: input.session_id });
+  // Active native events disarm idle queueing; Stop arms its own async watcher.
+  // This file state is the only activity gate: no app-server sampling.
+  await codexBoundaryStore(env).record(input.session_id,
+    input.hook_event_name === 'SessionStart' ? 'start' : input.hook_event_name === 'SessionEnd' ? 'end' : 'non-stop',
+    { signal, turnId: input.turn_id });
   if (input.hook_event_name === 'SessionStart') {
     await attachDeliverySessionRoutes(owner, env, [codexWakeAddress(input.session_id, env)], signal);
   } else if (input.hook_event_name === 'SessionEnd' || input.hook_event_name === 'Interrupt') {
-    const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+    const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY, signal });
     try {
-      const captured = await ledger.session(owner);
+      const captured = await ledger.session(owner, signal);
       if (!captured || signal.aborted) return;
-      if (input.hook_event_name === 'SessionEnd') await detachDeliverySession(owner, captured.generation, env);
-      else await ledger.cancel({ owner, generation: captured.generation });
+      if (input.hook_event_name === 'SessionEnd') await detachDeliverySession(owner, captured.generation, env, signal);
+      else await ledger.cancel({ owner, generation: captured.generation }, signal);
     } finally { await ledger.close(); }
-  } else if (input.hook_event_name === 'PostToolUse' && sink) {
+  } else if ((input.hook_event_name === 'UserPromptSubmit' || input.hook_event_name === 'PostToolUse') && sink) {
     try {
       await presentPendingAtBoundary(owner, async context => {
-        await sink(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } })}\n`);
+        await sink(`${JSON.stringify({ hookSpecificOutput: { hookEventName: input.hook_event_name, additionalContext: context } })}\n`);
       }, env, signal);
       trace('square-codex-hook: stage=presentation');
     } catch (error) {

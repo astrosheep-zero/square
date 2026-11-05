@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { canonicalPath } from './canonical-path.js';
 import { observeFileVersion } from './file-changes.js';
-import { retrySqliteBusy, inSqliteTransaction } from './sqlite-transaction.js';
+import { retrySqliteBusy, inSqliteTransaction, awaitSqliteQueue } from './sqlite-transaction.js';
 import { InternalSquareError, SquareError } from './neutral.js';
 import { readStorageRevision } from './sqlite-framing.js';
 import { invalidArtifact } from './sqlite-values.js';
@@ -36,11 +36,11 @@ export function storageError(error: unknown, location: string): unknown {
   return error;
 }
 /** Private storage opening; never creates a missing file. */
-export function openExistingSquareDatabase(location: string): DatabaseSync {
+export function openExistingSquareDatabase(location: string, readOnly = false): DatabaseSync {
   requireSquareExtension(location);
   const uri = pathToFileURL(path.resolve(location));
-  uri.searchParams.set('mode', 'rw');
-  try { return new DatabaseSync(uri.href); } catch (error) { throw storageError(error, location); }
+  uri.searchParams.set('mode', readOnly ? 'ro' : 'rw');
+  try { return new DatabaseSync(uri.href, { readOnly }); } catch (error) { throw storageError(error, location); }
 }
 export function abort(signal?: AbortSignal): void {
   if (signal?.aborted) throw signal.reason ?? new Error('Square artifact operation aborted');
@@ -68,17 +68,22 @@ export function createArtifactStore(location: string, format: StoreFormat, initi
     if (database) return database;
     location = await canonical;
     abort(signal);
-    database = openExistingSquareDatabase(location);
-    try { await retrySqliteBusy(() => validate(database!), signal); database.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=FULL'); }
+    const probe = await retrySqliteBusy(() => openExistingSquareDatabase(location, true), signal);
+    try { await retrySqliteBusy(() => validate(probe), signal); }
+    catch (error) { throw storageError(error, location); }
+    finally { probe.close(); }
+    database = await retrySqliteBusy(() => openExistingSquareDatabase(location), signal);
+    try { await retrySqliteBusy(() => { validate(database!); database!.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=FULL'); }, signal); }
     catch (error) { database.close(); database = undefined; throw storageError(error, location); }
     return database;
   }
   function queue<T>(operation: (signal: AbortSignal) => Promise<T>, signal: AbortSignal): Promise<T> {
     if (inCallback) throw new TypeError('Square artifact operations cannot nest inside a callback.');
     if (closed) return Promise.reject(new Error('Square artifact is closed'));
-    const result = tail.then(() => { abort(signal); return operation(signal); });
+    let started = false;
+    const result = tail.then(() => { abort(signal); started = true; return operation(signal); });
     tail = result.then(() => undefined, () => undefined);
-    return result;
+    return awaitSqliteQueue(result, signal, () => started);
   }
   function transaction<R>(write: boolean, callback: (tx: StoreTransaction) => R, signal: AbortSignal) {
     return connection(signal).then(db => inSqliteTransaction(db, write, () => validate(db), version => {
@@ -144,7 +149,7 @@ export function createArtifactStore(location: string, format: StoreFormat, initi
   };
 }
 export async function inspectStore<R>(location: string, format: StoreFormat, select: (db: DatabaseSync) => R, signal?: AbortSignal): Promise<R> {
-  const db = openExistingSquareDatabase(location);
+  const db = await retrySqliteBusy(() => openExistingSquareDatabase(location, true), signal);
   return inSqliteTransaction(db, false, () => format.validate(db, location), () => select(db), signal)
     .catch(error => { throw storageError(error, location); }).finally(() => db.close());
 }
@@ -162,9 +167,9 @@ export async function createStoreFile(location: string, format: StoreFormat, ini
   const temporary = path.join(path.dirname(location), `.${path.basename(location)}.${process.pid}.${randomUUID()}.tmp`);
   const handle = await fs.promises.open(temporary, 'wx'); await handle.close();
   try {
-    const db = new DatabaseSync(temporary);
+    const db = await retrySqliteBusy(() => new DatabaseSync(temporary), signal);
     try {
-      db.exec('PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL');
+      await retrySqliteBusy(() => db.exec('PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL'), signal);
       await inSqliteTransaction(db, true, () => {}, () => { initialize(db); db.exec(`PRAGMA application_id=${format.applicationId}; PRAGMA user_version=${format.userVersion}`); }, signal);
     } finally { db.close(); }
     const flush = await fs.promises.open(temporary, 'r+');
@@ -177,10 +182,12 @@ export async function createStoreFile(location: string, format: StoreFormat, ini
 export async function replaceStoreFile(location: string, format: StoreFormat, initialize: (db: DatabaseSync, revision: number) => void, signal?: AbortSignal): Promise<void> {
   if (await createStoreFile(location, format, db => initialize(db, 0), signal)) return;
   abort(signal);
-  const db = openExistingSquareDatabase(await canonicalPath(location));
+  location = await canonicalPath(location);
+  const probe = await retrySqliteBusy(() => openExistingSquareDatabase(location, true), signal);
+  try { await retrySqliteBusy(() => format.validate(probe, location), signal); } finally { probe.close(); }
+  const db = await retrySqliteBusy(() => openExistingSquareDatabase(location), signal);
   try {
-    await retrySqliteBusy(() => format.validate(db, location), signal);
-    db.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=FULL');
+    await retrySqliteBusy(() => { format.validate(db, location); db.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=FULL'); }, signal);
     await inSqliteTransaction(db, true, () => format.validate(db, location), () => {
       const revision = readStorageRevision(db);
       if (revision === Number.MAX_SAFE_INTEGER) throw invalidArtifact('revision cannot advance beyond the safe integer limit.');

@@ -19,15 +19,15 @@ const deferred = () => {
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-late-lifetime-'));
   const env = { ...process.env, SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'),
-    SQUARE_NOTIFY_DELIVERY_WAIT_MS: '100', SQUARE_DISABLE_PASEO_WAKE: '1' };
+    SQUARE_NOTIFY_DELIVERY_WAIT_MS: '5000', SQUARE_DISABLE_PASEO_WAKE: '1' };
   const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
   t.after(async () => { await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   return { root, env, ledger };
 }
 
-test('producer timeout returns while the same idle connection preserves late HTTP acceptance', { timeout: 10000 }, async t => {
+test('producer cancellation after HTTP invocation returns while its retained connection preserves late acceptance', { timeout: 10000 }, async t => {
   const f = await fixture(t), received = deferred(), release = deferred(), closed = deferred();
-  let requests = 0, result, senderLedger, closes = 0;
+  let requests = 0, result, senderLedger, closes = 0, receivedResponse = false;
   const server = http.createServer((request, response) => {
     requests++; request.resume(); response.writeHead(204); response.end();
   });
@@ -39,7 +39,7 @@ test('producer timeout returns while the same idle connection preserves late HTT
   const originalFetch = globalThis.fetch, originalDispatch = DeliveryLedger.prototype.dispatchHandoff;
   globalThis.fetch = async (...args) => {
     const response = await originalFetch(...args);
-    received.resolve(); await release.promise; return response;
+    receivedResponse = true; received.resolve(); await release.promise; return response;
   };
   DeliveryLedger.prototype.dispatchHandoff = async function (...args) {
     senderLedger = this;
@@ -49,15 +49,19 @@ test('producer timeout returns while the same idle connection preserves late HTT
     return result;
   };
   try {
-    const sending = square.send({ from: 'notice', to: 'recipient', body: 'late acceptance' });
-    await received.promise;
+    const abort = new AbortController();
+    const sending = square.send({ from: 'notice', to: 'recipient', body: 'late acceptance' }, { signal: abort.signal });
+    await Promise.race([received.promise, sending.then(() => {
+      if (!receivedResponse) throw new Error('producer returned before the controlled HTTP effect');
+    })]);
+    abort.abort(new Error('cancel after HTTP response'));
     await sending;
     assert.equal(result.outcome, 'unknown');
     assert.ok(result.lateSettlement);
-    assert.equal(closes, 0);
+    assert.equal(closes, 1);
     // An independent writer commits while the retained transport has not settled.
     assert.equal((await f.ledger.post({ owner, key: 'independent', text: 'not blocked' })).status, 'posted');
-    assert.equal((await senderLedger.session(owner)).state, 'attached');
+    await assert.rejects(senderLedger.session(owner), /closed/);
     release.resolve();
     assert.deepEqual(await result.lateSettlement, { outcome: 'accepted', persistence: { status: 'recorded' } });
     await closed.promise;
@@ -67,6 +71,7 @@ test('producer timeout returns while the same idle connection preserves late HTT
     assert.equal(closes, 1);
   } finally {
     release.resolve(); globalThis.fetch = originalFetch; DeliveryLedger.prototype.dispatchHandoff = originalDispatch;
+    await result?.lateSettlement;
     await square.close(); await new Promise(resolve => server.close(resolve));
   }
 });
@@ -92,7 +97,7 @@ test('receiver cancellation retires promptly and records only the already-invoke
     abort.abort();
     await running;
     assert.equal(result.outcome, 'unknown');
-    assert.equal(closes, 0);
+    assert.equal(closes, 1);
     assert.equal(await f.ledger.cancel({ owner, generation: session.generation }), true);
     finish.resolve('accepted');
     assert.deepEqual(await result.lateSettlement, { outcome: 'accepted', persistence: { status: 'recorded' } });
@@ -113,13 +118,13 @@ test('throwing host diagnostics cannot reject late observers or strand a retired
   const late = deferred();
   lifetime.track({ outcome: 'unknown', lateSettlement: late.promise });
   lifetime.track({ outcome: 'unknown', lateSettlement: Promise.reject(Error('unexpected rejection')) });
-  await lifetime.close();
+  await assert.rejects(lifetime.close(), /close failed/);
   late.resolve({ outcome: 'accepted', persistence: { status: 'error', error: Error('private body') } });
   await closed.promise;
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(closes, 1);
   assert.deepEqual(new Set(diagnostics.map(item => item.event)), new Set([
-    'delivery-late-settlement', 'delivery-late-settlement-rejected', 'delivery-ledger-deferred-close-error',
+    'delivery-late-settlement', 'delivery-late-settlement-rejected',
   ]));
   assert.doesNotMatch(JSON.stringify(diagnostics), /private body/);
 });
@@ -135,11 +140,11 @@ test('retirement observes every late result, diagnoses failure without body text
   lifetime.track({ outcome: 'unknown', lateSettlement: second.promise });
   lifetime.track({ outcome: 'unknown', lateSettlement: third.promise });
   await lifetime.close();
-  assert.equal(closes, 0);
+  assert.equal(closes, 1);
   first.resolve({ outcome: 'accepted', persistence: { status: 'error', error: Error('private body') } });
   second.resolve({ outcome: 'accepted', persistence: { status: 'not-recorded' } });
   await Promise.resolve();
-  assert.equal(closes, 0);
+  assert.equal(closes, 1);
   third.resolve({ outcome: 'accepted', persistence: { status: 'recorded' } });
   await Promise.resolve(); await lifetime.close();
   assert.equal(closes, 1);

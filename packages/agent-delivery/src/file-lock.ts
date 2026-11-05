@@ -22,7 +22,10 @@ export class FileLockError extends Error {
 }
 
 function isBusy(error: unknown): boolean {
-  return error instanceof Error && /database is locked|SQLITE_BUSY/i.test(error.message);
+  const code = (error as { code?: string; errcode?: number } | null)?.code;
+  return typeof code === 'string' && /^SQLITE_BUSY(?:_|$)/.test(code)
+    || typeof (error as { errcode?: number } | null)?.errcode === 'number' && ((error as { errcode: number }).errcode & 0xff) === 5
+    || error instanceof Error && /database is locked|database is busy|SQLITE_BUSY/i.test(error.message);
 }
 
 function isNotADatabase(error: unknown): boolean {

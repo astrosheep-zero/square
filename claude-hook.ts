@@ -54,61 +54,62 @@ export async function runClaudeHook(
       await denyMcpTool(sink);
     return '';
   }
+  const signal = AbortSignal.timeout(4500);
   const boundaries = claudeBoundaryStore(input.session_id, env);
   const mainOwner = ownerFor(input);
   const owner = harnessOwner({ channel: 'claude-code', session: input.session_id, ...(input.agent_id === undefined ? {} : { agent: input.agent_id }) });
   if (input.hook_event_name === 'SessionStart') {
     await boundaries.start(async () => {
-      const session = await attachDeliverySessionRoutes(mainOwner, env, [{ kind: route, address: { sessionId: input.session_id } }], AbortSignal.timeout(4500));
+      const session = await attachDeliverySessionRoutes(mainOwner, env, [{ kind: route, address: { sessionId: input.session_id } }], signal);
       if (!session) return false;
-      const ledger = await DeliveryLedger.open({ location: deliveryLedgerLocation(env) });
+      const ledger = await DeliveryLedger.open({ location: deliveryLedgerLocation(env), signal });
       try {
-        await ledger.updateRoutes({ owner: mainOwner, generation: session.generation, routes: session.routes.filter(item => item.kind !== 'claude-native') });
+        await ledger.updateRoutes({ owner: mainOwner, generation: session.generation, routes: session.routes.filter(item => item.kind !== 'claude-native') }, signal);
       } finally { await ledger.close(); }
       return session.generation;
-    });
+    }, signal);
     return '';
   }
 
   if (input.hook_event_name === 'SessionEnd') {
-    const captured = await boundaries.end();
-    if (captured) await detachDeliverySession(mainOwner, captured.generation, env);
+    const captured = await boundaries.end(signal);
+    if (captured) await detachDeliverySession(mainOwner, captured.generation, env, signal);
     return '';
   }
 
   if (input.hook_event_name === 'UserPromptSubmit') {
-    await boundaries.prompt(input.prompt_id);
+    await boundaries.prompt(input.prompt_id, signal);
     if (!input.prompt_id) return '';
     if (input.prompt) {
-      const ledger = await DeliveryLedger.open({ location: deliveryLedgerLocation(env) });
+      const ledger = await DeliveryLedger.open({ location: deliveryLedgerLocation(env), signal });
       try {
         for (const frame of observedFrames(input.prompt)) {
-          const handoff = await ledger.handoff(frame.token);
+          const handoff = await ledger.handoff(frame.token, signal);
           if (!handoff || handoff.owner !== owner || handoff.routeKind !== route || handoff.payloadHash !== frame.payloadHash) continue;
-          await ledger.observePresentation(handoff);
+          await ledger.observePresentation(handoff, undefined, signal);
         }
       } finally { await ledger.close(); }
     }
     await presentPendingAtBoundary(owner, async context => {
       await sink(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: context } })}\n`);
-    }, env, AbortSignal.timeout(4500));
+    }, env, signal);
     return '';
   }
 
   if (input.hook_event_name === 'PreToolUse' && input.tool_name?.startsWith('mcp__plugin_square_square__')) {
     if (!input.tool_use_id || !input.cwd) { await denyMcpTool(sink); return ''; }
     try {
-      await beginClaudeMcpCall({ toolUseId: input.tool_use_id, sessionId: input.session_id, cwd: input.cwd, agentId: input.agent_id }, env);
+      await beginClaudeMcpCall({ toolUseId: input.tool_use_id, sessionId: input.session_id, cwd: input.cwd, agentId: input.agent_id }, env, signal);
     } catch { await denyMcpTool(sink); return ''; }
   }
   if ((input.hook_event_name === 'PostToolUse' || input.hook_event_name === 'PostToolUseFailure')
     && input.tool_name?.startsWith('mcp__plugin_square_square__') && input.tool_use_id) {
-    await endClaudeMcpCallForSession(input.tool_use_id, input.session_id, env, input.agent_id).catch(() => undefined);
+    await endClaudeMcpCallForSession(input.tool_use_id, input.session_id, env, input.agent_id, signal).catch(() => undefined);
   }
   if (input.hook_event_name === 'PostToolUse') {
     await presentPendingAtBoundary(owner, async context => {
       await sink(`${JSON.stringify({ hookSpecificOutput: { hookEventName: input.hook_event_name, additionalContext: context } })}\n`);
-    }, env, AbortSignal.timeout(4500));
+    }, env, signal);
   }
   return '';
 }
@@ -138,23 +139,23 @@ export async function runClaudeWatch(text: string, env: NodeJS.ProcessEnv = proc
   process.once('SIGINT', stop);
   const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   try {
-    const captured = await boundaries.capture(input.prompt_id);
+    const captured = await boundaries.capture(input.prompt_id, combined);
     if (!captured) return '';
 
     await boundaries.watch(combined, async () => {
-      if (!await boundaries.current(captured)) return;
+      if (!await boundaries.current(captured, combined)) return;
 
-      const ledger = await DeliveryLedger.open({ location: deliveryLedgerLocation(env) });
+      const ledger = await DeliveryLedger.open({ location: deliveryLedgerLocation(env), signal: combined });
       const lifetime = retainDeliveryLedger(ledger);
       const observer = await ledger.observe(owner);
       try {
         while (!combined.aborted) {
           let version = await observer.read(combined);
-          const live = await boundaries.current(captured);
-          const session = await ledger.session(owner);
+          const live = await boundaries.current(captured, combined);
+          const session = await ledger.session(owner, combined);
           if (!live || session?.state !== 'attached' || session.generation !== captured.generation || !session.routes.some(item => item.kind === route)) return;
-          const cards = await ledger.pending(owner, { generation: captured.generation });
-          const held = new Set((await ledger.handoffs(owner, { generation: captured.generation }))
+          const cards = await ledger.pending(owner, { generation: captured.generation }, combined);
+          const held = new Set((await ledger.handoffs(owner, { generation: captured.generation }, combined))
             .filter(attempt => !['failed', 'released'].includes(attempt.outcome)).map(attempt => attempt.seq));
           for (const card of cards) {
             if (held.has(card.seq)) continue;
@@ -165,13 +166,13 @@ export async function runClaudeWatch(text: string, env: NodeJS.ProcessEnv = proc
                 const frame = claudeFrame(deliveryCard, context.token);
                 const payloadHash = createHash('sha256').update(frame).digest('hex');
                 if (!await context.prepare({ token: context.token, messageId: context.token, payloadHash })) return 'not-capable';
-                const currentSession = await ledger.session(owner);
+                const currentSession = await ledger.session(owner, context.signal);
                 if (currentSession?.state !== 'attached' || currentSession.generation !== captured.generation
                   || !currentSession.routes.some(item => item.kind === route) || !await context.beforeSend()) return 'not-capable';
-                const native = await boundaries.current(captured);
+                const native = await boundaries.current(captured, context.signal);
                 if (!native || context.signal.aborted || Date.now() >= context.deadline) return 'not-capable';
                 try { await output(frame); }
-                finally { await boundaries.consume(captured); }
+                finally { await boundaries.consume(captured, AbortSignal.timeout(5000)); }
                 process.exitCode = 2;
                 return 'unknown';
               },

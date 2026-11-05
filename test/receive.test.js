@@ -84,9 +84,9 @@ test('page filters before limit, probes do not consume, and sparse exact receipt
     assert.equal(repeat.newlyConsumed, 0);
     assert.equal(repeat.remaining, 1);
     assert.deepEqual(tx.receipt({ recipient: 'east:bob', item: 'm#third' }), { at: 10 });
-    const caught = consumeReceived(tx, 'east:bob', page({ via: 'direct' }, 1), 30);
-    assert.deepEqual(caught.items.map(item => item.key), ['a#second']);
-    assert.equal(caught.remaining, 1);
+    const consumed = consumeReceived(tx, 'east:bob', page({ via: 'direct' }, 1), 30);
+    assert.deepEqual(consumed.items.map(item => item.key), ['a#second']);
+    assert.equal(consumed.remaining, 1);
     assert.equal(tx.receipt({ recipient: 'east:bob', item: 'z#first' }), undefined);
     assert.equal(tx.receipt({ recipient: 'west:bob', item: 'm#third' }), undefined);
   });

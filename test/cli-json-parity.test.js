@@ -90,12 +90,12 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
     assert.equal(sent.activity.reply, 'act/1');
     assert.ok(sent.hint);
   });
-  await t.test('catch retains perception, route and consumption receipt', async () => {
-    const caught = await f.parity('Bob', ['catch', '--now', '--limit', '2'], async square => (await square.participant('Bob', { owner: body })).catch({ limit: 2 }));
-    assert.equal(caught.activities[0].id, sent.activity.id);
-    assert.equal(caught.activities[0].perception, 'full');
-    assert.equal(caught.activities[0].via, 'mention');
-    const exact = await f.parity('Bob', ['catch', '--id', sent.activity.id], async square => (await square.participant('Bob', { owner: body })).catch({ id: sent.activity.id }));
+  await t.test('perceive retains perception, route and consumption receipt', async () => {
+    const perceived = await f.parity('Bob', ['perceive', '--now', '--limit', '2'], async square => (await square.participant('Bob', { owner: body })).perceive({ limit: 2 }));
+    assert.equal(perceived.activities[0].id, sent.activity.id);
+    assert.equal(perceived.activities[0].perception, 'full');
+    assert.equal(perceived.activities[0].via, 'mention');
+    const exact = await f.parity('Bob', ['perceive', '--id', sent.activity.id], async square => (await square.participant('Bob', { owner: body })).perceive({ id: sent.activity.id }));
     assert.equal(exact.activities[0].id, sent.activity.id);
   });
   await t.test('history includes listener target and all canonical fields', async () => {
@@ -127,12 +127,12 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
   });
 });
 
-test('catch --json retains the terminal failure exit code and the SDK result', async t => {
+test('perceive --json retains the terminal failure exit code and the SDK result', async t => {
   const f = await fixture(t, { hardCap: 1 });
   await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
   await f.parity('Bob', ['join'], square => square.join('Bob', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
   await f.parity('Alice', ['express', '--force', 'one'], async square => (await square.participant('Alice', { owner: body })).express('one', { force: true }));
-  const result = await f.parity('Alice', ['catch'], async square => (await square.participant('Alice', { owner: body })).catch({ limit: 10 }), 1);
+  const result = await f.parity('Alice', ['perceive'], async square => (await square.participant('Alice', { owner: body })).perceive({ limit: 10 }), 1);
   assert.equal(result.reason, 'capped');
 });
 
@@ -155,18 +155,18 @@ test('a throttled waiting express leaves stdout as one JSON document', async t =
   assert.match(result.stderr, /your activity is waiting/, 'throttle progress stays off JSON stdout');
 });
 
-test('an active catch keeps its exit code and JSON receipt without disrupting the waiter', async t => {
+test('an active perceive keeps its exit code and JSON receipt without disrupting the waiter', async t => {
   const f = await fixture(t);
   await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
   const square = await Square.at({ path: f.file, env: f.env });
   const alice = await square.participant('Alice', { owner: body }), controller = new AbortController();
   let started;
   const ready = new Promise(resolve => { started = resolve; });
-  const waiting = alice.catch({ idle: 60_000 }, { signal: controller.signal, onProgress: started });
+  const waiting = alice.perceive({ idle: 60_000 }, { signal: controller.signal, onProgress: started });
   try {
     await ready;
-    const expected = serializable(await alice.catch({ idle: 60_000, limit: 10 }));
-    const result = run(withName(f.file, 'Alice', ['catch', '--idle', '1m', '--json']), { cwd: f.cwd, env: f.env });
+    const expected = serializable(await alice.perceive({ idle: 60_000, limit: 10 }));
+    const result = run(withName(f.file, 'Alice', ['perceive', '--idle', '1m', '--json']), { cwd: f.cwd, env: f.env });
     assert.equal(result.status, 1, result.stderr);
     assert.equal(expected.reason, 'already-active');
     assert.deepEqual(JSON.parse(result.stdout), expected);
@@ -191,7 +191,7 @@ test('JSON mode retains human argument errors and exit codes', async t => {
   // A JSON switch cannot become invisible to a preceding value-taking option.
   for (const args of [
     ['join', '--last', '--json', '10'], ['express', '--metadata', '--json', '{}'],
-    ['catch', '--limit', '--json', '2'], ['history', '--limit', '--json', '2'],
+    ['perceive', '--limit', '--json', '2'], ['history', '--limit', '--json', '2'],
     ['participants', '--limit', '--json', '2'], ['inbox', '--for-owner', body, '--limit', '--json', '2'],
   ]) {
     const result = run(withName(f.file, 'Alice', args), { cwd: f.cwd, env: f.env });

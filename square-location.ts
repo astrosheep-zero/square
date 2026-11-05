@@ -3,7 +3,7 @@ import { SquareError } from './neutral.js';
 interface SquareLocation { readonly path?: string; readonly cwd?: string; readonly env?: NodeJS.ProcessEnv }
 
 export function squareLocation(input: SquareLocation): string {
-  const selected = input.path ?? (input.env ?? process.env).SQUARE_LOCATION;
+  const selected = input.path;
   if (selected === undefined || selected.trim() === '') throw new SquareError('invalid_args', 'Square needs a location');
   // Windows roots include drive-relative prefixes such as D:.
   if (path.win32.parse(selected).root === '' && /^[A-Za-z][A-Za-z0-9+.-]*:/.test(selected))
