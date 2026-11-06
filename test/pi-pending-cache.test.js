@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test, { mock } from 'node:test';
-import squarePiExtension from '../plugins/pi/square-pi.js';
+import { visibleWidth } from '@earendil-works/pi-tui';
+import squarePiExtension, { renderSquareCard } from '../plugins/pi/square-pi.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/delivery-frame.js';
 import { harnessOwner } from '../dist/owner.js';
@@ -102,6 +103,12 @@ test('Pi renders generic details after producer storage disappears and falls bac
   await until(() => f.sent.length === 1, 'Pi did not inject cards');
   assert.deepEqual(f.sent[0].details.items, [posted.details, external, { text: 'invalid fallback' }, { text: 'plain fallback' }]);
   assert.equal(f.sent[0].content, renderDeliveryReminder([posted.text, 'external preview', 'invalid fallback', 'plain fallback'], { tagged: true }));
+
+  const theme = { fg: (_name, text) => text, bg: (_name, text) => text,
+    bold: text => text, italic: text => text, underline: text => text, strikethrough: text => text };
+  const collapsed = renderSquareCard(f.sent[0], { expanded: false }, theme).render(50);
+  const expanded = renderSquareCard(f.sent[0], { expanded: true }, theme).render(50);
+  for (const line of [...collapsed, ...expanded]) assert.ok(visibleWidth(line) <= 50, 'a card line must fit the terminal');
 });
 
 test('Pi reserves the reminder frame within its batch budget', async t => {

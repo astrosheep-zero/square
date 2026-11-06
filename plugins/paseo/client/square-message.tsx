@@ -3,7 +3,7 @@ import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { COLLAPSED_PREVIEW_MAX_CHARS, outputPreview, type SquareMessageData } from "../shared/message";
-import { MONO, SquareCue, SquareInline, SquareMarkdownBody } from "./markdown";
+import { MONO, SquareInline, SquareMarkdownBody } from "./markdown";
 import { squarePalette } from "./palette";
 
 /**
@@ -12,7 +12,6 @@ import { squarePalette } from "./palette";
  * Header (both states): ■ origin · authors … refs · how many.
  * Collapsed: two preview lines. Expanded: the whole scene, at full width.
  * Each structured message keeps its own author, reference and body.
- * A badge or an *action* is stage direction, a caption on a hairline.
  */
 export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<SquareMessageData>) {
   const [expanded, setExpanded] = useState(false);
@@ -38,7 +37,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
   // On web the header brightens its details under the cursor; touch keeps them quiet.
   const detail = layout.platform === "web" && hovered ? foreground : muted;
   const row = { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 };
-  const indent = { paddingLeft: 15 };
+  const guide = { marginLeft: 2.5, paddingLeft: palette.quote.paddingLeft, borderLeftWidth: palette.quote.borderLeftWidth, borderLeftColor: palette.quote.borderLeftColor };
 
   return (
     <View style={[
@@ -66,22 +65,19 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
           <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={10} color={detail} />
         </View>
         {!expanded && preview !== undefined && preview !== "" && (
-          <View style={{ ...indent, marginTop: 5, marginLeft: 2.5, paddingLeft: palette.quote.paddingLeft, borderLeftWidth: palette.quote.borderLeftWidth, borderLeftColor: palette.quote.borderLeftColor }}>
+          <View style={{ ...guide, marginTop: 5 }}>
             <SquareInline text={preview} theme={palette.theme} numberOfLines={2} lead={chorus && latest && "author" in latest ? latest.author : undefined} />
           </View>
         )}
       </Pressable>
       {expanded && (
-        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, marginTop: 3 }} nestedScrollEnabled>
-          <View style={{ ...indent, gap: 7 }}>
-            {items === undefined ? <SquareMarkdownBody text={text ?? ""} theme={palette.theme} /> : items.map((entry, index) => "text" in entry ? (
-              <SquareMarkdownBody key={index} text={entry.text} theme={palette.theme} />
-            ) : (
-              <View key={index} style={{ gap: 6 }}>
-                {entry.badge
-                  ? <SquareCue theme={palette.theme} label={[[entry.author, entry.badge].filter(Boolean).join(" "), entry.origin, entry.ref].filter(Boolean).join(" · ")} />
-                  : <Text style={{ color: muted, fontSize: 11, fontFamily: MONO }}>{[entry.origin, entry.ref].filter(Boolean).join(" · ")}</Text>}
-                <SquareMarkdownBody text={entry.body} theme={palette.theme} lead={chorus ? entry.author : undefined} author={entry.author} />
+        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, marginTop: 5 }} nestedScrollEnabled>
+          <View style={{ ...guide, gap: 7 }}>
+            {items === undefined ? <SquareMarkdownBody text={text ?? ""} theme={palette.theme} /> : items.map((entry, index) => (
+              <View key={index} style={index > 0 ? { paddingTop: 7, borderTopWidth: palette.card.borderWidth, borderTopColor: border } : undefined}>
+                {"text" in entry
+                  ? <SquareMarkdownBody text={entry.text} theme={palette.theme} />
+                  : <SquareMarkdownBody text={entry.body} theme={palette.theme} lead={chorus ? entry.author : undefined} />}
               </View>
             ))}
           </View>

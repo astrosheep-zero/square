@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { Platform, StyleSheet, Text, View, type TextStyle } from "react-native";
+import { Platform, Text, View, type TextStyle } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { Lexer, lexer, type Token, type Tokens } from "marked";
 
@@ -10,7 +10,7 @@ function makeStyles(colors: PluginTheme["colors"]) {
     block: { gap: 6 },
     text: { color: colors.foreground, fontSize: 13, lineHeight: 19 },
     lead: { color: colors.accent, fontWeight: "600" as const },
-    strong: { fontWeight: "500" as const, color: colors.foreground },
+    strong: { fontWeight: "600" as const, color: colors.foreground },
     em: { color: colors.foregroundMuted, fontStyle: "italic" as const },
     del: { color: colors.foregroundMuted, textDecorationLine: "line-through" as const },
     link: { color: colors.accent, textDecorationLine: "underline" as const },
@@ -33,6 +33,10 @@ type Styles = ReturnType<typeof makeStyles>;
 /** Children of a token, if it has any: `Token` is a union, so the optional field needs one cast. */
 const children = (node: Token | { tokens?: Token[] }): Token[] => (node as { tokens?: Token[] }).tokens ?? [];
 
+const unescape = (text: string): string =>
+  text.replace(/&(lt|gt|quot|#39|amp);/g, (_, entity: string) =>
+    entity === "lt" ? "<" : entity === "gt" ? ">" : entity === "quot" ? '"' : entity === "#39" ? "'" : "&");
+
 function renderInlines(tokens: Token[], styles: Styles, prefix: string, extra?: TextStyle): ReactNode[] {
   return tokens.map((token, index) => {
     const key = `${prefix}-${index}`;
@@ -50,7 +54,7 @@ function renderInlines(tokens: Token[], styles: Styles, prefix: string, extra?: 
       default: {
         const inline = token as Tokens.Generic;
         if (inline.tokens !== undefined) return nested({});
-        return inline.text ?? inline.raw;
+        return unescape(inline.text ?? inline.raw);
       }
     }
   });
@@ -149,41 +153,20 @@ export function SquareInline({ text, theme, numberOfLines, lead }: {
   );
 }
 
-/** A paragraph that is one *emphasis* and nothing else is an action, not a line. */
-const isAction = (token: Token): token is Tokens.Paragraph =>
-  token.type === "paragraph" && children(token).length === 1 && children(token)[0]!.type === "em";
-
-/** A bell or an action is stage direction: a caption on a hairline across the full width. */
-export function SquareCue({ label, theme }: { label: ReactNode; theme: PluginTheme }) {
-  const rule = { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border };
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginVertical: 2 }}>
-      <View style={rule} />
-      <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11.5, lineHeight: 16, letterSpacing: 0.4 }}>{label}</Text>
-      <View style={rule} />
-    </View>
-  );
-}
-
 /**
  * A body of Markdown: no envelope — the words only, at full width.
- * `lead` runs the author into the first line; `author` names whoever performs an action.
+ * `lead` runs the author into the first line.
  */
-export function SquareMarkdownBody({ text, theme, lead, author }: {
+export function SquareMarkdownBody({ text, theme, lead }: {
   text: string;
   theme: PluginTheme;
   lead?: string;
-  author?: string;
 }) {
   const styles = useMemo(() => makeStyles(theme.colors), [theme.colors]);
   const tokens = useMemo(() => lexer(text).filter(token => token.type !== "space"), [text]);
   let pending = lead;
   const nodes = tokens.map((token, index) => {
     const key = `body-${index}`;
-    if (isAction(token)) {
-      const words = renderInlines(children(children(token)[0]!), styles, key);
-      return <SquareCue key={key} theme={theme} label={author === undefined ? words : <>{author} {words}</>} />;
-    }
     if (pending === undefined) return renderBlocks([token], styles, key);
     const name = pending;
     pending = undefined;
