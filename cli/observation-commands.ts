@@ -14,6 +14,7 @@ import {
 import {
   PARTICIPANTS_DEFAULT_LIMIT,
   PARTICIPANTS_MAX_LIMIT,
+  historyContinuationCommand, participantsLimitCommand,
   renderHistoryResult,
   renderParticipantsResult,
   renderStatusResult,
@@ -335,11 +336,6 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
   };
 }
 
-function historyContinuationCommand(options: HistoryCommandOptions, squarePath: string, args: string[]): string {
-  const full = [...(options.continuationArgs ?? []), ...args];
-  return `${commandPrefix(squarePath)} history ${full.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
-}
-
 function renderFields(sayNumbers: Readonly<Record<number, number>>, item: ArchiveRecord, fields: string[]): string {
   return fields.map((field) => {
     switch (field) {
@@ -365,7 +361,7 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
     try { outcome = await withSquare(context, (square) => square.history({ ...options.query, ...(context.json ? {} : { observe: true }) })); }
     catch (error) {
       const bounds = (error as OperationError | null)?.operation?.historyBounds;
-      if (bounds !== undefined) fail(`✕ history is capped at ${bounds.maxLimit} activities\n${historyContinuationCommand(options, squarePath, ['--limit', String(bounds.maxLimit)])}`);
+      if (bounds !== undefined) fail(`✕ history is capped at ${bounds.maxLimit} activities\n${historyContinuationCommand(squarePath, [...options.continuationArgs, '--limit', String(bounds.maxLimit)])}`);
       throw error;
     }
     if (context.json) return jsonResult(outcome);
@@ -384,10 +380,6 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
 };
 
 interface ParticipantsCommandOptions { limit: number; }
-
-function participantsLimitCommand(squarePath: string, limit: number): string {
-  return `${commandPrefix(squarePath)} participants --limit ${limit}`;
-}
 
 function parseParticipants(argv: string[], context: CommandContext): ParticipantsCommandOptions {
   let limit = PARTICIPANTS_DEFAULT_LIMIT;

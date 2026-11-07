@@ -267,7 +267,6 @@ export function squareToolFailure(error: unknown, signal?: AbortSignal): JsonObj
 export function squareToolFailureText(failure: JsonObject, context: { location?: string; participant?: string; draft?: string } = {}): string {
   const report = failure as unknown as FailureReport;
   const lines = renderFailureLines(report, { squarePath: context.location, name: context.participant, surface: 'tool' });
-  if (report.code === 'behind') lines[0] = `✕ your words stay unsent — ${report.message}`;
   if (context.draft !== undefined) {
     lines.push(`· draft kept in memory: ${context.draft}`);
     lines.push(report.code === 'behind'

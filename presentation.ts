@@ -1,4 +1,4 @@
-import { type HydratedAct, type PublicAct, type RoomChangeAct, sameName, isSquareError } from './model.js';
+import { type HydratedAct, type PublicAct, type RoomChangeAct, sameName } from './model.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { participantIdentity } from './participant-identity.js';
@@ -96,12 +96,6 @@ export function formatRefusal(
   // A refusal with no known count stays bare rather than claiming "0 in the square".
   if (opts.participantCount === undefined) return body === '' ? '' : `${body}\n`;
   return withPathOutput(squarePath, body, { ...opts, plain: true });
-}
-
-export function refusalText(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error);
-  const marked = isSquareError(error) && ['never_joined', 'not_standing'].includes(error.facts?.reason ?? '');
-  return marked ? text.split('\n').map((line) => `✕ ${line}`).join('\n') : text;
 }
 
 export function quoteShell(value: string): string {

@@ -193,6 +193,22 @@ test('tool recovery and watch guidance use native actions; CLI keeps its command
   assert.match(renderWatchStatus({ squarePath, name, status: 'capped' }), /square --location .* done/);
 });
 
+test('shared express refusals retain surface-specific headlines and recovery', () => {
+  const squarePath = '/tmp/recovery.square';
+  const conflict = { code: 'invalid_args', message: 'bad', facts: { reason: 'bell_mention_conflict' } };
+  const reply = { code: 'invalid_args', message: 'bad', facts: { reason: 'invalid_reply', activityExists: false } };
+  assert.deepEqual(renderFailureLines(conflict, { squarePath, surface: 'tool' }), [
+    '✕ a bell cannot be combined with a mention', formatToolAction('status', { location: squarePath }),
+  ]);
+  assert.deepEqual(renderFailureLines(reply, { squarePath, surface: 'tool', reply: 'act/8' }), [
+    "Invalid reply: act/8 is not in this square's history", formatToolAction('history', { location: squarePath, limit: 10 }),
+  ]);
+  assert.deepEqual(renderFailureLines(reply, { squarePath, reply: 'act/8' }), [
+    "Invalid --reply: act/8 is not in this square's history", `square --location '${squarePath}' history --limit 10`,
+  ]);
+  assert.equal(renderFailureLines({ code: 'behind', message: 'someone spoke' }, { surface: 'tool' })[0], '✕ your words stay unsent — someone spoke');
+});
+
 test('MCP history paging and expansions produce tool actions', async t => {
   const squarePath = await buildSquare(t);
   await seed(squarePath, async (square, body) => {

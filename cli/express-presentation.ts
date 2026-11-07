@@ -6,12 +6,11 @@ import { selectOwnSeat, type Square, formatActivityId, parseActivityId } from '.
 import type { Owner } from '../square-api.js';
 import type { ActivityId, OperationError, OperationControl, ExpressOptions } from '../square-facade.js';
 import {
-  formatRefusal, refusalText, renderActivityBlocked, renderActivityLimit,
+  formatRefusal, renderActivityBlocked, renderActivityLimit,
   renderActivityUncertain, renderExpressNoWait, renderExpressWaiting,
-  joinRecoveryCommand, participantsRecoveryCommand,
-  participantCommandPrefix, commandPrefix, quoteShell, takeoverRecoveryLines, withPathOutput,
+  participantsRecoveryCommand, participantCommandPrefix, commandPrefix, quoteShell, withPathOutput,
 } from '../presentation.js';
-import { renderExpression } from '../operation-presentation.js';
+import { renderExpression, renderFailureLines } from '../operation-presentation.js';
 import { formatDuration } from '../time.js';
 import { jsonResult } from './json.js';
 
@@ -137,30 +136,18 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     }
     const facts = isSquareError(error) ? error.facts : undefined;
     const reason = facts?.reason;
-    const message = reason === 'bell_mention_conflict'
-      ? '✕ a bell cannot be combined with a mention'
-      : reason === 'invalid_reply'
-        ? facts?.activityExists === false
-          ? `Invalid --reply: ${facts.activityId ?? opts.reply ?? 'that activity'} is not in this square's history`
-          : 'Invalid --reply: expected an activity id like act/12'
-        : refusalText(error);
-    const lines = [message, `· draft kept: ${draftPath}`];
+    const lines = renderFailureLines({ code: isSquareError(error) ? error.code : '', message: error instanceof Error ? error.message : String(error), facts, operation: detail },
+      { squarePath, name, owner: opts.recoveryOwner, reply: opts.reply });
+    const headlineLines = reason !== 'needs_seat' && isSquareError(error) && error.code === 'already_joined' ? 2 : (reason === 'never_joined' || reason === 'not_standing') ? (error instanceof Error ? error.message : String(error)).split('\n').length : 1;
+    lines.splice(headlineLines, 0, `· draft kept: ${draftPath}`);
     if (reason === 'needs_seat') {
-      lines[0] = `✕ ${message}`;
-      lines.push(joinRecoveryCommand(squarePath, name, opts.recoveryOwner));
       process.stderr.write(formatRefusal(squarePath, lines, output));
       exitCode(2); return;
     }
     const repair = reason === 'bell_mention_conflict' || (reason === 'not_standing' && detail?.subject === 'recipient');
     if (isSquareError(error)) {
-      if ((reason === 'never_joined' && detail?.subject === 'caller') || error.code === 'unknown_participant' || error.code === 'not_joined') {
-        lines.push(joinRecoveryCommand(squarePath, name, opts.recoveryOwner));
-      }
-      if (error.code === 'already_joined') lines.push(...takeoverRecoveryLines(squarePath, name, opts.recoveryOwner));
       if (repair) {
-        lines.push(participantsRecoveryCommand(squarePath), reason === 'bell_mention_conflict'
-          ? '  · ring the bell without explicit mentions:'
-          : '  · retry without explicit recipients:',
+        lines.push(reason === 'bell_mention_conflict' ? '  · ring the bell without explicit mentions:' : '  · retry without explicit recipients:',
         `${activityRetryCommand(squarePath, name, { ...opts, mentions: [] })}${opts.bodyProvided === false ? '' : ` < ${quoteShell(draftPath)}`}`);
       } else if (error.code === 'invalid_args' || error.code === 'invalid_name') {
         if (opts.mentions?.length) lines.push(participantsRecoveryCommand(squarePath));
@@ -170,7 +157,6 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     if (reason === 'invalid_reply') {
       const withoutReply = { ...opts, reply: undefined };
       lines.push(
-        `${commandPrefix(squarePath)} history --limit 10`,
         '  · choose a valid --reply from history, or send without a reply using this repair:',
         `${activityRetryCommand(squarePath, name, withoutReply)}${withoutReply.bodyProvided === false ? '' : ` < ${quoteShell(draftPath)}`}`,
       );

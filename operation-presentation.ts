@@ -199,7 +199,7 @@ function renderHistoryProjection(
   return chunks.join('\n\n');
 }
 
-function historyContinuationCommand(squarePath: string, args: readonly string[]): string {
+export function historyContinuationCommand(squarePath: string, args: readonly string[]): string {
   return `${commandPrefix(squarePath)} history ${args.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
 }
 
@@ -236,7 +236,7 @@ export function renderHistoryResult(
   return withPathOutput(squarePath, output + continuation, { participantCount: projection.standingCount });
 }
 
-function participantsLimitCommand(squarePath: string, limit: number): string {
+export function participantsLimitCommand(squarePath: string, limit: number): string {
   return `${commandPrefix(squarePath)} participants --limit ${limit}`;
 }
 
@@ -403,19 +403,28 @@ export interface FailureReport {
 }
 
 /** Refusal lines with surface-specific recovery actions. */
-export function renderFailureLines(failure: FailureReport, options: { squarePath?: string; name?: string; owner?: string; surface?: PresentationSurface } = {}): string[] {
+export function renderFailureLines(failure: FailureReport, options: { squarePath?: string; name?: string; owner?: string; surface?: PresentationSurface; reply?: string } = {}): string[] {
   const { squarePath, name, owner } = options;
   const facts = failure.facts;
   const reason = facts?.reason;
   const marked = reason === 'never_joined' || reason === 'not_standing';
   const lines = marked ? failure.message.split('\n').map((line) => `✕ ${line}`) : [failure.message];
-  if (reason === 'needs_seat' && squarePath !== undefined && name !== undefined) {
+  if (failure.code === 'behind' && options.surface === 'tool') lines[0] = `✕ your words stay unsent — ${failure.message}`;
+  if (reason === 'bell_mention_conflict' || reason === 'invalid_reply') {
+    lines[0] = reason === 'bell_mention_conflict' ? '✕ a bell cannot be combined with a mention'
+      : `Invalid ${options.surface === 'tool' ? 'reply' : '--reply'}: ${facts?.activityExists === false ? `${facts.activityId ?? options.reply ?? 'that activity'} is not in this square's history` : 'expected an activity id like act/12'}`;
+    if (squarePath !== undefined) lines.push(options.surface === 'tool'
+      ? formatToolAction(reason === 'invalid_reply' ? 'history' : 'status', { location: displayPath(squarePath), ...(reason === 'invalid_reply' ? { limit: 10 } : {}) })
+      : reason === 'invalid_reply' ? `${commandPrefix(squarePath)} history --limit 10` : participantsRecoveryCommand(squarePath));
+  } else if (reason === 'needs_seat' && squarePath !== undefined && name !== undefined) {
     lines.splice(0, 1, `✕ ${failure.message}`);
     lines.push(options.surface === 'tool' ? formatToolAction('join', { location: displayPath(squarePath), as: name }) : joinRecoveryCommand(squarePath, name, owner));
   } else if (squarePath !== undefined && name !== undefined && failure.code === 'already_joined') {
     lines.splice(0, 1, `✕ ${participantIdentity(name)} shoos you out of the square`,
       `  · ${participantIdentity(name)} already stands here — another session holds the name`);
     lines.push(...(options.surface === 'tool' ? ['If this is your name to reclaim, takeover banishes the one standing here so you can step in:', formatToolAction('join', { location: displayPath(squarePath), as: name, takeover: true })] : takeoverRecoveryLines(squarePath, name, owner)));
+  } else if (squarePath !== undefined && name !== undefined && (failure.code === 'unknown_participant' || failure.code === 'not_joined') && reason !== 'not_standing') {
+    lines.push(options.surface === 'tool' ? formatToolAction('join', { location: displayPath(squarePath), as: name }) : joinRecoveryCommand(squarePath, name, owner));
   } else if (squarePath !== undefined && reason === 'never_joined') {
     lines.push(options.surface === 'tool' ? (failure.operation?.subject !== 'filter' && name !== undefined ? formatToolAction('join', { location: displayPath(squarePath), as: name }) : formatToolAction('status', { location: displayPath(squarePath) })) : failure.operation?.subject !== 'filter' && name !== undefined
       ? joinRecoveryCommand(squarePath, name, owner) : participantsRecoveryCommand(squarePath));
