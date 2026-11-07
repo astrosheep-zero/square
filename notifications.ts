@@ -42,9 +42,9 @@ export async function dispatchPostedCard(ledger: DeliveryLedger, owner: Owner, k
   if (!session || session.state !== 'attached') return;
   const transports: readonly DeliveryTransport[] = suppliedTransports ?? await createDefaultDeliveryTransports(env);
   for (const route of session.routes) {
-    // Claude and Codex custody belongs to their native receivers, including for
+    // Native receiver custody belongs to the receiver itself, including for
     // callers that supply transports explicitly to the producer API.
-    if (['codex-queue', 'claude-async-hook', 'claude-native'].includes(route.kind)) continue;
+    if (['codex-queue', 'claude-async-hook', 'claude-native', 'pi-native'].includes(route.kind)) continue;
     if (signal?.aborted) return;
     const transport = transports.find(candidate => candidate.kind === route.kind);
     if (!transport) continue;

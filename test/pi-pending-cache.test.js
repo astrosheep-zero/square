@@ -50,13 +50,22 @@ test('Pi pulls ledger cards and records receipts only after message_end, preserv
   const f = await fixture(t);
   const attached = await f.ledger.session(f.owner);
   assert.notEqual(attached.generation, f.initial.generation);
-  assert.deepEqual(attached.routes, f.initial.routes);
+  assert.deepEqual(attached.routes, [...f.initial.routes, { kind: 'pi-native', address: { sessionId: 'receiver' } }]);
   await f.ledger.post({ owner: f.owner, key: 'producer:one', text: 'a finished card' });
   await until(() => f.sent.length === 1, 'Pi did not inject the card');
   assert.equal(f.sent[0].content, renderDeliveryReminder(['a finished card'], { tagged: true }));
   assert.deepEqual(await f.ledger.receipts(f.owner), []);
   await f.handlers.get('message_end')({ message: { role: 'custom', customType: 'square', content: f.sent[0].content } });
   await until(async () => (await f.ledger.receipts(f.owner)).length === 1, 'Pi did not record the receipt');
+
+  const square = await Square.build({ path: path.join(f.ctx.cwd, 'availability.square'), markdown: '' });
+  t.after(() => square.close());
+  const nativeOnly = harnessOwner({ channel: 'pi', session: 'native-only' });
+  assert.equal((await square.join('live', { owner: nativeOnly, observe: true })).observation.deliveryAvailable, false);
+  await f.handlers.get('session_start')({}, { cwd: f.ctx.cwd, sessionManager: { getSessionId: () => 'native-only' } });
+  assert.equal((await square.join('live', { owner: nativeOnly, observe: true })).observation.deliveryAvailable, true);
+  await f.handlers.get('session_shutdown')({}, { cwd: f.ctx.cwd, sessionManager: { getSessionId: () => 'native-only' } });
+  assert.equal((await square.participants()).participants.find(person => person.name === 'live')?.deliveryAvailable, false);
 });
 
 test('Pi carries full producer bodies in mixed rich cards without consuming unread history', async t => {

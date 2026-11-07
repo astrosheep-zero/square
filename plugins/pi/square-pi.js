@@ -8,7 +8,7 @@ import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/delive
 import { isCardPresentation } from '../../dist/card-presentation.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, createSquareToolRunner, squareToolsEnabled } from '../../dist/square-tools.js';
 import { operationEnv } from '../../dist/participant-identity.js';
-import { attachDeliverySession, detachDeliverySession } from '../../dist/session-lifecycle.js';
+import { attachDeliverySessionRoutes, detachDeliverySession } from '../../dist/session-lifecycle.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
 
 const BUDGET_CHARS = 12_000;
@@ -245,9 +245,10 @@ export default function squarePiExtension(pi) {
       await previous.ledger.close();
     }
     if (token !== epoch || cancellationFailed) return;
-    const owner = harnessOwner({ channel: 'pi', session: ctx.sessionManager.getSessionId() });
+    const sessionId = ctx.sessionManager.getSessionId();
+    const owner = harnessOwner({ channel: 'pi', session: sessionId });
     const signal = AbortSignal.timeout(5000);
-    const attached = await attachDeliverySession(owner, process.env, undefined, signal);
+    const attached = await attachDeliverySessionRoutes(owner, process.env, [{ kind: 'pi-native', address: { sessionId } }], signal);
     if (!attached) return;
     if (token !== epoch) {
       await detachDeliverySession(owner, attached.generation, process.env, AbortSignal.timeout(5000));
