@@ -139,7 +139,7 @@ test('all history callers default to ten; only explicit null reads the full arch
   const call = await mcp(t, options), before = (await readSquareSnapshot(options.path)).state;
   const recent = await square.history();
   assert.deepEqual(recent.activities.map((activity) => activity.id), Array.from({ length: 10 }, (_, index) => `act/${index + 3}`));
-  assert.equal(await call('history'), renderHistoryResult(options.path, await square.history({ observe: true })));
+  assert.equal(await call('history'), renderHistoryResult(options.path, await square.history({ observe: true }), { surface: 'tool' }));
   assert.equal((await square.history({ limit: null })).activities.length, 13);
   const observed = await square.history({ observe: true });
   assert.deepEqual(observed.observation.continuation, { direction: 'before', cursor: 'act/3', limit: 10 });
@@ -209,7 +209,7 @@ test('optional observations add only requested reads; rendering transports pay f
   const plainJoin = await measure(() => square.join('Alice', { owner: options.body }));
   const fullJoin = await measure(() => square.join('Alice', { owner: options.body, observe: true }));
   const dataJoin = await measure(() => call('join', { as: 'Alice' }));
-  assert.equal(dataJoin.value, renderJoinResult(fullJoin.value));
+  assert.equal(dataJoin.value, renderJoinResult(fullJoin.value, undefined, 'tool'));
   assert.equal(plainJoin.value.observation, undefined);
   assert.ok(dataJoin.hydrated > 0, 'join text hydrates the recent-activity feed it prints');
   assert.ok(fullJoin.hydrated > 0);
@@ -231,8 +231,8 @@ test('optional observations add only requested reads; rendering transports pay f
   assert.ok(presence.presence);
   const archive = await measure(() => call('history'));
   assert.ok(archive.hydrated > 0);
-  assert.equal(archive.value, renderHistoryResult(options.path, await square.history({ observe: true })));
-  assert.equal(await call('status'), renderStatusResult(options.path, await square.status({ viewer: undefined, observe: true })));
+  assert.equal(archive.value, renderHistoryResult(options.path, await square.history({ observe: true }), { surface: 'tool' }));
+  assert.equal(await call('status'), renderStatusResult(options.path, await square.status({ viewer: undefined, observe: true }), { surface: 'tool' }));
 });
 
 test('perceive resolves caller and all filters in one read, retaining canonical error subjects', async (t) => {

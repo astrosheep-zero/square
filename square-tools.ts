@@ -186,13 +186,13 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     async runDiscovery(args, control, binding) {
       const options = listSchema.parse(args);
       const { result, now } = await binding.discover({ ...options, owner: binding.identity.owner }, control);
-      return renderSquareList(result, { now, depth: options.depth ?? DEFAULT_LIST_DEPTH, limit: options.limit ?? DEFAULT_LIST_LIMIT });
+      return renderSquareList(result, { now, depth: options.depth ?? DEFAULT_LIST_DEPTH, limit: options.limit ?? DEFAULT_LIST_LIMIT, surface: 'tool' });
     },
   },
   tool('join', 'Step into the square under your name. Do this once before you speak or perceive. You arrive seeing what was said most recently.', {
     as: z.string().optional().describe('Your name in the square. Give it explicitly when joining.'), takeover: z.boolean().optional().describe('Claim this name even though another session holds it now. That session loses it.'),
   }, (square, { as, takeover }, control, identity) => square.join(requireJoinName(as), { ...identity, owner: requireOwner(identity.owner), takeover, observe: true }, control),
-    rendering((result: JoinPresentation) => renderJoinResult(result))),
+    rendering((result: JoinPresentation) => renderJoinResult(result, undefined, 'tool'))),
   tool('express', 'Speak or act in the square. Plain words, half-formed ideas and *actions* all belong here. Mention or reply to someone to be heard by them; ring the bell to be heard by everyone. Said to no one in particular, your words reach those who listen to you.', {
     as: participant,
     body: z.string().optional().describe('What you say or do. Markdown works; *asterisks* mark an action. Required unless retrying with a draft token.'),
@@ -208,7 +208,7 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     if (body === undefined) throw new SquareError('invalid_args', 'Express needs a body or a draft token.');
     return (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, observe: true }, control);
   },
-    rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result))),
+    rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result, undefined, 'tool'))),
   tool('perceive', 'Take in what reached you since you last looked: mentions, replies, bells, and words from those you listen to. What you perceive no longer waits for you; history lets you look back.', {
     as: participant,
     id: activityId.optional().describe('Take in this activity in full, like act/12, even if you perceived it before. Do not combine with idle, from, mention or limit.'),
@@ -221,7 +221,7 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
       // The CLI always spells the default cap in its continuation, so the tool does too.
       const options = args as PerceiveOptions;
       const renderOptions = options.id === undefined ? { ...options, limit: options.limit ?? PERCEIVE_DEFAULT_LIMIT } : options;
-      return renderPerceiveOutcome(result.observation?.location ?? '', result, renderOptions).stdout;
+      return renderPerceiveOutcome(result.observation?.location ?? '', result, renderOptions, undefined, 'tool').stdout;
     })),
   tool('history', 'Look back at what was said. Reading here takes nothing in: whatever waits for perceive keeps waiting. Page with before or after.', {
     limit: z.number().int().min(1).optional().describe('How many per page (default 10, up to 100).'),
@@ -233,7 +233,7 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     from: stringArray.optional().describe('Only what these participants said.'),
     mention: z.string().optional().describe('Only what was addressed to this participant.'),
   }, (square, args, control) => square.history({ ...historyToolQuery(args), observe: true }, control),
-    rendering((result: HistoryResult, args) => renderHistoryResult(result.observation?.location ?? '', result, { query: historyToolQuery(args as HistoryToolQuery) }))),
+    rendering((result: HistoryResult, args) => renderHistoryResult(result.observation?.location ?? '', result, { query: historyToolQuery(args as HistoryToolQuery), surface: 'tool' }))),
   tool('attention', 'Turn toward someone or away from them, from now on. Listen: hear everything they say, even to others. Unlisten: stop listening without clearing an ignore; mentions and replies still reach you unless ignored. Ignore: hear nothing from them but bells. What was already said stays as it was.', {
     as: participant, action: z.enum(['listen', 'unlisten', 'ignore']).describe('"listen", "unlisten" or "ignore". Listening again ends an ignore.'), target,
   }, async (square, { as, action, target }, control, identity) => {
@@ -248,7 +248,7 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
   }, async (square, { as }, control, identity) => {
     const viewer = (await selectOwnSeat(square, identity.owner, as, { optional: true }))?.name;
     return square.status({ viewer, observe: true }, control);
-  }, rendering((result: StatusResult) => renderStatusResult(result.observation?.location ?? '', result))),
+  }, rendering((result: StatusResult) => renderStatusResult(result.observation?.location ?? '', result, { surface: 'tool' }))),
 ];
 
 export function squareToolFailure(error: unknown, signal?: AbortSignal): JsonObject {
@@ -263,10 +263,10 @@ export function squareToolFailure(error: unknown, signal?: AbortSignal): JsonObj
   return operation === undefined ? normalized : { ...normalized, operation };
 }
 
-/** Readable failure text with the same recovery commands the CLI offers, never raw JSON. */
+/** Readable failure text with tool-native recovery actions, never raw JSON. */
 export function squareToolFailureText(failure: JsonObject, context: { location?: string; participant?: string; draft?: string } = {}): string {
   const report = failure as unknown as FailureReport;
-  const lines = renderFailureLines(report, { squarePath: context.location, name: context.participant });
+  const lines = renderFailureLines(report, { squarePath: context.location, name: context.participant, surface: 'tool' });
   if (report.code === 'behind') lines[0] = `✕ your words stay unsent — ${report.message}`;
   if (context.draft !== undefined) {
     lines.push(`· draft kept in memory: ${context.draft}`);

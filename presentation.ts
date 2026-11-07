@@ -9,6 +9,13 @@ import type { Activity, UnreadActivitySummary, ParticipantSummary } from './squa
 import { grepSnippet } from './search.js';
 import { style } from './tty-style.js';
 
+export type PresentationSurface = 'cli' | 'tool';
+
+export function formatToolAction(tool: string, args: Readonly<Record<string, unknown>> = {}): string {
+  const clean = Object.fromEntries(Object.entries(args).filter(([, value]) => value !== undefined));
+  return Object.keys(clean).length === 0 ? tool : `${tool} ${JSON.stringify(clean)}`;
+}
+
 export type WatchStatus = 'idle' | 'drained' | 'quorum' | 'capped';
 
 interface HeaderOptions {
@@ -18,6 +25,7 @@ interface HeaderOptions {
 }
 
 interface ParticipantOutputOptions {
+  surface?: PresentationSurface;
   owner?: string;
   squarePath: string;
   name: string;
@@ -398,6 +406,7 @@ export function renderGrepActivitiesView(
   pattern: string,
   fixed = false,
   perception?: (act: HydratedAct) => Perception,
+  surface: PresentationSurface = 'cli',
 ): string {
   const publicVisible = visible.filter((act): act is PublicAct => act.kind === 'say' || act.kind === 'done');
   if (totalMatches === 0) return `○ no activity matched ${quoteShell(pattern)}`;
@@ -434,9 +443,11 @@ export function renderGrepActivitiesView(
     chunks.push(`${header}\n  ${text.trim()}${omitted}`);
   }
 
-  if (publicVisible.length === 1) {
+  if (surface === 'tool' && (publicVisible.length === 1 || (truncated && publicVisible.length > 1))) {
+    chunks.push(formatToolAction('perceive', { location: displayPath(squarePath), id: formatActivityId(publicVisible[0].index) }));
+  } else if (surface === 'cli' && publicVisible.length === 1) {
     chunks.push(`${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2${truncated ? ' --no-truncate' : ''}`);
-  } else if (truncated && publicVisible.length > 1) {
+  } else if (surface === 'cli' && truncated && publicVisible.length > 1) {
     chunks.push(`${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2 --no-truncate`);
   }
   return chunks.join('\n\n');
@@ -458,8 +469,10 @@ export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string
   return [
     `${style('blocked', '✕')} you are already perceiving`,
     `  · an active perceive is already running for ${participantIdentity(opts.name)}`,
-    '  · --replace lets a new perceive take over',
-    `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} perceive --idle 30m --replace`,
+    ...(opts.surface === 'tool' ? [] : [
+      '  · --replace lets a new perceive take over',
+      `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} perceive --idle 30m --replace`,
+    ]),
   ].join('\n');
 }
 
@@ -496,7 +509,7 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
           ? style('dim', `○ dust settles on the flagstones — ${formatDuration(idleMs)} of quiet`)
           : style('dim', '○ only footsteps in the square — nothing new for you');
       // The quiet report never repeats the perceive just run.
-      const hints = [`${prefix} perceive --idle 30m`];
+      const hints = [opts.surface === 'tool' ? formatToolAction('perceive', { location: displayPath(opts.squarePath), as: opts.name, idle: 1800000 }) : `${prefix} perceive --idle 30m`];
       return [
         quiet,
         ...(opts.showPerceiveHint === false ? [] : hints),
@@ -504,12 +517,12 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
       ].join('\n');
     }
     case 'quorum':
-      return [`${style('release', '✓')} everyone else has left — the square is yours alone`, `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} done`].join('\n');
+      return [`${style('release', '✓')} everyone else has left — the square is yours alone`, opts.surface === 'tool' ? formatToolAction('done', { location: displayPath(opts.squarePath), as: opts.name }) : `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} done`].join('\n');
     case 'capped': {
       const spoken = opts.hardCap === undefined || opts.hardCap === null
         ? ''
         : ` — ${opts.ownActivityCount ?? 0}/${opts.hardCap} spoken`;
-      return [`${style('blocked', '✕')} you’ve reached your speaking cap${spoken}`, `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} done`].join('\n');
+      return [`${style('blocked', '✕')} you’ve reached your speaking cap${spoken}`, opts.surface === 'tool' ? formatToolAction('done', { location: displayPath(opts.squarePath), as: opts.name }) : `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} done`].join('\n');
     }
   }
 }

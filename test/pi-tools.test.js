@@ -80,6 +80,8 @@ test('Pi calls use live context, preserve environment, and return human text and
   const refused = await call('join', { as: 'rei' }, context('pi-tools-second'));
   assert.equal(refused.isError, true);
   assert.match(refused.content[0].text, /rei/);
+  assert.match(refused.content[0].text, /join .*\"takeover\":true/);
+  assert.doesNotMatch(refused.content[0].text, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
   assert.match((await call('join', { as: 'rei' })).content[0].text, /already in the square/);
 
   // A fresh context's cwd, not startup state, resolves the relative location.

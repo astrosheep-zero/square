@@ -6,6 +6,8 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Square } from '../dist/square-api.js';
+import { renderFailureLines } from '../dist/operation-presentation.js';
+import { renderWatchAlreadyActive, renderWatchStatus, formatToolAction } from '../dist/presentation.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
 import { ROOT, run, testEnv } from './square-cli-helpers.js';
 
@@ -73,8 +75,13 @@ async function assertTextParity(t, setup, cliArgs, tool, toolArgs) {
   const response = await call(tool, toolArgs);
   assert.equal(response.isError, undefined, JSON.stringify(response));
   assert.equal(response.structuredContent, undefined);
-  assert.equal(normalized(response.content[0].text, mcpPath), normalized(result.stdout, cliPath),
-    `${tool} content text must be the CLI's human text`);
+  const actual = normalized(response.content[0].text, mcpPath);
+  const expected = normalized(result.stdout, cliPath);
+  if (tool === 'perceive') {
+    assert.match(expected, /square --location .* perceive --idle 30m/);
+    assert.equal(actual, expected.replace("square --location '<square>' --as 'rei' perceive --idle 30m", 'perceive {\"location\":\"<square>\",\"as\":\"rei\",\"idle\":1800000}'));
+  } else assert.equal(actual, expected);
+  assert.doesNotMatch(actual, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
   return response;
 }
 
@@ -154,8 +161,51 @@ test('failures print the CLI recovery lines instead of JSON', async (t) => {
   assert.equal(response.structuredContent, undefined);
   assert.throws(() => JSON.parse(text));
   assert.match(text, /✕ @ghost has never stepped into this square/);
-  // The CLI prefixes a freshly observed count; the refusal lines themselves are shared.
-  const body = result.stderr.split('\n\n').slice(1).join('\n\n');
-  assert.equal(normalized(text, mcpPath).trim(), normalized(body, cliPath).trim());
-  assert.match(text, new RegExp(`--location '${mcpPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' --as 'ghost' join`));
+  assert.match(result.stderr, /square --location .* --as 'ghost' join/);
+  assert.ok(text.includes(`join ${JSON.stringify({ location: mcpPath, as: 'ghost' })}`));
+  assert.doesNotMatch(text, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
+});
+
+
+test('tool recovery and watch guidance use native actions; CLI keeps its commands', () => {
+  const squarePath = '/tmp/recovery.square', name = 'rei';
+  const opts = { squarePath, name, surface: 'tool' };
+  const action = (tool, args) => formatToolAction(tool, { location: squarePath, ...args });
+  assert.equal(formatToolAction('status', { omitted: undefined }), 'status');
+  for (const [failure, expected] of [
+    [{ code: 'x', message: 'missing', facts: { reason: 'needs_seat' } }, action('join', { as: name })],
+    [{ code: 'already_joined', message: 'held' }, action('join', { as: name, takeover: true })],
+    [{ code: 'x', message: 'missing', facts: { reason: 'never_joined' }, operation: { subject: 'filter' } }, action('status', {})],
+    [{ code: 'x', message: 'away', facts: { reason: 'not_standing' } }, action('status', {})],
+    [{ code: 'x', message: 'private', facts: { reason: 'not_addressed', activityId: 'act/2', activityExists: true } }, action('history', { fixed: 'act/2' })],
+    [{ code: 'x', message: 'missing', facts: { reason: 'not_addressed', activityId: 'act/2' } }, action('history', { limit: 10 })],
+  ]) {
+    const text = renderFailureLines(failure, opts).join('\n');
+    assert.ok(text.includes(expected), text);
+    assert.doesNotMatch(text, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
+  }
+  assert.doesNotMatch(renderFailureLines({ code: 'x', message: 'bad', facts: { reason: 'invalid_done_body' } }, opts).join('\n'), /--help/);
+  assert.match(renderWatchAlreadyActive({ ...opts }), /already perceiving/);
+  assert.doesNotMatch(renderWatchAlreadyActive({ ...opts }), /--replace/);
+  assert.match(renderWatchAlreadyActive({ squarePath, name }), /--replace/);
+  assert.ok(renderWatchStatus({ ...opts, status: 'idle' }).includes(action('perceive', { as: name, idle: 1800000 })));
+  assert.ok(renderWatchStatus({ ...opts, status: 'capped' }).includes(action('done', { as: name })));
+  assert.match(renderWatchStatus({ squarePath, name, status: 'capped' }), /square --location .* done/);
+});
+
+test('MCP history paging and expansions produce tool actions', async t => {
+  const squarePath = await buildSquare(t);
+  await seed(squarePath, async (square, body) => {
+    const { participant } = await square.join('rei', { owner: body });
+    for (let i = 0; i < 12; i++) await participant.express(`needle ${i} ${'x'.repeat(300)}`, { force: true });
+  });
+  const call = await openMcp(t, squarePath);
+  const history = (await call('history', { fixed: 'needle', limit: 2 })).content[0].text;
+  assert.match(history, /perceive .*"id":"act\/\d+"/);
+  assert.match(history, /history .*"fixed":"needle".*"before":"act\/\d+".*"limit":2/);
+  assert.doesNotMatch(history, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
+  const status = (await call('status')).content[0].text;
+  assert.match(status, /perceive .*"id":"act\/\d+"/);
+  assert.doesNotMatch(status, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
+  assert.match(cli(squarePath, ['history', '--fixed', 'needle', '--limit', '2']).stdout, /square --location .*history/);
 });
