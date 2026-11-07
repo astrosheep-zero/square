@@ -52,7 +52,7 @@ test('participant done rejects bodies before joining or rejoining', async () => 
   const square = await Square.at({ path: file, env: { ...process.env } });
   const body = "test" + ":" + ('done-before-join');
   await assert.rejects(square.participant('Alice', { owner: body }),
-    error => error.code === 'already_joined' && error.facts?.reason === 'needs_seat' && typeof error.facts.join === 'string');
+    error => error.code === 'already_joined' && error.facts?.reason === 'needs_seat' && error.facts?.join === undefined);
   assert.deepEqual((await readSquareSnapshot(file)).state.acts, []);
   await square.join('Alice', { owner: body });
   const joined = await square.participant('Alice', { owner: body });

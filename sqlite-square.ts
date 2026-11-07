@@ -18,7 +18,6 @@ import { recoveryObservation, entryPresentation, queryStatus, queryParticipants,
   parseRequiredActivityId, toPublicActivity, toPerceivedActivity, publicActivities, selectHistory, NON_READ, HISTORY_MAX_LIMIT, HISTORY_DEFAULT_LIMIT } from './views.js';
 import { sessionInboxCounts } from './inbox.js';
 import { participantIdentity } from './participant-identity.js';
-import { joinRecoveryCommand } from './presentation.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease } from './wakes.js';
 import { createArtifactPort, createSquare, diagnoseSquareFile, prepareSquareBuild } from './artifact.js';
 import type { SquareArtifactPort, SquareRead } from './ports.js';
@@ -132,7 +131,7 @@ export class SqliteSquare {
           : seat?.attachment === 'detached' ? 'is away; resume the host session first'
           : 'needs a current participant seat; join first';
         throw new SquareError('already_joined', `${participantIdentity(participant?.name ?? name)} ${reason}`, {
-          reason: 'needs_seat', join: joinRecoveryCommand(this.location, participant?.name ?? name),
+          reason: 'needs_seat',
         });
       }
       return seat;

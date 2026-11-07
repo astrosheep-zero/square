@@ -166,7 +166,7 @@ test('a stale participant handle cannot speak after departure; rejoining establi
   const confirmation = await call('express', { as: 'Alice', body: 'back', force: true });
   assert.ok(confirmation.includes(expressed.activity.id));
   assert.match(confirmation, /your words land/);
-  await assert.rejects(direct.square.participant('Never', { owner: direct.body }), error => error.code === 'already_joined' && error.facts?.reason === 'needs_seat');
+  await assert.rejects(direct.square.participant('Never', { owner: direct.body }), error => error.code === 'already_joined' && error.facts?.reason === 'needs_seat' && error.facts?.join === undefined);
   const client = new Client({ name: 'square-parity-error', version: '1' }), server = createSquareMcpServer({ cwd: json.cwd, env: json.env, owner: json.body });
   const [left, right] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(right), client.connect(left)]);
@@ -246,7 +246,7 @@ test('perceive resolves caller and all filters in one read, retaining canonical 
   assert.deepEqual(one.value, many.value);
   assert.equal(many.value.observation, undefined);
   await assert.rejects(square.participant('Nobody', { owner: options.body }), error => error.code === 'already_joined'
-    && error.facts?.reason === 'needs_seat' && typeof error.facts.join === 'string');
+    && error.facts?.reason === 'needs_seat' && error.facts?.join === undefined);
   for (const [name, from, subject, canonical] of [['aLiCe', ['Unknown'], 'filter', 'Alice']]) {
     const participant = await square.participant(name, { owner: options.body });
     await assert.rejects(participant.perceive({ from }), (error) => {

@@ -10,7 +10,7 @@ const wakeAddress = session => ({ kind: 'paseo', address: { agentId: session } }
 
 async function rejectsWithoutSeat(promise) {
   await assert.rejects(promise, error => error.code === 'already_joined'
-    && error.facts?.reason === 'needs_seat' && typeof error.facts.join === 'string');
+    && error.facts?.reason === 'needs_seat' && error.facts?.join === undefined);
 }
 
 test('one identity-free memory resource carries explicit current seats for multiple Bodies', async t => {

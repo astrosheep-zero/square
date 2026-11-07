@@ -43,6 +43,8 @@ test('the local resource accepts transport injection without composing harness d
   assert.ok(resource);
   assert.equal(moduleEdges('sqlite-square.ts', resource).some(edge =>
     ['./notifications.js', './codex-queue.js', './paseo-delivery.js'].includes(edge.module)), false);
+  assert.equal(moduleEdges('sqlite-square.ts', resource).some(edge =>
+    ['./presentation.js', './operation-presentation.js'].includes(edge.module)), false);
   assert.doesNotMatch(resource, /createDefaultWakeTransport/);
 });
 
