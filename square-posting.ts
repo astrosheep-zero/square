@@ -10,7 +10,7 @@ import type { SquareArtifactPort } from './ports.js';
 import { formatActivityId } from './square-core.js';
 import { squarePostKey, type SquarePost } from './square-post.js';
 
-const openLedger = (signal?: AbortSignal) => DeliveryLedger.open({ signal });
+const openLedger = (ledgerLocation?: string, signal?: AbortSignal) => DeliveryLedger.open({ location: ledgerLocation, signal });
 function renderPost(location: string, post: SquarePost): { text: string; full: boolean } {
   if (post.kind === 'notice') return { text: post.body ?? '', full: true };
   const projected = projectNotification({ squarePath: location, actIndex: post.index, recipient: post.recipient,
@@ -24,15 +24,15 @@ export async function deliverySessionsForSeats(ledger: DeliveryLedger, seats: re
   return new Map(await Promise.all(owners.map(async owner => [owner, await ledger.session(owner, signal)] as const)));
 }
 /** Read-only host observations for status; callers fence them against the captured World seats. */
-export async function readSquareSessions(seats: readonly Seat[], signal?: AbortSignal): Promise<ReadonlyMap<string, DeliverySession | undefined>> {
+export async function readSquareSessions(seats: readonly Seat[], signal?: AbortSignal, ledgerLocation?: string): Promise<ReadonlyMap<string, DeliverySession | undefined>> {
   if (!seats.length) return new Map();
-  const ledger = await openLedger(signal);
+  const ledger = await openLedger(ledgerLocation, signal);
   try { return await deliverySessionsForSeats(ledger, seats, signal); }
   finally { await ledger.close(); }
 }
 /** A first producer join may register an absent owner, never resume or revive one. */
-export async function ensureInitialDeliverySession(owner: Seat['owner'], route?: DeliveryRoute, signal?: AbortSignal): Promise<boolean> {
-  const ledger = await openLedger(signal);
+export async function ensureInitialDeliverySession(owner: Seat['owner'], route?: DeliveryRoute, signal?: AbortSignal, ledgerLocation?: string): Promise<boolean> {
+  const ledger = await openLedger(ledgerLocation, signal);
   try {
     const current = await ledger.session(owner, signal);
     if (!current) {
@@ -45,11 +45,11 @@ export async function ensureInitialDeliverySession(owner: Seat['owner'], route?:
   } finally { await ledger.close(); }
 }
 /** Called only by privileged mutations. Sandbox lease/ACK/selection never enters here. */
-export async function reconcileSquareDelivery(artifact: SquareArtifactPort, location: string, clock: () => number, signal?: AbortSignal): Promise<void> {
+export async function reconcileSquareDelivery(artifact: SquareArtifactPort, location: string, clock: () => number, signal?: AbortSignal, ledgerLocation?: string): Promise<void> {
   const snapshot = (await artifact.read(facts => ({ seats: facts.roster().filter(person => person.joined)
     .flatMap(person => { const seat = facts.seat(person.name); return seat ? [seat] : []; }), posts: facts.postedPosts() }), signal)).value;
   if (!snapshot.seats.length && !snapshot.posts.length) return;
-  const ledger = await openLedger(signal);
+  const ledger = await openLedger(ledgerLocation, signal);
   try {
     const sessions = await deliverySessionsForSeats(ledger, snapshot.seats, signal);
     for (const seat of snapshot.seats) {
@@ -90,14 +90,14 @@ async function suppressWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryL
   for (const post of posts) await ledger.suppress({ owner: post.owner, key: squarePostKey(location, post), scope: 'exact' }, signal);
 }
 /** One export path for Square activities and Square-owned notices. No transaction spans I/O. */
-export async function flushSquarePosts(artifact: SquareArtifactPort, location: string, clock: () => number, signal?: AbortSignal): Promise<void> {
+export async function flushSquarePosts(artifact: SquareArtifactPort, location: string, clock: () => number, signal?: AbortSignal, ledgerLocation?: string): Promise<void> {
   signal ??= AbortSignal.timeout(5000);
   // Delivery enrichment cannot turn a committed producer mutation into a retry of that mutation.
   let lifetime: ReturnType<typeof retainDeliveryLedger> | undefined;
   try {
     const snapshot = (await artifact.read(facts => ({ pending: facts.pendingPosts(), posted: facts.postedPosts() }), signal)).value;
     if (!snapshot.pending.length && !snapshot.posted.length) return;
-    const ledger = await openLedger(signal);
+    const ledger = await openLedger(ledgerLocation, signal);
     lifetime = retainDeliveryLedger(ledger);
     for (const post of snapshot.pending) {
       const session = await ledger.session(post.owner, signal);
@@ -137,7 +137,7 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
       const pendingKeys = new Set((await ledger.pending(owner, { generation: session.generation }, signal)).map(card => card.key));
       for (const post of posts.filter(post => post.owner === owner)) {
         const key = squarePostKey(location, post);
-        if (pendingKeys.has(key)) await dispatchPostedCard(ledger, post.owner, key, result => lifetime?.track(result), process.env, signal);
+        if (pendingKeys.has(key)) await dispatchPostedCard(ledger, post.owner, key, result => lifetime?.track(result), undefined, signal);
       }
     }
   } catch {

@@ -121,6 +121,7 @@ export interface HistoryResult {
 }
 export interface OpenOptions {
   readonly clock?: () => number;
+  readonly ledgerLocation?: string;
 }
 export interface SquareLocation {
   readonly path?: string;

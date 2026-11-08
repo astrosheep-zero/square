@@ -52,14 +52,12 @@ test('zero-count future ACK is durable without a TTL or ledger access and matche
   const c = await setup(t);
   const deniedLedger = path.join(path.dirname(c.input.path), 'denied-ledger');
   await fs.mkdir(deniedLedger);
-  const previousDelivery = process.env.SQUARE_DELIVERY;
   let sandbox;
   try {
-    process.env.SQUARE_DELIVERY = deniedLedger;
-    sandbox = await Square.at(c.input);
+    sandbox = await Square.at({ ...c.input, ledgerLocation: deniedLedger });
     const seat = await selectOwnSeat(sandbox, c.owner, 'observer');
     assert.deepEqual(await seat.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), { consumed: 0 });
-  } finally { await sandbox?.close(); process.env.SQUARE_DELIVERY = previousDelivery; }
+  } finally { await sandbox?.close(); }
   c.advance(1000 * 60 * 60 * 24 * 500);
   const again = await c.reopened.participant('observer', { owner: c.owner });
   assert.deepEqual(await again.ack({ from: 'keiyaku-notice', match: { fields: [...match().fields].reverse() }, future: 'exact' }), { consumed: 0 });
@@ -107,11 +105,9 @@ test('World-local discovery preserves known identities without probing host deli
   assert.equal((await c.square.participants()).participants.find(person => person.name === 'observer').presence, 'away');
   const deniedLedger = path.join(path.dirname(c.input.path), 'denied-discovery-ledger');
   await fs.mkdir(deniedLedger);
-  const previousDelivery = process.env.SQUARE_DELIVERY;
   let sandbox;
   try {
-    process.env.SQUARE_DELIVERY = deniedLedger;
-    sandbox = await Square.at(c.input);
+    sandbox = await Square.at({ ...c.input, ledgerLocation: deniedLedger });
     const local = await sandbox.participants({ local: true, observe: true });
     assert.equal(local.participants.find(person => person.name === 'observer').presence, 'active', 'local attachment has not reconciled host detach');
     assert.equal(local.participants.find(person => person.name === 'departed').presence, 'done');
@@ -120,12 +116,10 @@ test('World-local discovery preserves known identities without probing host deli
     assert.ok(local.participants.every(person => person.deliveryAvailable === false));
     await assert.rejects(() => sandbox.participants());
     await assert.rejects(() => sandbox.participant('foreign', { owner: c.owner }));
-    process.env.SQUARE_DELIVERY = previousDelivery;
     await c.square.join('other', { owner: `other:${path.dirname(c.input.path)}` });
-    process.env.SQUARE_DELIVERY = deniedLedger;
     assert.equal((await sandbox.participants({ local: true })).participants.find(person => person.name === 'observer').presence, 'away');
     await assert.rejects(() => sandbox.participant('observer', { owner: c.owner }));
-  } finally { await sandbox?.close(); process.env.SQUARE_DELIVERY = previousDelivery; }
+  } finally { await sandbox?.close(); }
 });
 
 test('local World custody refuses known departure or replacement without probing the ledger', async t => {
