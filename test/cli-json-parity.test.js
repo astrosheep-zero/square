@@ -31,7 +31,7 @@ async function fixture(t, { hardCap = null, throttlePerMinute } = {}) {
     NODE_OPTIONS: `--import=${traceModule}`, SQUARE_JSON_TRACE: trace });
   const identity = commandIdentity(env);
   assert.deepEqual(identity.owner, body);
-  const square = await Square.build({ path: file, markdown: 'JSON parity', hardCap, ...(throttlePerMinute === undefined ? {} : { throttlePerMinute }), env });
+  const square = await Square.build({ path: file, markdown: 'JSON parity', hardCap, ...(throttlePerMinute === undefined ? {} : { throttlePerMinute }), clock: () => 90000 });
   await square.close();
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
 
@@ -41,7 +41,7 @@ async function fixture(t, { hardCap = null, throttlePerMinute } = {}) {
     const copy = path.join(cwd, 'oracle.square');
     fs.copyFileSync(file, copy);
     assert.deepEqual(fs.readFileSync(copy), fs.readFileSync(file));
-    const oracle = await Square.at({ path: copy, env: { ...env, SQUARE_INDEX: path.join(cwd, 'oracle-index') } });
+    const oracle = await Square.at({ path: copy, ...(env.SQUARE_NOW_MS === undefined ? {} : { clock: () => Number(env.SQUARE_NOW_MS) }) });
     let expected;
     try { expected = serializable(await operation(oracle)); }
     finally { await oracle.close(); }
@@ -111,15 +111,13 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
     assert.equal(ignored.activity.target, 'Bob');
     assert.equal((await f.parity('Alice', ['ignore', 'Bob'], async square => (await square.participant('Alice', { owner: body })).ignore('Bob'))).activity, null);
   });
-  await t.test('status, participants and done', async () => {
+  await t.test('status and done', async () => {
     const status = await f.parity('Alice', ['status'], square => square.status({ viewer: 'Alice' }));
     assert.equal(status.participants.length, 2);
-    const roster = await f.parity(undefined, ['participants', '--limit', '1'], square => square.participants());
-    assert.equal(roster.participants.length, 2, '--limit affects human text only');
     await f.parity('Bob', ['done'], async square => (await square.participant('Bob', { owner: body })).done());
   });
   await t.test('inbox is the standalone SDK result on the same discovery and artifact state', async () => {
-    const expected = serializable(await inbox({ cwd: f.cwd, env: f.env }, body, { limit: 1 }));
+    const expected = serializable(await inbox({ cwd: f.cwd }, body, { limit: 1 }));
     const result = run(['inbox', '--for-owner', body, '--limit', '1', '--json'], { cwd: f.cwd, env: f.env });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), expected);
@@ -158,7 +156,7 @@ test('a throttled waiting express leaves stdout as one JSON document', async t =
 test('an active perceive keeps its exit code and JSON receipt without disrupting the waiter', async t => {
   const f = await fixture(t);
   await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
-  const square = await Square.at({ path: f.file, env: f.env });
+  const square = await Square.at({ path: f.file });
   const alice = await square.participant('Alice', { owner: body }), controller = new AbortController();
   let started;
   const ready = new Promise(resolve => { started = resolve; });
@@ -180,9 +178,9 @@ test('an active perceive keeps its exit code and JSON receipt without disrupting
 
 test('JSON mode retains human argument errors and exit codes', async t => {
   const f = await fixture(t);
-  for (const args of [['history', '--limit', '101'], ['participants', '--limit', '0']]) {
-    const human = run(withPath(f.file, args), { cwd: f.cwd, env: f.env });
-    const json = run(withPath(f.file, [...args, '--json']), { cwd: f.cwd, env: f.env });
+  for (const args of [['history', '--limit', '101'], ['perceive', '--limit', '0']]) {
+    const human = run(withName(f.file, 'Alice', args), { cwd: f.cwd, env: f.env });
+    const json = run(withName(f.file, 'Alice', [...args, '--json']), { cwd: f.cwd, env: f.env });
     assert.equal(json.status, human.status);
     assert.equal(json.status, 2);
     assert.equal(json.stderr, human.stderr);
@@ -192,7 +190,7 @@ test('JSON mode retains human argument errors and exit codes', async t => {
   for (const args of [
     ['join', '--last', '--json', '10'], ['express', '--metadata', '--json', '{}'],
     ['perceive', '--limit', '--json', '2'], ['history', '--limit', '--json', '2'],
-    ['participants', '--limit', '--json', '2'], ['inbox', '--for-owner', body, '--limit', '--json', '2'],
+    ['inbox', '--for-owner', body, '--limit', '--json', '2'],
   ]) {
     const result = run(withName(f.file, 'Alice', args), { cwd: f.cwd, env: f.env });
     assert.equal(result.status, 2, `${args.join(' ')}: ${result.stdout}${result.stderr}`);

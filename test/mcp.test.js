@@ -48,7 +48,7 @@ test('CLI, MCP and Pi tools share addressless Pi seats despite Paseo in the envi
   const identity = commandIdentity(env);
   const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, ...identity }));
   const artifact = createArtifactPort(squarePath);
-  const square = await Square.at({ path: squarePath, env });
+  const square = await Square.at({ path: squarePath });
   t.after(async () => { await close(); await artifact.close(); await square.close(); });
   const joined = await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'Mcp' } });
   assert.equal(joined.isError, undefined);
@@ -130,7 +130,7 @@ test('MCP list discovers without location and shows only the caller’s joined s
   const { cwd, squarePath, env, body, server } = await fixture();
   const { client, close } = await connectedClient(server);
   t.after(async () => { await close(); fs.rmSync(cwd, { recursive: true, force: true }); });
-  const square = await Square.at({ path: squarePath, env });
+  const square = await Square.at({ path: squarePath });
   try {
     const rei = (await square.join('rei', { owner: body })).participant;
     const bob = (await square.join('bob', { owner: body })).participant;
@@ -195,7 +195,7 @@ test('MCP retries an unsent express from an in-memory draft without repeating it
     assert.equal(retry.isError, undefined, retry.content[0].text);
     const history = await client.callTool({ name: 'history', arguments: { location: squarePath, limit: 10 } });
     assert.match(history.content[0].text, /a long answer that the model must not need to repeat/);
-    const square = await Square.at({ path: squarePath, env });
+    const square = await Square.at({ path: squarePath });
     try {
       const landed = (await square.history({ limit: 1, order: 'desc' })).activities[0];
       assert.equal(landed.body, body);
@@ -233,7 +233,7 @@ test('one MCP server accepts per-call participants without a configured default'
       assert.match(expressed.content[0].text, /your words land.*act\/\d+/);
     }
     const history = await client.callTool({ name: 'history', arguments: { location: squarePath } });
-    const square = await Square.at({ path: squarePath, env: baseEnv });
+    const square = await Square.at({ path: squarePath });
     try {
       assert.deepEqual((await square.history()).activities.filter((activity) => activity.kind === 'say').map(({ actor, body }) => ({ actor, body })), [
         { actor: 'alice', body: 'alice speaks' }, { actor: 'bob', body: 'bob speaks' },
@@ -324,7 +324,7 @@ test('MCP call-local identities supply distinct bodies and keep configured body 
     { as: 'OpenCode', metadata: { 'ai.opencode/sessionID': 'call-opencode' }, owner: 'opencode:call-opencode' },
   ];
   const recognizes = async (body, expectedName) => {
-    const square = await Square.at({ cwd, path: squarePath, env });
+    const square = await Square.at({ cwd, path: squarePath });
     try { assert.equal((await selectOwnSeat(square, body)).name, expectedName); }
     finally { await square.close(); }
   };
@@ -353,7 +353,7 @@ test('MCP Claude child call body retains agent ownership', async (t) => {
   let token;
   const childBody = `claude-code:${call.sessionId}:agent:${call.agentId}`;
   const recognizes = async (body) => {
-    const square = await Square.at({ cwd, path: squarePath, env: claudeEnv });
+    const square = await Square.at({ cwd, path: squarePath });
     try { return await selectOwnSeat(square, body); }
     finally { await square.close(); }
   };
@@ -408,7 +408,7 @@ test('MCP shares location and noMention parameters with native tools', async (t)
     assert.match(joined.content[0].text, /you stepped into the square/);
     const history = await client.callTool({ name: 'history', arguments: { location: 'other.square' } });
     assert.doesNotMatch(history.content[0].text, /literal @bob/);
-    const square = await Square.at({ path: squarePath, env });
+    const square = await Square.at({ path: squarePath });
     try {
       const bareActivity = (await square.history()).activities.at(-1);
       const directed = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@Eve', noMention: true, mentions: ['bob'], reply: bareActivity.id, force: true } });
@@ -447,7 +447,7 @@ test('MCP cancellation reaches an in-progress application operation', async () =
 
 test('stdio disconnect aborts throttled express and idle perceive without later mutation or consumption', async (t) => {
   const { cwd, squarePath, env, body } = await fixture('disconnected', { throttlePerMinute: 1 });
-  const app = await Square.at({ cwd, path: squarePath, env });
+  const app = await Square.at({ cwd, path: squarePath });
   t.after(() => app.close());
   const child = spawn(process.execPath, [path.resolve('dist/square.js'), '--as', 'disconnected', 'mcp-server'], {
     cwd, env, stdio: ['pipe', 'pipe', 'pipe'],
@@ -489,7 +489,7 @@ test('stdio disconnect aborts throttled express and idle perceive without later 
   assert.deepEqual(await disconnected, [0, null], stderr);
   assert.equal((await app.history()).activities.some((activity) => activity.body === 'orphan expression'), false);
   const writerBody = "codex" + ":" + ('mcp-writer');
-  const writer = await Square.at({ cwd, path: squarePath, env: { ...env, CODEX_THREAD_ID: 'mcp-writer', SQUARE_NOW_MS: String(Date.now() + 61_000) } });
+  const writer = await Square.at({ cwd, path: squarePath, clock: () => Date.now() + 61_000 });
   t.after(() => writer.close());
   const { participant } = await writer.join('writer', { owner: writerBody });
   const expressed = await participant.express('after disconnect', { force: true, mentions: ['disconnected'] });

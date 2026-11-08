@@ -4,11 +4,11 @@ import { formatActivityId } from './square-core.js';
 import type {
   PerceiveOptions, PerceiveResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
   JoinResult, LifecycleResult, ListenerChangeResult, ListeningResult, OperationFailureDetail,
-  ParticipantsResult, StatusResult, DiscoveryResult,
+  StatusResult, DiscoveryResult,
 } from './square-facade.js';
 import {
   type PresentationSurface, displayPath, formatToolAction, commandPrefix, joinRecoveryCommand, participantCommandPrefix, participantIdentity,
-  participantsRecoveryCommand, quoteShell, renderAmbientEvent, renderAmbientEventFacts,
+  quoteShell, renderAmbientEvent, renderAmbientEventFacts,
   renderEventCli, renderGrepActivitiesView, renderPresenceAnchor,
   renderRoomChangeText, renderWatchAlreadyActive, renderWatchReplaced, renderWatchStatus,
   takeoverRecoveryLines, withPathOutput, truncateChars,
@@ -51,8 +51,6 @@ export function renderSquareList(data: DiscoveryResult, projection: { now: numbe
   return lines.join('\n') + '\n';
 }
 
-export const PARTICIPANTS_DEFAULT_LIMIT = 20;
-export const PARTICIPANTS_MAX_LIMIT = 100;
 const STATUS_PARTICIPANT_PREVIEW_LIMIT = 10;
 
 /** A join receipt whose participant is already reduced to its serializable name. */
@@ -185,7 +183,7 @@ function renderHistoryProjection(
   // Presence anchors collect into one closing line instead of interrupting the page.
   const anchored: string[] = [];
   for (const activity of shown) {
-    const rendered = renderEventCli(activity, { preview });
+    const rendered = renderEventCli(activity, { now: projection.now, preview });
     if (rendered !== '') chunks.push(rendered);
     for (const participant of projection.presenceAnchors[activity.index] ?? []) {
       if (!anchored.some((existing) => sameName(existing, participant))) anchored.push(participant);
@@ -193,7 +191,8 @@ function renderHistoryProjection(
   }
   if (chunks.length === 0) return '○ no activity matches this history query';
   if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && (activity.body?.length ?? 0) > preview)) {
-    chunks.push(surface === 'tool' ? formatToolAction('perceive', { location: displayPath(squarePath), id: formatActivityId(shown.find(a => a.kind === 'say' && (a.body?.length ?? 0) > preview)!.index) }) : `${commandPrefix(squarePath)} history --at ${shown.map((activity) => formatActivityId(activity.index)).join(',')} --no-truncate`);
+    const ids = shown.map((activity) => formatActivityId(activity.index));
+    chunks.push(surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), at: ids, noTruncate: true }) : `${commandPrefix(squarePath)} history --at ${ids.join(',')} --no-truncate`);
   }
   if (anchored.length > 0) chunks.push(renderPresenceAnchor(anchored));
   return chunks.join('\n\n');
@@ -232,40 +231,8 @@ export function renderHistoryResult(
     : renderGrepActivitiesView(projection.visibleActivities, projection.totalMatches, noTruncate, squarePath, search.text, search.mode === 'literal', () => 'full', options.surface);
   const next = projection.continuation;
   const base = options.continuationArgs ?? historyQueryArgs(query);
-  const continuation = next === undefined ? '' : `\n\n${options.surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), ...(query.from?.length ? { from: query.from } : {}), ...(query.mention !== undefined ? { mention: query.mention } : {}), ...(query.search !== undefined ? (query.search.mode === 'regex' ? { grep: query.search.text } : { fixed: query.search.text }) : {}), ...(query.order !== undefined ? { order: query.order } : {}), [next.direction]: next.cursor, limit: next.limit }) : historyContinuationCommand(squarePath, [...base, `--${next.direction}`, next.cursor, '--limit', String(next.limit)])}`;
+  const continuation = next === undefined ? '' : `\n\n${options.surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), ...(query.from?.length ? { from: query.from } : {}), ...(query.since !== undefined ? { since: formatTimestamp(query.since) } : {}), ...(query.at?.length ? { at: query.at } : {}), ...(query.contextBefore !== undefined && query.contextBefore === query.contextAfter ? { context: query.contextBefore } : { ...(query.contextBefore !== undefined ? { contextBefore: query.contextBefore } : {}), ...(query.contextAfter !== undefined ? { contextAfter: query.contextAfter } : {}) }), ...(query.mention !== undefined ? { mention: query.mention } : {}), ...(query.search !== undefined ? (query.search.mode === 'regex' ? { grep: query.search.text } : { fixed: query.search.text }) : {}), ...(query.order !== undefined ? { order: query.order } : {}), ...(noTruncate ? { noTruncate: true } : {}), [next.direction]: next.cursor, limit: next.limit }) : historyContinuationCommand(squarePath, [...base, `--${next.direction}`, next.cursor, '--limit', String(next.limit)])}`;
   return withPathOutput(squarePath, output + continuation, { participantCount: projection.standingCount });
-}
-
-export function participantsLimitCommand(squarePath: string, limit: number): string {
-  return `${commandPrefix(squarePath)} participants --limit ${limit}`;
-}
-
-export function renderParticipantsResult(
-  squarePath: string,
-  data: ParticipantsResult,
-  limit = PARTICIPANTS_DEFAULT_LIMIT,
-): string | undefined {
-  const projection = data.observation;
-  if (projection === undefined) return undefined;
-  const now = projection.now;
-  const participants = data.participants;
-  const lines = participants.slice(0, limit).map((participant) => {
-    const glyph = participant.presence === 'done' ? '○' : participant.presence === 'watching' ? '◎' : participant.activityCount > 0 && projection.classificationByName[participant.name] === 'here' ? '●' : '○';
-    const state = participant.presence === 'watching' ? 'perceiving' : participant.presence === 'never-joined' ? 'not joined' : participant.presence;
-    const last = participant.lastActiveAt === undefined ? '—' : formatRelativeTime(participant.lastActiveAt, now);
-    return `  ${glyph} ${participant.name}${style('dim', ` · ${state} · ${participant.activityCount} ${participant.activityCount === 1 ? 'activity' : 'activities'} · ${last}`)}`;
-  });
-  const tail = participants.length <= limit
-    ? []
-    : [
-        style('dim', `  · ${lines.length} of ${participants.length} participants shown`),
-        ...(participants.length <= PARTICIPANTS_MAX_LIMIT ? [
-          `${participantsLimitCommand(squarePath, participants.length)}`,
-        ] : []),
-      ];
-  return withPathOutput(squarePath, ['participants', ...lines, ...tail].join('\n'), {
-    participantCount: projection.standingCount,
-  });
 }
 
 export function renderStatusResult(squarePath: string, data: StatusResult, options: { surface?: PresentationSurface } = {}): string | undefined {
@@ -301,17 +268,10 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
     }));
     people.push(...away.slice(0, STATUS_PARTICIPANT_PREVIEW_LIMIT).map(participant => `  ○ ${participantIdentity(participant.name)}${style('dim', ' · away')}`));
     if (away.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) people.push(`  ○ … ${away.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more away`);
-    const unshown = Math.max(0, orderedHere.length - STATUS_PARTICIPANT_PREVIEW_LIMIT)
-      + Math.max(0, away.length - STATUS_PARTICIPANT_PREVIEW_LIMIT) + lingering;
     if (orderedHere.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) {
       people.push(`  ○ … ${orderedHere.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more here`);
     }
     if (lingering > 0) people.push(`  ○ … ${lingering} lingering`);
-    if (unshown > 0 && options.surface !== 'tool') {
-      people.push(`${presentation.knownParticipantCount <= PARTICIPANTS_MAX_LIMIT
-        ? participantsLimitCommand(squarePath, presentation.knownParticipantCount)
-        : `${commandPrefix(squarePath)} participants`}`);
-    }
   }
   const cap = data.hardCap === null ? 'unlimited' : `${data.hardCap} each`;
   const visible = data.latestActivity === undefined
@@ -333,7 +293,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
   }
   if (presentation.joinCount > 3) latest.push(style('dim', `  → … ${presentation.joinCount - 3} more stepped in`));
   if (visible.bodyClipped && data.latestActivity !== undefined) {
-    latest.push(options.surface === 'tool' ? formatToolAction('perceive', { location: displayPath(squarePath), id: data.latestActivity.id }) : `${commandPrefix(squarePath)} history --at ${data.latestActivity.id} -C 2 --no-truncate`);
+    latest.push(options.surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), at: [data.latestActivity.id], context: 2, noTruncate: true }) : `${commandPrefix(squarePath)} history --at ${data.latestActivity.id} -C 2 --no-truncate`);
   }
   const counts = [
     `${orderedHere.length} here`,
@@ -415,7 +375,7 @@ export function renderFailureLines(failure: FailureReport, options: { squarePath
       : `Invalid ${options.surface === 'tool' ? 'reply' : '--reply'}: ${facts?.activityExists === false ? `${facts.activityId ?? options.reply ?? 'that activity'} is not in this square's history` : 'expected an activity id like act/12'}`;
     if (squarePath !== undefined) lines.push(options.surface === 'tool'
       ? formatToolAction(reason === 'invalid_reply' ? 'history' : 'status', { location: displayPath(squarePath), ...(reason === 'invalid_reply' ? { limit: 10 } : {}) })
-      : reason === 'invalid_reply' ? `${commandPrefix(squarePath)} history --limit 10` : participantsRecoveryCommand(squarePath));
+      : reason === 'invalid_reply' ? `${commandPrefix(squarePath)} history --limit 10` : `${commandPrefix(squarePath)} status`);
   } else if (reason === 'needs_seat' && squarePath !== undefined && name !== undefined) {
     lines.splice(0, 1, `✕ ${failure.message}`);
     lines.push(options.surface === 'tool' ? formatToolAction('join', { location: displayPath(squarePath), as: name }) : joinRecoveryCommand(squarePath, name, owner));
@@ -427,11 +387,11 @@ export function renderFailureLines(failure: FailureReport, options: { squarePath
     lines.push(options.surface === 'tool' ? formatToolAction('join', { location: displayPath(squarePath), as: name }) : joinRecoveryCommand(squarePath, name, owner));
   } else if (squarePath !== undefined && reason === 'never_joined') {
     lines.push(options.surface === 'tool' ? (failure.operation?.subject !== 'filter' && name !== undefined ? formatToolAction('join', { location: displayPath(squarePath), as: name }) : formatToolAction('status', { location: displayPath(squarePath) })) : failure.operation?.subject !== 'filter' && name !== undefined
-      ? joinRecoveryCommand(squarePath, name, owner) : participantsRecoveryCommand(squarePath));
+      ? joinRecoveryCommand(squarePath, name, owner) : `${commandPrefix(squarePath)} status`);
   } else if (squarePath !== undefined && reason === 'not_standing') {
-    lines.push(options.surface === 'tool' ? formatToolAction('status', { location: displayPath(squarePath) }) : participantsRecoveryCommand(squarePath));
+    lines.push(options.surface === 'tool' ? formatToolAction('status', { location: displayPath(squarePath) }) : `${commandPrefix(squarePath)} status`);
   } else if (squarePath !== undefined && reason === 'not_addressed' && facts?.activityId !== undefined) {
-    lines.push(options.surface === 'tool' ? (facts.activityExists === true ? formatToolAction('history', { location: displayPath(squarePath), fixed: facts.activityId }) : formatToolAction('history', { location: displayPath(squarePath), limit: 10 })) : facts.activityExists === true
+    lines.push(options.surface === 'tool' ? (facts.activityExists === true ? formatToolAction('history', { location: displayPath(squarePath), at: [facts.activityId], context: 2 }) : formatToolAction('history', { location: displayPath(squarePath), limit: 10 })) : facts.activityExists === true
       ? `${commandPrefix(squarePath)} history --at ${facts.activityId} -C 2`
       : `${commandPrefix(squarePath)} history --limit 10`);
   }

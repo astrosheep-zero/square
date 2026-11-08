@@ -15,8 +15,9 @@ import { flushSquarePosts } from '../dist/square-posting.js';
 const DAY = 24 * 60 * 60 * 1000;
 async function setup(t, route) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-export-recovery-'));
-  const env = { ...process.env, SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'), SQUARE_NOW_MS: '1000', SQUARE_DISABLE_PASEO_WAKE: '1' };
-  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '', env });
+  Object.assign(process.env, { SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'), SQUARE_DISABLE_PASEO_WAKE: '1' });
+  const env = { ...process.env, SQUARE_NOW_MS: '1000' };
+  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '', clock: () => 1000 });
   const owner = `recipient:${root}`;
   const bob = (await square.join('Bob', { owner, ...(route ? { wakeAddress: route } : {}) })).participant;
   const artifact = createArtifactPort(await fs.realpath(square.location));
@@ -172,7 +173,7 @@ test('an unsent recovery cannot erase an earlier uncertain insertion or resurrec
     const current = await originalSession.call(this, owner);
     return ++checks === 2 ? { ...current, state: 'detached' } : current;
   });
-  await flushSquarePosts(c.artifact, await fs.realpath(c.square.location), c.env, () => 1000);
+  await flushSquarePosts(c.artifact, await fs.realpath(c.square.location), () => 1000);
   assert.ok(checks >= 2);
   assert.equal(calls, 1, 'recovered attempt aborted before invoking post');
   finalCheck.mock.restore();

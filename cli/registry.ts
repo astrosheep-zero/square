@@ -15,7 +15,6 @@ import {
   historyCommand,
   inboxCommand,
   listCommand,
-  participantsCommand,
   statusCommand,
   streamCommand,
 } from './observation-commands.js';
@@ -50,7 +49,6 @@ export const commandRegistry: readonly RegisteredCommand[] = [
   { names: ['doctor'], spec: doctorCommand },
   { names: ['history'], spec: historyCommand },
   { names: ['status'], spec: statusCommand },
-  { names: ['participants'], spec: participantsCommand },
   { names: ['help'], spec: helpCommand },
   { names: ['version', '--version', '-v'], spec: versionCommand },
   { names: ['mcp-server'], spec: mcpServerCommand },

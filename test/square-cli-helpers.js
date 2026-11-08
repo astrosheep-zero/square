@@ -145,7 +145,6 @@ export async function persistSquare(fill, options = {}) {
     hardCap: 'hardCap' in options ? options.hardCap : 3,
     ...(options.throttlePerMinute === undefined ? {} : { throttlePerMinute: options.throttlePerMinute }),
     clock: options.manualClock ? time.now : time.tick,
-    env: testEnv({ CODEX_THREAD_ID: path.resolve(file) }, file),
   });
   try {
     await fill({ square, time, file, body, wakeAddress });

@@ -7,7 +7,6 @@ import { DeliveryLedger } from '../../dist/delivery-ledger.js';
 import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/delivery-frame.js';
 import { isCardPresentation } from '../../dist/card-presentation.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, createSquareToolRunner, squareToolsEnabled } from '../../dist/square-tools.js';
-import { operationEnv } from '../../dist/participant-identity.js';
 import { attachDeliverySessionRoutes, detachDeliverySession } from '../../dist/session-lifecycle.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
 
@@ -116,13 +115,12 @@ export default function squarePiExtension(pi) {
       async execute(_id, args, signal, _onUpdate, ctx) {
         const { text, isError } = await invoke(tool, args, { signal }, () => {
           const sessionId = ctx.sessionManager.getSessionId();
-          const env = operationEnv('pi', sessionId, process.env);
+          const now = squareClock(process.env);
           return {
             identity: { owner: harnessOwner({ channel: 'pi', session: sessionId }) },
-            open: (location, control) => Square.at({
-              cwd: ctx.cwd, env, path: location,
-            }, control),
-            discover: async (options, control) => ({ result: await discover({ cwd: ctx.cwd, env }, options, control), now: squareClock(env)() }),
+            now,
+            open: (location, control) => Square.at({ cwd: ctx.cwd, path: location, clock: now }, control),
+            discover: async (options, control) => ({ result: await discover({ cwd: ctx.cwd }, options, control), now: now() }),
           };
         });
         return { ...(isError ? { isError } : {}), content: [{ type: 'text', text }] };

@@ -62,7 +62,7 @@ export type DirectedNotificationRoute = import('./attention.js').AudienceRoute;
 export interface WatchOptions {
   participants?: string[];
   mention?: string;
-  replace?: boolean;
+  takeover?: boolean;
 }
 
 export type PublicAct = Extract<HydratedAct, { kind: 'say' | 'done' }>;

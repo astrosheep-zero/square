@@ -1,7 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, createSquareToolRunner, squareToolsEnabled } from './square-tools.js';
-import { operationEnv } from './participant-identity.js';
 import { codexWakeAddress } from './codex-address.js';
 import { readClaudeMcpCall } from './claude-mcp-context.js';
 import { SQUARE_IDENTITY } from './identity.js';
@@ -12,6 +11,7 @@ import type { WakeAddress } from './model.js';
 
 /** Each tool call chooses its square and owns its connection lifetime. */
 export interface SquareMcpOptions extends Omit<SquareAtInput, 'path'> {
+  readonly env?: NodeJS.ProcessEnv;
   readonly owner?: Owner;
   readonly wakeAddress?: WakeAddress;
 }
@@ -41,26 +41,19 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
             : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
               ? harnessOwner({ channel: 'opencode', session: opencodeSessionId })
               : configuredOwner;
-        const env = claude !== undefined
-          ? { ...operationEnv('claude', claude.sessionId, baseEnv),
-            // An agent loop ID is not a session ID.
-            CLAUDE_CODE_CHILD_SESSION: claude.agentId === undefined ? '' : '1' }
-          : typeof threadId === 'string' && threadId.trim()
-            ? operationEnv('codex', threadId, baseEnv)
-            : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
-              ? operationEnv('opencode', opencodeSessionId, baseEnv)
-              : baseEnv;
         const callWake = wakeAddress !== undefined && (owner === configuredOwner
           || wakeAddress.kind === 'paseo' && wakeAddress.address.agentId === baseEnv.PASEO_AGENT_ID
           || wakeAddress.kind === 'opencode-server' && wakeAddress.address.sessionId === opencodeSessionId)
           ? wakeAddress : undefined;
+        const now = squareClock(baseEnv, resourceOptions.clock);
         return {
           identity: { owner, wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
-            ? { ...codexWakeAddress(threadId, env), kind: 'codex-queue' as const } : callWake },
-          open: (location, control) => Square.at({ ...resourceOptions, env, cwd: claude?.cwd ?? resourceOptions.cwd, path: location }, control),
+            ? { ...codexWakeAddress(threadId, baseEnv), kind: 'codex-queue' as const } : callWake },
+          now,
+          open: (location, control) => Square.at({ cwd: claude?.cwd ?? resourceOptions.cwd, path: location, clock: now }, control),
           discover: async (discovery, control) => ({
-            result: await discover({ ...resourceOptions, env, cwd: claude?.cwd ?? resourceOptions.cwd }, discovery, control),
-            now: squareClock(env, resourceOptions.clock)(),
+            result: await discover({ cwd: claude?.cwd ?? resourceOptions.cwd }, discovery, control),
+            now: now(),
           }),
         };
       }).then(({ text, isError }) => ({

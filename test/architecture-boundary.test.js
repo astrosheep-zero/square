@@ -290,7 +290,7 @@ const integrationEdges = new Map([
 const pureBindings = new Map([
   ['square-core.ts', ['formatActivityId', 'parseActivityId', 'MAX_IDENTITY_SET_SIZE']],
   ['model.ts', ['SquareError', 'isSquareError', 'sameName', 'nameKey', 'formatHardCap', 'parseParticipantList', 'validateName']],
-  ['participant-identity.ts', ['participantIdentity', 'operationEnv', 'harnessSessionSources']],
+  ['participant-identity.ts', ['participantIdentity', 'harnessSessionSources']],
   ['codex-address.ts', ['codexWakeAddress']],
   ['search.ts', ['grepSnippet']],
 ]);

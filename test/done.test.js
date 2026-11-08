@@ -49,7 +49,7 @@ test('done remains bodyless after reaching the cap', async () => {
 test('participant done rejects bodies before joining or rejoining', async () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
-  const square = await Square.at({ path: file, env: { ...process.env } });
+  const square = await Square.at({ path: file });
   const body = "test" + ":" + ('done-before-join');
   await assert.rejects(square.participant('Alice', { owner: body }),
     error => error.code === 'already_joined' && error.facts?.reason === 'needs_seat' && error.facts?.join === undefined);

@@ -15,14 +15,14 @@ const deferred = () => {
 };
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-perceive-export-'));
-  const env = { ...process.env, SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'), SQUARE_DISABLE_PASEO_WAKE: '1' };
+  Object.assign(process.env, { SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'), SQUARE_DISABLE_PASEO_WAKE: '1' });
   let now = Date.now();
   const clock = () => now;
-  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '', env, clock });
+  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '', clock });
   const alice = (await square.join('Alice', { owner: 'perceive:alice' })).participant;
   const carol = (await square.join('Carol', { owner: 'perceive:carol' })).participant;
   const bob = (await square.join('Bob', { owner: 'perceive:bob' })).participant;
-  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+  const ledger = await DeliveryLedger.open();
   const artifact = createArtifactPort(square.location);
   const session = await ledger.session('perceive:bob');
   const cleanups = [];
@@ -31,13 +31,13 @@ async function fixture(t) {
     await artifact.close(); await square.close(); await ledger.close();
     await fs.rm(root, { recursive: true, force: true });
   });
-  return { root, env, clock, square, alice, carol, bob, artifact, cleanups,
+  return { root, clock, square, alice, carol, bob, artifact, cleanups,
     advance: ms => { now += ms; },
     cards: () => ledger.pending(session.owner, { generation: session.generation }),
   };
 }
 async function armPerceive(c, options = { from: ['Alice'] }) {
-  const waiter = await Square.at({ path: c.square.location, env: c.env, clock: c.clock });
+  const waiter = await Square.at({ path: c.square.location, clock: c.clock });
   const originalRevision = waiter.artifact.revision.bind(waiter.artifact), parked = deferred(), resume = deferred(), started = deferred();
   let pause = true;
   // Pause only consumer scheduling after its real lease commit, before its first selection.

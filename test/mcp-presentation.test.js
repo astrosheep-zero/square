@@ -31,14 +31,14 @@ function envFor(squarePath) {
 
 async function buildSquare(t) {
   const squarePath = path.join(tempDir(t), 'parity.square');
-  const square = await Square.build({ path: squarePath, markdown: 'a quiet room with a fountain', env: envFor(squarePath) });
+  const square = await Square.build({ path: squarePath, markdown: 'a quiet room with a fountain' });
   await square.close();
   return squarePath;
 }
 
 async function seed(squarePath, setup) {
   const body = bodyFor(squarePath);
-  const square = await Square.at({ path: squarePath, env: envFor(squarePath) });
+  const square = await Square.at({ path: squarePath });
   try { await setup(square, body); } finally { await square.close(); }
 }
 
@@ -177,7 +177,7 @@ test('tool recovery and watch guidance use native actions; CLI keeps its command
     [{ code: 'already_joined', message: 'held' }, action('join', { as: name, takeover: true })],
     [{ code: 'x', message: 'missing', facts: { reason: 'never_joined' }, operation: { subject: 'filter' } }, action('status', {})],
     [{ code: 'x', message: 'away', facts: { reason: 'not_standing' } }, action('status', {})],
-    [{ code: 'x', message: 'private', facts: { reason: 'not_addressed', activityId: 'act/2', activityExists: true } }, action('history', { fixed: 'act/2' })],
+    [{ code: 'x', message: 'private', facts: { reason: 'not_addressed', activityId: 'act/2', activityExists: true } }, action('history', { at: ['act/2'], context: 2 })],
     [{ code: 'x', message: 'missing', facts: { reason: 'not_addressed', activityId: 'act/2' } }, action('history', { limit: 10 })],
   ]) {
     const text = renderFailureLines(failure, opts).join('\n');
@@ -186,8 +186,9 @@ test('tool recovery and watch guidance use native actions; CLI keeps its command
   }
   assert.doesNotMatch(renderFailureLines({ code: 'x', message: 'bad', facts: { reason: 'invalid_done_body' } }, opts).join('\n'), /--help/);
   assert.match(renderWatchAlreadyActive({ ...opts }), /already perceiving/);
-  assert.doesNotMatch(renderWatchAlreadyActive({ ...opts }), /--replace/);
-  assert.match(renderWatchAlreadyActive({ squarePath, name }), /--replace/);
+  assert.match(renderWatchAlreadyActive({ ...opts }), /takeover lets a new perceive take over/);
+  assert.ok(renderWatchAlreadyActive({ ...opts }).includes(action('perceive', { as: name, idle: 1800000, takeover: true })));
+  assert.match(renderWatchAlreadyActive({ squarePath, name }), /--takeover/);
   assert.ok(renderWatchStatus({ ...opts, status: 'idle' }).includes(action('perceive', { as: name, idle: 1800000 })));
   assert.ok(renderWatchStatus({ ...opts, status: 'capped' }).includes(action('done', { as: name })));
   assert.match(renderWatchStatus({ squarePath, name, status: 'capped' }), /square --location .* done/);
@@ -217,11 +218,13 @@ test('MCP history paging and expansions produce tool actions', async t => {
   });
   const call = await openMcp(t, squarePath);
   const history = (await call('history', { fixed: 'needle', limit: 2 })).content[0].text;
-  assert.match(history, /perceive .*"id":"act\/\d+"/);
+  assert.match(history, /history .*"at":\["act\/\d+"\].*"context":2.*"noTruncate":true/);
   assert.match(history, /history .*"fixed":"needle".*"before":"act\/\d+".*"limit":2/);
   assert.doesNotMatch(history, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
+  const expanded = (await call('history', { at: ['act/11'], context: 1, noTruncate: true })).content[0].text;
+  assert.match(expanded, /needle 10 x{200}/);
   const status = (await call('status')).content[0].text;
-  assert.match(status, /perceive .*"id":"act\/\d+"/);
+  assert.match(status, /history .*"at":\["act\/\d+"\].*"context":2.*"noTruncate":true/);
   assert.doesNotMatch(status, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
   assert.match(cli(squarePath, ['history', '--fixed', 'needle', '--limit', '2']).stdout, /square --location .*history/);
 });

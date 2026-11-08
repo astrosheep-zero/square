@@ -9,14 +9,13 @@ import { streamSquare } from '../dist/stream.js';
 
 async function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'square-stream-resource-')));
-  const env = { SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'), SQUARE_DISABLE_PASEO_WAKE: '1' };
   const body = "claude-code" + ":" + ('stream-resource');
   const location = path.join(root, 'original.square');
-  const square = await Square.build({ path: location, markdown: '', env });
+  const square = await Square.build({ path: location, markdown: '' });
   t.after(async () => { await square.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const alice = (await square.join('Alice', { owner: body })).participant;
   await alice.express('original');
-  return { root, env, body, location, square, alice };
+  return { root, body, location, square, alice };
 }
 
 test('public path stream follows atomic replacement independently of the open resource inode', async t => {
@@ -26,7 +25,7 @@ test('public path stream follows atomic replacement independently of the open re
   t.after(() => iterator.return());
   assert.equal((await iterator.next()).value.body, 'original');
   const pending = iterator.next();
-  const replacement = await Square.build({ path: replacementPath, markdown: '', env: f.env });
+  const replacement = await Square.build({ path: replacementPath, markdown: '' });
   try {
     const alice = (await replacement.join('Alice', { owner: f.body })).participant;
     await alice.express('same coordinate');
@@ -47,7 +46,7 @@ test('closing the resource does not strand its path stream; iterator disposal re
   assert.equal((await iterator.next()).value.body, 'original');
   await f.square.close();
   const pending = iterator.next();
-  const writer = await Square.at({ path: f.location, env: f.env });
+  const writer = await Square.at({ path: f.location });
   try { await (await writer.participant('Alice', { owner: f.body })).express('after owner close'); }
   finally { await writer.close(); }
   const timer = setTimeout(() => controller.abort(new Error('closed owner stranded path stream')), 2000);

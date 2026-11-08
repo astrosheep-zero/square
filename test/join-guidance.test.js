@@ -12,8 +12,8 @@ test('join gives actionable listening guidance while the skill preserves embodie
   t.after(() => fs.rmSync(path.dirname(file), { recursive: true, force: true }));
   const built = run(withPath(file, ['build']), { input: 'A scene worth keeping' });
   assert.equal(built.status, 0, built.stderr);
-  for (const args of [['join'], ['join'], ['join', '--kick']]) {
-    const joined = run(withName(file, 'Alice', args), { env: { CODEX_THREAD_ID: args.includes('--kick') ? 'guidance-takeover' : 'guidance-join' } });
+  for (const args of [['join'], ['join'], ['join', '--takeover']]) {
+    const joined = run(withName(file, 'Alice', args), { env: { CODEX_THREAD_ID: args.includes('--takeover') ? 'guidance-takeover' : 'guidance-join' } });
     assert.equal(joined.status, 0, joined.stderr);
     assert.match(joined.stdout, /stay within earshot|when someone calls you, you’ll hear them here/);
     assert.doesNotMatch(joined.stdout, /every word here lands on a real ear/);

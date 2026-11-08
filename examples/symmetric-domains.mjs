@@ -7,10 +7,10 @@ import { DeliveryLedger } from '@astrosheep/square/delivery-ledger';
 
 const directory = await mkdtemp(path.join(os.tmpdir(), 'square-notice-example-'));
 const ledgerPath = path.join(directory, 'delivery.sqlite');
-const env = { ...process.env, SQUARE_DELIVERY: ledgerPath };
+process.env.SQUARE_DELIVERY = ledgerPath;
 let square, ledger;
 try {
-  square = await Square.build({ path: path.join(directory, 'example.square'), markdown: 'Example', env });
+  square = await Square.build({ path: path.join(directory, 'example.square'), markdown: 'Example' });
   ledger = await DeliveryLedger.open({ location: ledgerPath });
   await square.join('Reader', { owner: 'example:reader' });
   const notice = await square.send({

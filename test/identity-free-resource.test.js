@@ -70,14 +70,14 @@ test('a file-backed identity-free resource joins separate Bodies and publishes o
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const location = path.join(root, 'shared.square');
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
-  const square = await Square.build({ path: location, markdown: 'shared file', env });
+  const square = await Square.build({ path: location, markdown: 'shared file' });
   await assert.rejects(fs.stat(env.SQUARE_INDEX), { code: 'ENOENT' });
   const a = body('file-alice'), b = body('file-bob');
   await square.join('Alice', { owner: a });
   await square.join('Bob', { owner: b });
   await square.close();
 
-  const reopened = await Square.at({ path: location, env });
+  const reopened = await Square.at({ path: location });
   try {
     await assert.rejects(fs.stat(env.SQUARE_INDEX), { code: 'ENOENT' });
     assert.equal((await reopened.participant('Alice', { owner: a })).name, 'Alice');

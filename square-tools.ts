@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import { z } from 'zod/v4';
 import { isSquareError, SquareError } from './model.js';
-import { requireOwner, requireJoinName, selectOwnSeat, PERCEIVE_DEFAULT_LIMIT, DEFAULT_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_DEPTH, MAX_LIST_LIMIT, type Square } from './square-api.js';
+import { requireOwner, requireJoinName, selectOwnSeat, HISTORY_MAX_LIMIT, PERCEIVE_DEFAULT_LIMIT, DEFAULT_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_DEPTH, MAX_LIST_LIMIT, type Square } from './square-api.js';
+import { parseTimeOrRelative } from './time.js';
 import type {
   Owner, WakeAddress, ActivityId, PerceiveOptions, PerceiveResult, ExpressResult, HistoryQuery, HistoryResult,
   LifecycleResult, ListenerChangeResult, OperationControl, OperationFailureDetail, StatusResult, DiscoveryOptions, DiscoveryResult,
@@ -64,6 +65,7 @@ export class SquareExpressDrafts {
 }
 interface ToolBinding {
   identity: ToolIdentity;
+  readonly now?: () => number;
   open(location: string | undefined, control: OperationControl): Promise<Square>;
   discover(options: DiscoveryOptions, control: OperationControl): Promise<{ result: DiscoveryResult; now: number }>;
 }
@@ -91,7 +93,7 @@ export function createSquareToolRunner() {
       let text: string;
       try {
         attempted = tool.name === 'express';
-        text = await tool.run(square, toolArgs, control, binding.identity);
+        text = await tool.run(square, toolArgs, control, binding.identity, binding.now);
         drafts.consume(token);
       } finally { await square.close(); }
       return { text };
@@ -114,7 +116,7 @@ interface SingleSquareToolDefinition {
   description: string;
   inputSchema: z.ZodObject<z.ZodRawShape>;
   /** Human text identical to what the CLI prints; domain receipts stay inside the adapter. */
-  run(square: Square, args: JsonObject, control: OperationControl, identity: ToolIdentity): Promise<string>;
+  run(square: Square, args: JsonObject, control: OperationControl, identity: ToolIdentity, now?: () => number): Promise<string>;
 }
 
 interface DiscoveryToolDefinition {
@@ -137,14 +139,14 @@ function rendering<T>(render: (result: T, args: JsonObject) => string | undefine
 }
 
 function tool<S extends z.ZodRawShape>(name: string, description: string, shape: S,
-  run: (square: Square, args: z.output<z.ZodObject<S>>, control: OperationControl, identity: ToolIdentity) => Outcome,
+  run: (square: Square, args: z.output<z.ZodObject<S>>, control: OperationControl, identity: ToolIdentity, now?: () => number) => Outcome,
   render: ToolRender,
 ): SingleSquareToolDefinition {
   const inputSchema = z.object({ ...shape, location: name === 'express' ? expressLocation : location }).strict();
   return { name, description, inputSchema,
-    run: async (square, args, control, identity) => {
+    run: async (square, args, control, identity, now) => {
       const { location: _location, ...operationArgs } = inputSchema.parse(args) as JsonObject;
-      const receipt = await run(square, operationArgs as z.output<z.ZodObject<S>>, control, identity);
+      const receipt = await run(square, operationArgs as z.output<z.ZodObject<S>>, control, identity, now);
       return render(receipt as JsonObject, operationArgs) ?? '';
     } };
 }
@@ -158,14 +160,22 @@ export function squareToolsEnabled(env: NodeJS.ProcessEnv = process.env): boolea
 
 export const SQUARE_TOOL_INSTRUCTIONS = 'List nearby squares and your joined names with list. Pass location for a single square. Join once. Then express to speak, and perceive to take in what reached you. History looks back without taking anything in.';
 
-type HistoryToolQuery = Omit<HistoryQuery, 'search' | 'cursor'> & {
+type HistoryToolQuery = Omit<HistoryQuery, 'search' | 'cursor' | 'since'> & {
   readonly grep?: string; readonly fixed?: string;
   readonly before?: ActivityId; readonly after?: ActivityId;
+  readonly since?: string; readonly context?: number; readonly noTruncate?: boolean;
 };
-function historyToolQuery({ grep, fixed, before, after, ...query }: HistoryToolQuery): HistoryQuery {
+function historyToolQuery({ grep, fixed, before, after, since, context, contextBefore, contextAfter, noTruncate: _noTruncate, ...query }: HistoryToolQuery, now = Date.now()): HistoryQuery {
   if (grep !== undefined && fixed !== undefined) throw new SquareError('invalid_args', 'Use grep or fixed, not both.');
   if (before !== undefined && after !== undefined) throw new SquareError('invalid_args', 'Use before or after, not both.');
+  const sinceMs = since === undefined ? undefined : parseTimeOrRelative(since, now);
+  if (sinceMs !== undefined && !Number.isFinite(sinceMs)) throw new SquareError('invalid_args', `Invalid since timestamp: ${since}`);
+  const resolvedBefore = contextBefore ?? context;
+  const resolvedAfter = contextAfter ?? context;
   return { ...query,
+    ...(sinceMs === undefined ? {} : { since: sinceMs }),
+    ...(resolvedBefore === undefined ? {} : { contextBefore: resolvedBefore }),
+    ...(resolvedAfter === undefined ? {} : { contextAfter: resolvedAfter }),
     search: grep !== undefined ? { text: grep, mode: 'regex' } : fixed === undefined ? undefined : { text: fixed, mode: 'literal' },
     cursor: after !== undefined ? { id: after, direction: 'after' } : before === undefined ? undefined : { id: before, direction: 'before' },
   };
@@ -190,8 +200,10 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     },
   },
   tool('join', 'Step into the square under your name. Do this once before you speak or perceive. You arrive seeing what was said most recently.', {
-    as: z.string().optional().describe('Your name in the square. Give it explicitly when joining.'), takeover: z.boolean().optional().describe('Claim this name even though another session holds it now. That session loses it.'),
-  }, (square, { as, takeover }, control, identity) => square.join(requireJoinName(as), { ...identity, owner: requireOwner(identity.owner), takeover, observe: true }, control),
+    as: z.string().optional().describe('Your name in the square. Give it explicitly when joining.'),
+    takeover: z.boolean().optional().describe('Claim this name even though another session holds it now. That session loses it.'),
+    last: z.number().int().min(1).max(HISTORY_MAX_LIMIT).optional().describe('How many recent public activities to show on arrival (default 10, up to 100).'),
+  }, (square, { as, takeover, last }, control, identity) => square.join(requireJoinName(as), { ...identity, owner: requireOwner(identity.owner), takeover, last, observe: true }, control),
     rendering((result: JoinPresentation) => renderJoinResult(result, undefined, 'tool'))),
   tool('express', 'Speak or act in the square. Plain words, half-formed ideas and *actions* all belong here. Mention or reply to someone to be heard by them; ring the bell to be heard by everyone. Said to no one in particular, your words reach those who listen to you.', {
     as: participant,
@@ -211,11 +223,12 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result, undefined, 'tool'))),
   tool('perceive', 'Take in what reached you since you last looked: mentions, replies, bells, and words from those you listen to. What you perceive no longer waits for you; history lets you look back.', {
     as: participant,
-    id: activityId.optional().describe('Take in this activity in full, like act/12, even if you perceived it before. Do not combine with idle, from, mention or limit.'),
+    id: activityId.optional().describe('Take in this activity in full, like act/12, even if you perceived it before. Do not combine with idle, from, mention, limit or takeover.'),
     idle: z.number().finite().min(0).optional().describe('When nothing is waiting, wait until something arrives or until it has been quiet this many milliseconds. Leave it out to return at once.'),
     from: stringArray.optional().describe('Only what these participants said.'),
     mention: z.boolean().optional().describe('Only what was addressed to you, and bells.'),
     limit: z.number().int().min(1).optional().describe('At most this many at once (default 10, up to 100). The rest keeps waiting.'),
+    takeover: z.boolean().optional().describe('Take over from another active idle perceive for this participant.'),
   }, async (square, { as, ...options }, control, identity) => (await selectOwnSeat(square, identity.owner, as)).perceive({ ...options, observe: true }, control),
     rendering((result: PerceiveResult, args) => {
       // The CLI always spells the default cap in its continuation, so the tool does too.
@@ -228,12 +241,21 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     order: z.enum(['asc', 'desc']).optional().describe('"asc" for oldest first (default), "desc" for newest first.'),
     before: activityId.optional().describe('The page just before this activity, like act/12.'),
     after: activityId.optional().describe('The page just after this activity, like act/12.'),
+    at: z.array(activityId).min(1).optional().describe('Center on these activity ids, like ["act/12"].'),
+    context: z.number().int().min(0).optional().describe('Activities of context before and after each "at" activity.'),
+    contextBefore: z.number().int().min(0).optional().describe('Activities of context before each "at" activity.'),
+    contextAfter: z.number().int().min(0).optional().describe('Activities of context after each "at" activity.'),
+    since: z.string().optional().describe('Only activities after this ISO timestamp or relative duration (like "10m").'),
     grep: z.string().optional().describe('Only activities matching this regular expression in their names, ids or words. Use grep or fixed, not both.'),
     fixed: z.string().optional().describe('Only activities containing this exact text.'),
     from: stringArray.optional().describe('Only what these participants said.'),
     mention: z.string().optional().describe('Only what was addressed to this participant.'),
-  }, (square, args, control) => square.history({ ...historyToolQuery(args), observe: true }, control),
-    rendering((result: HistoryResult, args) => renderHistoryResult(result.observation?.location ?? '', result, { query: historyToolQuery(args as HistoryToolQuery), surface: 'tool' }))),
+    noTruncate: z.boolean().optional().describe('Show full activity bodies even when multiple activities are returned.'),
+  }, async (square, args, control, _identity, now) => {
+    const query = historyToolQuery(args, now?.());
+    return { ...(await square.history({ ...query, observe: true }, control)), query };
+  },
+    rendering((result: HistoryResult & { query: HistoryQuery }, args) => renderHistoryResult(result.observation?.location ?? '', result, { query: result.query, noTruncate: args.noTruncate === true, surface: 'tool' }))),
   tool('attention', 'Turn toward someone or away from them, from now on. Listen: hear everything they say, even to others. Unlisten: stop listening without clearing an ignore; mentions and replies still reach you unless ignored. Ignore: hear nothing from them but bells. What was already said stays as it was.', {
     as: participant, action: z.enum(['listen', 'unlisten', 'ignore']).describe('"listen", "unlisten" or "ignore". Listening again ends an ignore.'), target,
   }, async (square, { as, action, target }, control, identity) => {

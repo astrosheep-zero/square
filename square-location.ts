@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { SquareError } from './neutral.js';
-interface SquareLocation { readonly path?: string; readonly cwd?: string; readonly env?: NodeJS.ProcessEnv }
+interface SquareLocation { readonly path?: string; readonly cwd?: string }
 
 export function squareLocation(input: SquareLocation): string {
   const selected = input.path;

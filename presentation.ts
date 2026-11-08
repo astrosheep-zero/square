@@ -118,13 +118,9 @@ export function joinRecoveryCommand(squarePath: string, name: string, owner?: st
 /** Taking a name is an explicit recovery choice, never an automatic retry. */
 export function takeoverRecoveryLines(squarePath: string, name: string, owner?: string): string[] {
   return [
-    'If this is your name to reclaim, --kick banishes the one standing here so you can step in:',
-    `${participantCommandPrefix(squarePath, name, owner)} join --kick`,
+    'If this is your name to reclaim, --takeover banishes the one standing here so you can step in:',
+    `${participantCommandPrefix(squarePath, name, owner)} join --takeover`,
   ];
-}
-
-export function participantsRecoveryCommand(squarePath: string): string {
-  return `${commandPrefix(squarePath)} participants`;
 }
 
 function formatAge(ms: number | undefined): string {
@@ -437,12 +433,14 @@ export function renderGrepActivitiesView(
     chunks.push(`${header}\n  ${text.trim()}${omitted}`);
   }
 
-  if (surface === 'tool' && (publicVisible.length === 1 || (truncated && publicVisible.length > 1))) {
-    chunks.push(formatToolAction('perceive', { location: displayPath(squarePath), id: formatActivityId(publicVisible[0].index) }));
-  } else if (surface === 'cli' && publicVisible.length === 1) {
-    chunks.push(`${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2${truncated ? ' --no-truncate' : ''}`);
-  } else if (surface === 'cli' && truncated && publicVisible.length > 1) {
-    chunks.push(`${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2 --no-truncate`);
+  if (publicVisible.length === 1) {
+    chunks.push(surface === 'tool'
+      ? formatToolAction('history', { location: displayPath(squarePath), at: [formatActivityId(publicVisible[0].index)], context: 2, ...(truncated ? { noTruncate: true } : {}) })
+      : `${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2${truncated ? ' --no-truncate' : ''}`);
+  } else if (truncated && publicVisible.length > 1) {
+    chunks.push(surface === 'tool'
+      ? formatToolAction('history', { location: displayPath(squarePath), at: [formatActivityId(publicVisible[0].index)], context: 2, noTruncate: true })
+      : `${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2 --no-truncate`);
   }
   return chunks.join('\n\n');
 }
@@ -463,10 +461,10 @@ export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string
   return [
     `${style('blocked', '✕')} you are already perceiving`,
     `  · an active perceive is already running for ${participantIdentity(opts.name)}`,
-    ...(opts.surface === 'tool' ? [] : [
-      '  · --replace lets a new perceive take over',
-      `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} perceive --idle 30m --replace`,
-    ]),
+    `  · ${opts.surface === 'tool' ? 'takeover' : '--takeover'} lets a new perceive take over`,
+    opts.surface === 'tool'
+      ? formatToolAction('perceive', { location: displayPath(opts.squarePath), as: opts.name, idle: 1800000, takeover: true })
+      : `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} perceive --idle 30m --takeover`,
   ].join('\n');
 }
 

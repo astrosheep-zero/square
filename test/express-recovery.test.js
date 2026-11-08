@@ -57,7 +57,7 @@ test('a refused recipient is dropped from the printed retry instead of being sug
     assert.doesNotMatch(saved.commands[0], /--no-mention/);
     assert.doesNotMatch(saved.commands[0], /--mention/);
     assert.doesNotMatch(saved.commands[0], /--force/);
-    assert.match(saved.output, /participants/);
+    assert.match(saved.output, /status/);
     // The refused name came from a flag, so the body carries no @name to edit.
     assert.match(saved.output, /retry without explicit recipients/);
     assert.doesNotMatch(saved.output, /must be removed or wrapped in backticks/);

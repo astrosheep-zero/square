@@ -12,11 +12,8 @@ import {
   quoteShell,
 } from '../presentation.js';
 import {
-  PARTICIPANTS_DEFAULT_LIMIT,
-  PARTICIPANTS_MAX_LIMIT,
-  historyContinuationCommand, participantsLimitCommand,
+  historyContinuationCommand,
   renderHistoryResult,
-  renderParticipantsResult,
   renderStatusResult,
   renderSquareList,
 } from '../operation-presentation.js';
@@ -150,7 +147,7 @@ export const perceiveCommand: CommandSpec<PerceiveOptions> = {
     let mention: boolean | undefined;
     let limit: number | undefined;
     let id: ActivityId | undefined;
-    let replace = false;
+    let takeover = false;
     let now = false;
     const participants: string[] = [];
     for (let index = 0; index < argv.length; index++) {
@@ -171,24 +168,24 @@ export const perceiveCommand: CommandSpec<PerceiveOptions> = {
       } else if (argv[index] === '--limit') {
         limit = parseBoundedLimit(argv[index + 1], '--limit', PERCEIVE_MAX_LIMIT, `${commandPrefix(requireSquarePath(context))} perceive --limit ${PERCEIVE_MAX_LIMIT}`);
         index += 1;
-      } else if (argv[index] === '--replace') replace = true;
+      } else if (argv[index] === '--takeover') takeover = true;
       else if (argv[index] === '--now') now = true;
       else if (argv[index] !== '--json') fail(`✕ perceive does not know ${argv[index]}\nsquare perceive --help`);
     }
     if (id !== undefined) {
-      if (argv.some((flag) => ['--idle', '--from', '--mention', '--limit', '--replace'].includes(flag))) {
-        fail('✕ --id cannot be combined with --idle, --from, --mention, --limit or --replace\nsquare perceive --help');
+      if (argv.some((flag) => ['--idle', '--from', '--mention', '--limit', '--takeover'].includes(flag))) {
+        fail('✕ --id cannot be combined with --idle, --from, --mention, --limit or --takeover\nsquare perceive --help');
       }
       return { id };
     }
     if (idle !== undefined && now) fail('perceive accepts --now or --idle, not both.');
-    if (replace && idle === undefined) fail('--replace can only be used with --idle.');
+    if (takeover && idle === undefined) fail('--takeover can only be used with --idle.');
     return {
       ...(participants.length > 0 ? { from: participants } : {}),
       ...(mention === undefined ? {} : { mention }),
       limit: limit ?? PERCEIVE_DEFAULT_LIMIT,
       ...(idle === undefined ? {} : { idle }),
-      ...(replace ? { replace } : {}),
+      ...(takeover ? { takeover } : {}),
     };
   },
   async execute(intent, context) {
@@ -375,34 +372,6 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
       noTruncate: options.noTruncate,
       continuationArgs: options.continuationArgs,
     })!;
-  },
-  present: (result) => process.stdout.write(result),
-};
-
-interface ParticipantsCommandOptions { limit: number; }
-
-function parseParticipants(argv: string[], context: CommandContext): ParticipantsCommandOptions {
-  let limit = PARTICIPANTS_DEFAULT_LIMIT;
-  for (let index = 0; index < argv.length; index++) {
-    if (argv[index] === '--json') continue;
-    if (argv[index] !== '--limit') usage(context.command);
-    limit = parseBoundedLimit(
-      argv[index + 1],
-      '--limit',
-      PARTICIPANTS_MAX_LIMIT,
-      participantsLimitCommand(requireSquarePath(context), PARTICIPANTS_MAX_LIMIT),
-    );
-    index += 1;
-  }
-  return { limit };
-}
-
-export const participantsCommand: CommandSpec<ParticipantsCommandOptions, string> = {
-  parse(argv, context) { return parseParticipants(argv, context); },
-  async execute(intent, context) {
-    const squarePath = requireSquarePath(context);
-    const data = await withSquare(context, (square) => square.participants(context.json ? {} : { observe: true }));
-    return context.json ? jsonResult(data) : renderParticipantsResult(squarePath, data, intent.limit)!;
   },
   present: (result) => process.stdout.write(result),
 };

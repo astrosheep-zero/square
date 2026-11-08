@@ -44,7 +44,7 @@ test('exact perceive refuses unavailable activities and incompatible library opt
   }
   // Each refusal names the activity it cannot hand over, and never the raw generic sentence.
   assert.deepEqual(errors, ['act/9999', 'act/0', bare.activity.id].map((id) => `✕ ${id} isn't addressed to you`));
-  for (const extra of [{ idle: 0 }, { from: [] }, { mention: false }, { limit: 1 }, { limit: undefined }]) {
+  for (const extra of [{ idle: 0 }, { from: [] }, { mention: false }, { limit: 1 }, { limit: undefined }, { takeover: true }]) {
     await assert.rejects(bob.perceive({ id: second.id, ...extra }), { code: 'invalid_args' });
   }
   await assert.rejects(bob.perceive({ id: 'garbage' }), { code: 'invalid_args' });
@@ -68,7 +68,7 @@ test('CLI exact perceive returns the full body and rejects conflicting flags bef
   const { bob, first, second, body } = await setup(t, file);
   for (const args of [
     ['--id'], ['--id', 'bad'], ['--id', second.id, '--id', second.id],
-    ...[['--idle', '1s'], ['--from', 'Alice'], ['--mention'], ['--limit', '1'], ['--replace']]
+    ...[['--idle', '1s'], ['--from', 'Alice'], ['--mention'], ['--limit', '1'], ['--takeover']]
       .map((flags) => ['--id', second.id, ...flags]),
   ]) {
     const result = run(withName(file, 'Bob', ['perceive', ...args]));

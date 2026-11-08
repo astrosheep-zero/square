@@ -31,7 +31,7 @@ function expressInChild(text) {
   assert.equal(result.status, 0, JSON.stringify(diagnostic));
 }
 try {
-  const built = await Square.build({ path: location, markdown: 'discovery is optional', env, wakeTransport });
+  const built = await Square.build({ path: location, markdown: 'discovery is optional', wakeTransport });
   try { await built.join('Alice', { owner: body }); }
   finally { await built.close(); }
 
@@ -53,7 +53,7 @@ try {
       return original.call(this, file, ...args);
     };
     restore = () => { fs.promises.readFile = original; };
-    opened = await Square.at({ path: location, body, env, wakeTransport });
+    opened = await Square.at({ path: location, body, wakeTransport });
     await opened.reattach('Alice', { owner: body });
     await insideLock;
     // A queued publication could not release its lock during the synchronous child.
@@ -64,7 +64,7 @@ try {
     lock = new DatabaseSync(`${index}.lock`);
     lock.exec('PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;');
     assert.equal(await rememberSquarePath(location, "codex" + ":" + ('not-published'), index), false);
-    opened = await Square.at({ path: location, body, env, wakeTransport });
+    opened = await Square.at({ path: location, body, wakeTransport });
     const bob = (await opened.join('Bob', { owner: body })).participant;
     await bob.express('parent while discovery is locked', { force: true });
     expressInChild('child while discovery is locked');

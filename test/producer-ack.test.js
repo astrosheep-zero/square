@@ -15,21 +15,21 @@ const notice = (turn = 'turn/7', to = ['observer']) => ({ from: 'keiyaku-notice'
   body: `result ${turn}`, metadata: { keiyaku: { kind: 'akuma.turn-outcome', akumaId: 'aku/intern/12345678', historyId: turn }, extra: 'allowed' } });
 async function setup(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-producer-'));
-  const env = { ...process.env, SQUARE_DELIVERY: path.join(root, 'delivery.sqlite') };
+  process.env.SQUARE_DELIVERY = path.join(root, 'delivery.sqlite');
   let now = 1000;
-  const input = { path: path.join(root, 'world.square'), env, clock: () => now };
+  const input = { path: path.join(root, 'world.square'), clock: () => now };
   const square = await Square.build({ ...input, markdown: '' });
   const observer = (await square.join('observer', { owner: `observer:${root}` })).participant;
   const other = (await square.join('other', { owner: `other:${root}` })).participant;
   const reopened = await Square.at(input);
-  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+  const ledger = await DeliveryLedger.open();
   t.after(async () => { await reopened.close(); await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   const owner = `observer:${root}`;
   async function cards(forOwner = owner) {
     const session = await ledger.session(forOwner);
     return ledger.pending(forOwner, { generation: session.generation });
   }
-  return { square, reopened, observer, other, ledger, cards, owner, input, env, advance: value => { now += value; } };
+  return { square, reopened, observer, other, ledger, cards, owner, input, advance: value => { now += value; } };
 }
 
 test('explicit exact ACK consumes existing and future notices only for its captured recipient and outcome', async t => {
@@ -52,11 +52,14 @@ test('zero-count future ACK is durable without a TTL or ledger access and matche
   const c = await setup(t);
   const deniedLedger = path.join(path.dirname(c.input.path), 'denied-ledger');
   await fs.mkdir(deniedLedger);
-  const sandbox = await Square.at({ ...c.input, env: { ...c.env, SQUARE_DELIVERY: deniedLedger } });
+  const previousDelivery = process.env.SQUARE_DELIVERY;
+  let sandbox;
   try {
+    process.env.SQUARE_DELIVERY = deniedLedger;
+    sandbox = await Square.at(c.input);
     const seat = await selectOwnSeat(sandbox, c.owner, 'observer');
     assert.deepEqual(await seat.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), { consumed: 0 });
-  } finally { await sandbox.close(); }
+  } finally { await sandbox?.close(); process.env.SQUARE_DELIVERY = previousDelivery; }
   c.advance(1000 * 60 * 60 * 24 * 500);
   const again = await c.reopened.participant('observer', { owner: c.owner });
   assert.deepEqual(await again.ack({ from: 'keiyaku-notice', match: { fields: [...match().fields].reverse() }, future: 'exact' }), { consumed: 0 });
@@ -104,8 +107,11 @@ test('World-local discovery preserves known identities without probing host deli
   assert.equal((await c.square.participants()).participants.find(person => person.name === 'observer').presence, 'away');
   const deniedLedger = path.join(path.dirname(c.input.path), 'denied-discovery-ledger');
   await fs.mkdir(deniedLedger);
-  const sandbox = await Square.at({ ...c.input, env: { ...c.env, SQUARE_DELIVERY: deniedLedger } });
+  const previousDelivery = process.env.SQUARE_DELIVERY;
+  let sandbox;
   try {
+    process.env.SQUARE_DELIVERY = deniedLedger;
+    sandbox = await Square.at(c.input);
     const local = await sandbox.participants({ local: true, observe: true });
     assert.equal(local.participants.find(person => person.name === 'observer').presence, 'active', 'local attachment has not reconciled host detach');
     assert.equal(local.participants.find(person => person.name === 'departed').presence, 'done');
@@ -114,10 +120,12 @@ test('World-local discovery preserves known identities without probing host deli
     assert.ok(local.participants.every(person => person.deliveryAvailable === false));
     await assert.rejects(() => sandbox.participants());
     await assert.rejects(() => sandbox.participant('foreign', { owner: c.owner }));
+    process.env.SQUARE_DELIVERY = previousDelivery;
     await c.square.join('other', { owner: `other:${path.dirname(c.input.path)}` });
+    process.env.SQUARE_DELIVERY = deniedLedger;
     assert.equal((await sandbox.participants({ local: true })).participants.find(person => person.name === 'observer').presence, 'away');
     await assert.rejects(() => sandbox.participant('observer', { owner: c.owner }));
-  } finally { await sandbox.close(); }
+  } finally { await sandbox?.close(); process.env.SQUARE_DELIVERY = previousDelivery; }
 });
 
 test('local World custody refuses known departure or replacement without probing the ledger', async t => {

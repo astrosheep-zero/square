@@ -74,7 +74,7 @@ export interface PerceiveOptions extends ObservationOptions {
   readonly from?: readonly string[];
   readonly mention?: boolean;
   readonly limit?: number;
-  readonly replace?: boolean;
+  readonly takeover?: boolean;
 }
 export interface ActivityCursor {
   readonly id: ActivityId;
@@ -125,7 +125,6 @@ export interface OpenOptions {
 export interface SquareLocation {
   readonly path?: string;
   readonly cwd?: string;
-  readonly env?: NodeJS.ProcessEnv;
 }
 export interface SquareAtInput extends SquareLocation, OpenOptions {}
 export interface SquareBuildInput extends SquareAtInput {

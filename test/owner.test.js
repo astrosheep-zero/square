@@ -35,7 +35,7 @@ test('opaque owners compare exactly while harness encoding roundtrips reserved s
   const alice = (await square.join('Alice', { owner: '  owner  ' })).participant;
   await assert.rejects(square.participant('Alice', { owner: 'owner' }), { code: 'already_joined' });
   assert.equal((await square.participant('Alice', { owner: '  owner  ' })).name, alice.name);
-  await assert.rejects(inbox({ env: {} }, undefined), { code: 'invalid_args' });
+  await assert.rejects(inbox({}, undefined), { code: 'invalid_args' });
 });
 
 test('a plain terminal speaks under its local owner and explicit owner survives recovery commands', async t => {
@@ -45,7 +45,7 @@ test('a plain terminal speaks under its local owner and explicit owner survives 
   const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index'), CODEX_THREAD_ID: '', PI_SESSION_ID: '',
     CLAUDE_CODE_SESSION_ID: '', CLAUDE_CODE_CHILD_SESSION: '', OPENCODE_SESSION_ID: '', PASEO_AGENT_ID: '' };
   delete env.SQUARE_OWNER;
-  const square = await Square.build({ path: file, env, markdown: 'terminal' });
+  const square = await Square.build({ path: file, markdown: 'terminal' });
   await square.close();
   const run = (args, overrides = {}, input) => spawnSync(process.execPath, [cli, '--location', file, ...args], {
     env: { ...env, ...overrides }, input, encoding: 'utf8', timeout: 5000,

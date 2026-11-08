@@ -5,7 +5,7 @@ import { squareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { InternalSquareError, SquareError, isSquareError, nameKey, validateName, type Owner, type Seat, type WatchOptions } from './model.js';
-import { checkControl, failure, squareClock } from './operation-control.js';
+import { checkControl, failure } from './operation-control.js';
 import { validateMetadataMatch } from './delivery-deferral.js';
 import { flushSquarePosts, reconcileSquareDelivery, readSquareSessions, ensureInitialDeliverySession } from './square-posting.js';
 import { attentionChange, coreDone, coreListening, decideAct, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
@@ -51,20 +51,19 @@ export class SqliteSquare {
     readonly location: string,
     private readonly artifact: SquareArtifactPort,
     private readonly clock: () => number,
-    private readonly env: NodeJS.ProcessEnv,
     private readonly deliveryLocation = location,
   ) {}
-  private reconcile(signal?: AbortSignal): Promise<void> { return reconcileSquareDelivery(this.artifact, this.deliveryLocation, this.env, this.clock, signal); }
+  private reconcile(signal?: AbortSignal): Promise<void> { return reconcileSquareDelivery(this.artifact, this.deliveryLocation, this.clock, signal); }
   // Posting is retryable after commit; a delivery failure cannot make a landed write unsent.
-  private async flush(signal?: AbortSignal): Promise<void> { await flushSquarePosts(this.artifact, this.deliveryLocation, this.env, this.clock, signal).catch(() => undefined); }
+  private async flush(signal?: AbortSignal): Promise<void> { await flushSquarePosts(this.artifact, this.deliveryLocation, this.clock, signal).catch(() => undefined); }
 
   static async at(input: SquareAtInput, control?: OperationControl): Promise<SqliteSquare> {
-    const env = { ...(input.env ?? process.env) }, location = squareLocation({ ...input, env });
-    const clock = squareClock(env, input.clock);
+    const location = squareLocation(input);
+    const clock = input.clock ?? Date.now;
     const artifact = createArtifactPort(location, undefined, control?.signal);
     try {
       await artifact.read(facts => facts.header(), control?.signal);
-      return new SqliteSquare(location, artifact, clock, env, await canonicalPath(location));
+      return new SqliteSquare(location, artifact, clock, await canonicalPath(location));
     } catch (error) {
       await artifact.close();
       if (error instanceof InternalSquareError && error.code === 'not_found')
@@ -74,16 +73,15 @@ export class SqliteSquare {
   }
   static async build(input: SquareBuildInput, control?: OperationControl): Promise<SqliteSquare> {
     checkControl(control);
-    const env = { ...(input.env ?? process.env) }, location = squareLocation({ ...input, env });
+    const location = squareLocation(input);
     await createSquare(location, { hardCap: input.hardCap, throttlePerMinute: input.throttlePerMinute,
       template: input.template, force: input.force ?? false }, input.markdown, control?.signal);
     // Publication already committed; cancellation cannot erase the completed build.
-    return SqliteSquare.at({ ...input, path: location, env });
+    return SqliteSquare.at({ ...input, path: location });
   }
   static inMemory(input: Omit<SquareBuildInput, 'path'>): SqliteSquare {
-    const env = { ...(input.env ?? process.env) };
-    return new SqliteSquare(`memory://${crypto.randomUUID()}`, createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)),
-      squareClock(env, input.clock), env);
+    const clock = input.clock ?? Date.now;
+    return new SqliteSquare(`memory://${crypto.randomUUID()}`, createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)), clock);
   }
   /** Join establishes membership and local producer custody in one transaction. */
   private async joinSeat(name: string, options: JoinOptions, control?: OperationControl): Promise<{ readonly seat: Seat; readonly kind: JoinResult['kind']; readonly activity: Activity | null; readonly observation?: import('./square-facade.js').JoinObservation }> {
@@ -148,7 +146,7 @@ export class SqliteSquare {
   private async withHostPresence<T>(select: (facts: SquareRead, deliveryAvailable: (name: string) => boolean) => T, control?: OperationControl): Promise<T> {
     const seats = (await this.artifact.read(facts => facts.roster().filter(person => person.joined)
       .flatMap(person => { const seat = facts.seat(person.name); return seat === undefined ? [] : [seat]; }), control?.signal)).value;
-    const sessions = await readSquareSessions(seats, this.env, control?.signal);
+    const sessions = await readSquareSessions(seats, control?.signal);
     const captured = new Map(seats.map(seat => [nameKey(seat.participant), seat]));
     return (await this.artifact.read(facts => {
       const seat = (name: string): Seat | undefined => {
@@ -318,9 +316,9 @@ export class SqliteSquare {
         await square.reconcile(control?.signal);
         validateName(name);
         if (!Number.isFinite(idle) || idle < 0) throw new SquareError('invalid_args', 'Perceive idle duration must be a non-negative number');
-        if (options.id !== undefined && ['idle', 'from', 'mention', 'limit', 'replace'].some(key => Object.hasOwn(options, key)))
-          throw new SquareError('invalid_args', 'Perceive id cannot be combined with idle, from, mention, limit or replace');
-        if (Object.hasOwn(options, 'replace') && idle === 0) throw new SquareError('invalid_args', 'Perceive replacement requires a positive idle duration');
+        if (options.id !== undefined && ['idle', 'from', 'mention', 'limit', 'takeover'].some(key => Object.hasOwn(options, key)))
+          throw new SquareError('invalid_args', 'Perceive id cannot be combined with idle, from, mention, limit or takeover');
+        if (Object.hasOwn(options, 'takeover') && idle === 0) throw new SquareError('invalid_args', 'Perceive takeover requires a positive idle duration');
         perceiveLimit(options.limit);
         const probe = (await square.artifact.read(facts => {
           name = resolveKnownName(facts, this.name);
@@ -340,12 +338,12 @@ export class SqliteSquare {
         }
         const watch: WatchOptions = {
           ...(selection.from === undefined ? {} : { participants: [...selection.from] }), ...(options.mention ? { mention: name } : {}),
-          ...(options.replace === undefined ? {} : { replace: options.replace }),
+          ...(options.takeover === undefined ? {} : { takeover: options.takeover }),
         };
         const start = await acquireWatchLease(square.artifact, seat!, square.clock(), crypto.randomUUID(), watch, control?.signal);
         if (start.type === 'active') return await complete(undefined, 'already-active');
         leaseId = start.leaseId;
-        control?.onProgress?.({ kind: 'perceive-started', participant: name, idleMs: idle, replacementRequested: options.replace ?? false, replaced: start.replaced });
+        control?.onProgress?.({ kind: 'perceive-started', participant: name, idleMs: idle, replacementRequested: options.takeover ?? false, replaced: start.replaced });
         const quietSince = square.clock();
         let nextHeartbeat = start.heartbeatAt + WATCH_HEARTBEAT_MS;
         while (true) {
@@ -454,7 +452,7 @@ export class SqliteSquare {
       name = requireJoinName(requested);
       const last = options.last ?? HISTORY_DEFAULT_LIMIT;
       if (!Number.isSafeInteger(last) || last < 1 || last > HISTORY_MAX_LIMIT) throw new SquareError('invalid_args', 'Join history limit must be between 1 and 100');
-      if (!await ensureInitialDeliverySession(requireOwner(options.owner), this.env, options.wakeAddress, control?.signal))
+      if (!await ensureInitialDeliverySession(requireOwner(options.owner), options.wakeAddress, control?.signal))
         throw new SquareError('already_joined', `${participantIdentity(name)} is away; resume the host session first`, { reason: 'needs_seat' });
       await this.reconcile(control?.signal);
       const committed = await this.joinSeat(name, options, control);
@@ -543,11 +541,11 @@ export class SqliteSquare {
 }
 
 export function diagnoseSquare(input: SquareLocation, control?: OperationControl) { checkControl(control); return diagnoseSquareFile(squareLocation(input)); }
-export function discover(input: SquareAtInput, options: DiscoveryOptions = {}, control?: OperationControl) {
+export function discover(input: SquareLocation, options: DiscoveryOptions = {}, control?: OperationControl) {
   if (input.path !== undefined) squareLocation(input);
   return discoverSquares(input.cwd ?? process.cwd(), options, control);
 }
-export async function inbox(input: SquareAtInput, owner: Owner, options: InboxOptions = {}, control?: OperationControl): Promise<InboxResult> {
+export async function inbox(input: SquareLocation, owner: Owner, options: InboxOptions = {}, control?: OperationControl): Promise<InboxResult> {
   checkControl(control);
   requireOwner(owner);
   const limit = options.limit ?? 20;

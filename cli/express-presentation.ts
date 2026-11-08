@@ -8,7 +8,7 @@ import type { ActivityId, OperationError, OperationControl, ExpressOptions } fro
 import {
   formatRefusal, renderActivityBlocked, renderActivityLimit,
   renderActivityUncertain, renderExpressNoWait, renderExpressWaiting,
-  participantsRecoveryCommand, participantCommandPrefix, commandPrefix, quoteShell, withPathOutput,
+  participantCommandPrefix, commandPrefix, quoteShell, withPathOutput,
 } from '../presentation.js';
 import { renderExpression, renderFailureLines } from '../operation-presentation.js';
 import { formatDuration } from '../time.js';
@@ -150,7 +150,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
         lines.push(reason === 'bell_mention_conflict' ? '  · ring the bell without explicit mentions:' : '  · retry without explicit recipients:',
         `${activityRetryCommand(squarePath, name, { ...opts, mentions: [] })}${opts.bodyProvided === false ? '' : ` < ${quoteShell(draftPath)}`}`);
       } else if (error.code === 'invalid_args' || error.code === 'invalid_name') {
-        if (opts.mentions?.length) lines.push(participantsRecoveryCommand(squarePath));
+        if (opts.mentions?.length) lines.push(`${commandPrefix(squarePath)} status`);
         if (opts.reply !== undefined && reason !== 'invalid_reply') lines.push(`${commandPrefix(squarePath)} history --limit 10`);
       }
     }

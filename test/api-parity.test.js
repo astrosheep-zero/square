@@ -20,7 +20,7 @@ async function fixture(t, label) {
     SQUARE_PARTICIPANT_NAME: undefined, SQUARE_DISABLE_PASEO_WAKE: '1', NO_COLOR: '1' };
   delete env.FORCE_COLOR;
   const body = "codex" + ":" + `${label}-session`;
-  const square = await Square.build({ path: squarePath, markdown: 'parity context', env });
+  const square = await Square.build({ path: squarePath, markdown: 'parity context', clock: () => 1000 });
   t.after(async () => { await square.close(); fs.rmSync(cwd, { recursive: true, force: true }); });
   return { cwd, path: squarePath, env, body, square };
 }
@@ -260,7 +260,7 @@ test('perceive resolves caller and all filters in one read, retaining canonical 
 
 test('join refuses an omitted or blank name before and after a seat is held', async (t) => {
   const options = await fixture(t, 'explicit-name');
-  const square = await Square.at({ path: options.path, env: options.env });
+  const square = await Square.at({ path: options.path, clock: () => 1000 });
   t.after(() => square.close());
   const before = (await square.history({ limit: null })).activities.length;
   await assert.rejects(square.join(undefined, { owner: options.body }), { code: 'invalid_args' });
@@ -269,7 +269,7 @@ test('join refuses an omitted or blank name before and after a seat is held', as
   assert.equal((await square.history({ limit: null })).activities.length, before, 'refused joins leave no activity');
   assert.equal((await square.join('Defaulted', { owner: options.body })).kind, 'joined');
 
-  const unbound = await Square.at({ path: options.path, env: options.env });
+  const unbound = await Square.at({ path: options.path, clock: () => 1000 });
   t.after(() => unbound.close());
   assert.equal((await selectOwnSeat(unbound, options.body)).name, 'Defaulted', 'adapter seat selection still finds the one held seat');
   await assert.rejects(unbound.join(undefined, { owner: options.body }), { code: 'invalid_args' });

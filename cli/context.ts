@@ -117,7 +117,6 @@ const LOCATION_REQUIRED_COMMANDS = new Set([
   'done',
   'history',
   'status',
-  'participants',
   'doctor',
 ]);
 
@@ -168,7 +167,7 @@ export function defaultContext(command: string, squarePath?: string, name?: stri
 }
 
 export function squareInput(context: CommandContext) {
-  return { cwd: context.cwd, env: context.env, path: context.squarePath };
+  return { cwd: context.cwd, path: context.squarePath, clock: squareClock(context.env) };
 }
 
 export function commandIdentity(env: NodeJS.ProcessEnv, explicit?: Owner): { owner: Owner; wakeAddress?: WakeAddress } {

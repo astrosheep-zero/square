@@ -7,10 +7,10 @@ import { inbox } from '../dist/index.js';
 import { Square } from '../dist/square-api.js';
 import { run, testEnv } from './square-cli-helpers.js';
 
-async function makeMembership(root, name, env) {
+async function makeMembership(root, name) {
   const file = path.join(root, `${name}.square`);
   const body = 'codex:inbox-snapshot';
-  const square = await Square.build({ path: file, markdown: 'inbox context', hardCap: null, env });
+  const square = await Square.build({ path: file, markdown: 'inbox context', hardCap: null });
   try {
     const sender = (await square.join('Sender', { owner: body })).participant;
     await square.join(name, { owner: body });
@@ -25,15 +25,15 @@ test('inbox is a bounded, ordered snapshot without notification internals', asyn
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const names = ['Alpha', `BRAVO${'z'.repeat(180)}`, 'Charlie'];
   const files = [];
-  for (const name of names) files.push(await makeMembership(root, name, env));
-  const complete = await inbox({ cwd: root, env }, 'codex:inbox-snapshot');
+  for (const name of names) files.push(await makeMembership(root, name));
+  const complete = await inbox({ cwd: root }, 'codex:inbox-snapshot');
   assert.equal(complete.total, names.length * 2);
   assert.equal(complete.rows.find(row => row.name === names[1])?.pending, 1);
 
   const result = run(['inbox', '--for-owner', 'codex:inbox-snapshot', '--json'], { env, cwd: root });
   assert.equal(result.status, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
-  assert.deepEqual(snapshot, await inbox({ cwd: root, env }, 'codex:inbox-snapshot'));
+  assert.deepEqual(snapshot, await inbox({ cwd: root }, 'codex:inbox-snapshot'));
   assert.equal(snapshot.total, names.length * 2);
   assert.equal(snapshot.rows.length, names.length * 2);
   for (const row of snapshot.rows) assert.deepEqual(Object.keys(row).sort(), ['name', 'pending', 'squarePath']);

@@ -18,8 +18,9 @@ const deferred = () => {
 };
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-late-lifetime-'));
-  const env = { ...process.env, SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'),
-    SQUARE_NOTIFY_DELIVERY_WAIT_MS: '5000', SQUARE_DISABLE_PASEO_WAKE: '1' };
+  Object.assign(process.env, { SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'),
+    SQUARE_NOTIFY_DELIVERY_WAIT_MS: '5000', SQUARE_DISABLE_PASEO_WAKE: '1' });
+  const env = { ...process.env };
   const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
   t.after(async () => { await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   return { root, env, ledger };
@@ -33,7 +34,7 @@ test('producer cancellation after HTTP invocation returns while its retained con
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  const square = await Square.build({ path: path.join(f.root, 'world.square'), markdown: '', env: f.env });
+  const square = await Square.build({ path: path.join(f.root, 'world.square'), markdown: '' });
   const owner = 'producer:late';
   await square.join('recipient', { owner, wakeAddress: { kind: 'http', address: { url: `http://127.0.0.1:${server.address().port}/` } } });
   const originalFetch = globalThis.fetch, originalDispatch = DeliveryLedger.prototype.dispatchHandoff;

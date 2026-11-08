@@ -43,7 +43,7 @@ test('status stays compact and focuses on the current square', async () => {
   assert.doesNotMatch(status.stdout, /─/);
 });
 
-test('status previews ten active participants and links to the complete roster', async () => {
+test('status previews ten active participants and counts the rest', async () => {
   const peers = Array.from({ length: 12 }, (_value, index) => `Peer${String(index + 1).padStart(2, '0')}`);
   const file = await persistSquare(async ({ square, file, body, wakeAddress, time }) => {
     // Seed the historical actor before real joins, so replacement does not discard live seat ownership.
@@ -51,7 +51,7 @@ test('status previews ten active participants and links to the complete roster',
     const historical = (await readSquareSnapshot(file)).state;
     historical.acts.push({ kind: 'read', actor: 'Reserved', at: 0, through: 0, index: historical.runtime.nextActIndex++ });
     await writeSquareFile(file, historical);
-    const reopened = await Square.at({ path: file, env: testEnv({}, file), clock: time.tick });
+    const reopened = await Square.at({ path: file, clock: time.tick });
     try {
       await reopened.join('Viewer', { owner: body, wakeAddress });
       for (const name of peers) {
@@ -68,17 +68,7 @@ test('status previews ten active participants and links to the complete roster',
   assert.equal(participantRows.length, 10);
   assert.deepEqual(participantRows.map((line) => line.match(/@(\S+) is nearby ·/)?.[1]), peers.slice(2).reverse());
   assert.match(status.stdout, /^  ○ … 3 more here$/m);
-  assert.ok(status.stdout.includes(`square --location '${file}' participants --limit 14\n`));
   assert.doesNotMatch(status.stdout, /Reserved/);
-  assert.doesNotMatch(status.stdout, /--as 'Viewer' participants/);
-
-  const participants = run(withPath(file, ['participants']), { env: { SQUARE_NOW_MS: '100000' } });
-  assert.equal(participants.status, 0, participants.stderr);
-  assert.equal(participants.stdout.split('\n').filter((line) => /^  [◎●○] /.test(line)).length, 14);
-  assert.match(participants.stdout, /Reserved · not joined/);
-  assert.match(participants.stdout, /Peer01/);
-  assert.match(participants.stdout, /Peer12/);
-  assert.doesNotMatch(participants.stdout, /@Peer/);
 });
 
 test('status separates here from lingering and keeps the roster honest', async () => {
@@ -108,61 +98,6 @@ test('status shows who stepped in after the latest public act', async () => {
   assert.match(status.stdout, /@Alice stepped out of the square — done/);
   assert.match(status.stdout, /→ @Alice stepped back in · \d+s ago/);
   assert.match(status.stdout, /→ @Bob stepped in · \d+s ago/);
-});
-
-test('participants stops crediting long-quiet speakers as active', async () => {
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
-    await alice.express('old words', { force: true });
-  }, { hardCap: 100 });
-
-  const roster = run(withPath(file, ['participants']), { env: { SQUARE_NOW_MS: String(40 * 60 * 1000) } });
-  assert.equal(roster.status, 0, roster.stderr);
-  assert.match(roster.stdout, /^  ○ Alice · active · 1 activity · \d+m ago$/m);
-  assert.doesNotMatch(roster.stdout, /● Alice/);
-});
-
-test('participants bound the roster without pagination', async () => {
-  const names = Array.from({ length: 21 }, (_value, index) => `Peer${String(index + 1).padStart(2, '0')}`);
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    for (const name of names) await square.join(name, { owner: body, wakeAddress });
-  }, { hardCap: 100 });
-
-  const defaultPage = run(withPath(file, ['participants']), { env: { SQUARE_NOW_MS: '100000' } });
-  assert.equal(defaultPage.status, 0, defaultPage.stderr);
-  const rows = defaultPage.stdout.split('\n').filter((line) => /^  [◎●○] \S+ ·/.test(line));
-  assert.deepEqual(rows.map((line) => line.match(/^  [◎●○] (\S+) ·/)?.[1]), names.slice(1).reverse());
-  assert.doesNotMatch(defaultPage.stdout, /@Peer/);
-  assert.match(defaultPage.stdout, /^  · 20 of 21 participants shown$/m);
-  assert.match(defaultPage.stdout, new RegExp(`square --location '${file}' participants --limit 21`));
-
-  const complete = run(withPath(file, ['participants', '--limit', '21']), { env: { SQUARE_NOW_MS: '100000' } });
-  assert.equal(complete.status, 0, complete.stderr);
-  assert.doesNotMatch(complete.stdout, /participants shown|participants --limit/);
-
-  const zero = run(withPath(file, ['participants', '--limit', '0']));
-  assert.equal(zero.status, 2);
-  assert.match(zero.stderr, /--limit needs a positive integer/);
-
-  const overLimit = run(withPath(file, ['participants', '--limit', '101']));
-  assert.equal(overLimit.status, 2);
-  assert.match(overLimit.stderr, /--limit is capped at 100/);
-  assert.match(overLimit.stderr, new RegExp(`square --location '${file}' participants --limit 100`));
-
-  const unsupported = run(withPath(file, ['participants', '--all']));
-  assert.equal(unsupported.status, 2);
-  assert.match(unsupported.stderr, /participants --help/);
-});
-
-test('participants do not offer a rejected complete-roster limit', async () => {
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    for (let index = 1; index <= 101; index += 1) await square.join(`Peer${String(index).padStart(3, '0')}`, { owner: body, wakeAddress });
-  }, { hardCap: 100 });
-
-  const page = run(withPath(file, ['participants', '--limit', '100']), { env: { SQUARE_NOW_MS: '100000' } });
-  assert.equal(page.status, 0, page.stderr);
-  assert.match(page.stdout, /^  · 100 of 101 participants shown$/m);
-  assert.doesNotMatch(page.stdout, /participants --limit 101/);
 });
 
 test('history refuses an unbounded merged context and offers a bounded executable command', async () => {
@@ -339,7 +274,7 @@ test('unknown participant errors stay bounded and point to the roster', async ()
   assert.match(expressed.stderr, /✕ @Eve is not standing in this square/);
   assert.match(expressed.stderr, /in the square/);
   assert.doesNotMatch(expressed.stderr, /Expected one of|@Alice/);
-  assert.match(expressed.stderr, new RegExp(`square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' participants`));
+  assert.match(expressed.stderr, new RegExp(`square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' status`));
 });
 
 test('history pages with stable activity-id cursors and prints the next page', async () => {
@@ -617,7 +552,7 @@ test('inbox stays read-only while codex admits pending attention once at a bound
   const bobBody = "codex" + ":" + ('sid-cli');
   const file = await persistSquare(async ({ square, file, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
-    const bob = await Square.at({ path: file, env: testEnv({}, file) });
+    const bob = await Square.at({ path: file });
     try { await bob.join('Bob', { owner: bobBody }); } finally { await bob.close(); }
     await alice.express('hey @Bob', { force: true, mentions: ['Bob'] });
   });
@@ -1039,7 +974,7 @@ test('list clips displayed path, context, and names without truncating its proje
   await square.join(longName, { owner: body });
   await square.close();
 
-  const discovered = await discover({ cwd, env: testEnv() });
+  const discovered = await discover({ cwd });
   const item = discovered.items.find((candidate) => candidate.path === longPath);
   assert.ok(item, 'discovery retains the complete relative path');
   assert.ok(item.context.includes(longContext));
@@ -1053,7 +988,7 @@ test('list clips displayed path, context, and names without truncating its proje
   assert.match(listed.stdout, /…/);
 });
 
-test('list, participants, and clipped status use current state and executable hints', async () => {
+test('list and clipped status use current state and executable hints', async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-current-state-'));
   const file = path.join(cwd, '.square', 'state.square');
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -1076,12 +1011,6 @@ test('list, participants, and clipped status use current state and executable hi
   assert.match(listed.stdout, /context · ## Topic\n\s+· Current state/);
   assert.match(listed.stdout, /participants · @Alice/);
   assert.doesNotMatch(listed.stdout, /participants[^\n]*Bob/);
-
-  const participants = run(withPath(file, ['participants']), { cwd });
-  assert.match(participants.stdout, /Alice · active/);
-  assert.match(participants.stdout, /Bob · done/);
-  assert.doesNotMatch(participants.stdout, /@Alice|@Bob/);
-  assert.doesNotMatch(participants.stdout, /^presence$/m);
 
   const status = run(withName(file, 'Alice', ['status']), { cwd });
   assert.match(status.stdout, /more chars/);

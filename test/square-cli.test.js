@@ -83,17 +83,6 @@ test('CLI test runner does not inherit the parent execution identity', async () 
   }
 });
 
-test('participants renders roster names without mention syntax', () => {
-  const file = tempSquare();
-  assert.equal(build(file).status, 0);
-  const joined = run(withName(file, 'Alice', ['join']));
-  assert.equal(joined.status, 0, joined.stderr);
-  const roster = run(withPath(file, ['participants']));
-  assert.equal(roster.status, 0, roster.stderr);
-  assert.match(roster.stdout, /  ○ Alice · active/);
-  assert.doesNotMatch(roster.stdout, /@Alice/);
-});
-
 test('bare activities land without an audience and listeners receive later bare activity', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
@@ -242,7 +231,6 @@ test('every public subcommand exposes scoped help without a square', async () =>
     'codex-hook',
     'history',
     'status',
-    'participants',
     'install',
     'uninstall',
     'harness',
@@ -287,7 +275,7 @@ test('help command resolves aliases and rejects unknown commands', async () => {
     runAsync(['help', 'history'], { cwd }),
     runAsync(['help', 'list'], { cwd }),
     runAsync(['help', 'missing-command'], { cwd }),
-    ...['act', 'echo', 'compact', 'migrate'].flatMap((removed) => [
+    ...['act', 'echo', 'compact', 'migrate', 'participants'].flatMap((removed) => [
       runAsync(['help', removed], { cwd }),
       runAsync([removed], { cwd }),
     ]),
@@ -301,7 +289,7 @@ test('help command resolves aliases and rejects unknown commands', async () => {
   assert.match(unknown.stderr, /unknown command: missing-command/);
   assert.match(unknown.stderr, /square --help/);
   for (const [index, result] of removedResults.entries()) {
-    const removed = ['act', 'echo', 'compact', 'migrate'][Math.floor(index / 2)];
+    const removed = ['act', 'echo', 'compact', 'migrate', 'participants'][Math.floor(index / 2)];
     assert.equal(result.status, 2, removed);
     assert.match(result.stderr, new RegExp(`unknown command: ${removed}`));
     assert.doesNotMatch(result.stderr, /did you mean/i);
@@ -356,7 +344,7 @@ test('CLI uses an explicit location and participant', async (t) => {
 test('square-accessing commands refuse to invent a default location', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-no-default-location-'));
   try {
-    for (const command of ['build', 'stream', 'join', 'perceive', 'express', 'done', 'history', 'status', 'participants', 'doctor']) {
+    for (const command of ['build', 'stream', 'join', 'perceive', 'express', 'done', 'history', 'status', 'doctor']) {
       const result = run([command], { cwd, input: command === 'build' ? 'body\n' : undefined });
       assert.equal(result.status, 2, `${command}: ${result.stderr}`);
       assert.match(result.stderr, new RegExp(`${command} needs a square location`));
@@ -412,9 +400,9 @@ test('join and perceive preserve CLI behavior while seat ownership follows the a
   assert.equal(sameName.status, 2, sameName.stderr);
   assert.match(sameName.stderr, /@Bob shoos you out of the square/);
   assert.match(sameName.stderr, /If this is your name to reclaim/);
-  assert.match(sameName.stderr, /join --kick/);
+  assert.match(sameName.stderr, /join --takeover/);
 
-  const takeover = run(withName(file, 'Bob', ['join', '--kick']), { env: takeoverBody });
+  const takeover = run(withName(file, 'Bob', ['join', '--takeover']), { env: takeoverBody });
   assert.equal(takeover.status, 0, takeover.stderr);
   assert.match(takeover.stdout, /you banished the original @Bob/);
   assert.doesNotMatch(takeover.stdout, /perceive --idle 30m/);
@@ -468,7 +456,7 @@ test('a foreign perceive cannot take ownership of a standing participant', async
   assert.equal(original.status, 0, original.stderr);
 });
 
-test('join --kick replaces a participant seat after a different body is refused', async () => {
+test('join --takeover replaces a participant seat after a different body is refused', async () => {
   const file = tempSquare();
   const standing = { PI_SESSION_ID: 'standing-pi' };
   const caller = { CODEX_THREAD_ID: 'new-codex' };
@@ -485,8 +473,8 @@ test('join --kick replaces a participant seat after a different body is refused'
   assert.match(rejected.stderr, /not held by this owner/);
   const reconnect = run(withName(file, 'Alice', ['join']), { env: caller });
   assert.equal(reconnect.status, 2);
-  assert.match(reconnect.stderr, /join --kick/);
-  const takeover = run(withName(file, 'Alice', ['join', '--kick', '--last', '1']), { env: caller });
+  assert.match(reconnect.stderr, /join --takeover/);
+  const takeover = run(withName(file, 'Alice', ['join', '--takeover', '--last', '1']), { env: caller });
   assert.equal(takeover.status, 0, takeover.stderr);
   const expressed = run(withName(file, 'Alice', ['express', '--force', '--no-mention', 'after']), { env: caller });
   assert.equal(expressed.status, 0, expressed.stderr);
@@ -506,7 +494,7 @@ test('join --kick replaces a participant seat after a different body is refused'
     assert.equal(seats.newBody.length, 1);
   } finally { await currentArtifact.close(); }
 
-  const selfKick = run(withName(file, 'Alice', ['join', '--kick']), { env: caller });
+  const selfKick = run(withName(file, 'Alice', ['join', '--takeover']), { env: caller });
   assert.equal(selfKick.status, 0, selfKick.stderr);
   const square = await Square.at({ path: file });
   try {
@@ -549,7 +537,7 @@ test('an unknown recipient errors with the roster command instead of a join', as
   const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']));
   assert.equal(expressed.status, 2);
   assert.match(expressed.stderr, /✕ @Eve is not standing in this square/);
-  assert.match(expressed.stderr, new RegExp(`square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' participants`));
+  assert.match(expressed.stderr, new RegExp(`square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' status`));
   assert.doesNotMatch(expressed.stderr, /--as 'Eve' join/);
 });
 
@@ -613,14 +601,14 @@ test('perceive conflicts and removed modes are refused while bare perceive is th
     ['perceive', '--follow'],
     ['perceive', '--count', '2'],
     ['perceive', '--force', '--now'],
-    ['perceive', '--now', '--replace'],
+    ['perceive', '--now', '--takeover'],
   ];
   const results = await Promise.all(rejected.map((args) => runAsync(withName(file, 'Alice', args))));
   for (const [index, result] of results.entries()) {
     assert.notEqual(result.status, 0, rejected[index].join(' '));
   }
   assert.match(results[0].stderr, /perceive accepts --now or --idle, not both/);
-  assert.match(results[4].stderr, /--replace can only be used with --idle/);
+  assert.match(results[4].stderr, /--takeover can only be used with --idle/);
   assert.equal(run(withName(file, 'Alice', ['perceive'])).status, 0);
   assert.equal(run(withName(file, 'Alice', ['perceive', '--now'])).status, 0);
 });

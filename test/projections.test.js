@@ -19,8 +19,7 @@ async function archiveSquare(t, state) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const squarePath = path.join(root, 'archive.square');
   await createSquareFile(squarePath, state);
-  const square = await Square.at({ cwd: root, path: squarePath, clock: () => 100_000,
-    env: { ...process.env, SQUARE_REGISTRY: path.join(root, 'registry') } });
+  const square = await Square.at({ cwd: root, path: squarePath, clock: () => 100_000 });
   t.after(() => square.close());
   return square;
 }

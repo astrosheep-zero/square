@@ -11,13 +11,14 @@ import { DeliveryLedger } from '../dist/delivery-ledger.js';
 
 for (const stage of ['before-post', 'after-post']) test(`producer recovery preserves ownership and idempotence at ${stage}`, { timeout: 10000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-post-crash-'));
-  const env = { ...process.env, SQUARE_DELIVERY: path.join(root, 'delivery.sqlite') };
-  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '', env });
+  process.env.SQUARE_DELIVERY = path.join(root, 'delivery.sqlite');
+  const env = { ...process.env };
+  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '' });
   const owner = `crash:${root}`;
   await square.join('recipient', { owner });
   const location = await fs.realpath(square.location);
   const artifact = createArtifactPort(location);
-  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+  const ledger = await DeliveryLedger.open();
   let child;
   t.after(async () => { child?.kill('SIGKILL'); await artifact.close(); await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   await artifact.transactAs({ kind: 'send', actor: 'notice' }, facts => facts.insertNotice({ from: 'notice', to: 'recipient', body: 'one durable card' }, Date.now()));
@@ -42,9 +43,9 @@ for (const stage of ['before-post', 'after-post']) test(`producer recovery prese
 
 test('a metadata-only card receipt leaves the structured activity unread until explicit perceive', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-structured-card-'));
-  const env = { ...process.env, SQUARE_DELIVERY: path.join(root, 'delivery.sqlite') };
-  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '', env });
-  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+  process.env.SQUARE_DELIVERY = path.join(root, 'delivery.sqlite');
+  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '' });
+  const ledger = await DeliveryLedger.open();
   t.after(async () => { await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   const alice = (await square.join('Alice', { owner: `a:${root}` })).participant;
   const bob = (await square.join('Bob', { owner: `b:${root}` })).participant;
@@ -64,9 +65,9 @@ test('a metadata-only card receipt leaves the structured activity unread until e
 
 test('two recipient seats of one host owner keep distinct cards and independent read state across attachment rotation', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-multiseat-card-'));
-  const env = { ...process.env, SQUARE_DELIVERY: path.join(root, 'delivery.sqlite') };
-  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '', env });
-  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+  process.env.SQUARE_DELIVERY = path.join(root, 'delivery.sqlite');
+  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '' });
+  const ledger = await DeliveryLedger.open();
   t.after(async () => { await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   const alice = (await square.join('Alice', { owner: `a:${root}` })).participant;
   const shared = `shared:${root}`;

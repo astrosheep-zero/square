@@ -16,7 +16,7 @@ export async function acquireWatchLease(artifact: SquareArtifactPort, seat: Seat
   const name = seat.participant;
   const { value } = await artifact.transactAs({ kind: 'participant', seat }, facts => {
     const known = resolveKnownName(facts, name), existing = freshWatchLease(facts, known, at);
-    if (existing !== undefined && !options.replace) return { type: 'active' } as const;
+    if (existing !== undefined && !options.takeover) return { type: 'active' } as const;
     facts.putLease(known, newLease(leaseId, at, options), seat.generation);
     return { type: 'started', leaseId, replaced: existing !== undefined, heartbeatAt: at } as const;
   }, signal);

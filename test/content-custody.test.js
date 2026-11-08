@@ -10,10 +10,10 @@ import { DeliveryLedger } from '../dist/delivery-ledger.js';
 async function setup(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-content-'));
   const location = path.join(root, 'world.square');
-  const env = { ...process.env, SQUARE_DELIVERY: path.join(root, 'ledger.sqlite') };
+  process.env.SQUARE_DELIVERY = path.join(root, 'ledger.sqlite');
   await createSquareFile(location, { hardCap: null, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
-  const square = await Square.at({ path: location, env });
-  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
+  const square = await Square.at({ path: location });
+  const ledger = await DeliveryLedger.open();
   t.after(async () => { await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   const alice = (await square.join('Alice', { owner: 'test:alice' })).participant;
   const bob = (await square.join('Bob', { owner: 'test:bob' })).participant;

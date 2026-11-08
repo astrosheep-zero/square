@@ -14,7 +14,7 @@ async function fixture(t) {
   // The perceiving CLI presents this body, so the seats are established with it.
   const session = `wait-${path.basename(root)}`;
   const body = `codex:${session}`;
-  const square = await Square.build({ path: file, markdown: 'deadline wait', hardCap: null, env: testEnv({}, file) });
+  const square = await Square.build({ path: file, markdown: 'deadline wait', hardCap: null });
   try {
     await square.join('Host', { owner: body });
     await square.join('Bob', { owner: body });

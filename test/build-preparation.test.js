@@ -14,7 +14,6 @@ test('file, memory and public builds share configuration and guide preparation',
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-build-preparation-'));
   const markdown = '  context\r\nsecond line  ';
   const options = { markdown, throttlePerMinute: 3 };
-  const env = { SQUARE_DELIVERY: path.join(dir, 'delivery.sqlite') };
   const expected = prepareSquareBuild(options, markdown);
   assert.equal(expected.hardCap, null);
   assert.deepEqual(expected.preamble, ['context', 'second line']);
@@ -23,12 +22,12 @@ test('file, memory and public builds share configuration and guide preparation',
   const filePath = path.join(dir, 'sdk.square');
   let file;
   try {
-    file = await Square.build({ path: filePath, env, ...options });
+    file = await Square.build({ path: filePath, ...options });
     assert.equal((await memory.status()).hardCap, (await file.status()).hardCap);
     assert.equal((await memory.status()).throttlePerMinute, (await file.status()).throttlePerMinute);
     assert.deepEqual((await readSquareSnapshot(filePath)).state, expected);
     const appPath = path.join(dir, 'public.square');
-    const result = await Square.build({ path: appPath, env, ...options, template: 'architect' });
+    const result = await Square.build({ path: appPath, ...options, template: 'architect' });
     assert.equal(result.location, appPath);
     const status = await result.status();
     assert.equal(status.hardCap, null);
@@ -38,7 +37,7 @@ test('file, memory and public builds share configuration and guide preparation',
       prepareSquareBuild({ ...options, template: 'architect' }, markdown));
     for (const invalid of [{ hardCap: 0 }, { throttlePerMinute: 0 }]) {
       assert.throws(() => Square.inMemory({ markdown, ...invalid }), { code: 'invalid_args' });
-      await assert.rejects(Square.build({ path: path.join(dir, 'invalid.square'), markdown, env, ...invalid }), { code: 'invalid_args' });
+      await assert.rejects(Square.build({ path: path.join(dir, 'invalid.square'), markdown, ...invalid }), { code: 'invalid_args' });
       await assert.rejects(Square.build({ path: appPath, markdown, ...invalid, force: true }), { code: 'invalid_args' });
     }
     assert.throws(() => prepareSquareBuild({ template: 'missing' }, ''), /Unknown square guide: missing/);

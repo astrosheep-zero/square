@@ -25,7 +25,7 @@ interface BuildIntent {
 }
 interface JoinIntent {
   lastN: number;
-  kick: boolean;
+  takeover: boolean;
 }
 interface ActivityIntent {
   activity?: string;
@@ -98,21 +98,21 @@ export const buildCommand: CommandSpec<BuildIntent, string> = {
 export const joinCommand: CommandSpec<JoinIntent, string> = {
   parse(argv, context) {
     let lastN = JOIN_DEFAULT_LAST;
-    let kick = false;
+    let takeover = false;
     for (let index = 0; index < argv.length; index++) {
       if (argv[index] === '--last') {
         lastN = parseBoundedLimit(argv[index + 1], '--last', JOIN_MAX_LAST,
           `${context.name === undefined ? commandPrefix(requireSquarePath(context)) : participantCommandPrefix(requireSquarePath(context), context.name)} join --last ${JOIN_MAX_LAST}`);
         index += 1;
-      } else if (argv[index] === '--kick') kick = true;
+      } else if (argv[index] === '--takeover') takeover = true;
       else if (argv[index] !== '--json') usage(context.command);
     }
-    return { lastN, kick };
+    return { lastN, takeover };
   },
   async execute(intent, context) {
     const { owner, wakeAddress } = commandIdentity(context.env, context.owner);
     const data = await withSquare(context, (square) => square.join(requireJoinName(context.name), {
-      owner: requireOwner(owner), wakeAddress, takeover: intent.kick, last: intent.lastN, ...(context.json ? {} : { observe: true }),
+      owner: requireOwner(owner), wakeAddress, takeover: intent.takeover, last: intent.lastN, ...(context.json ? {} : { observe: true }),
     }));
     return context.json ? jsonResult(data) : renderJoinResult(data, context.owner ?? context.env.SQUARE_OWNER)!;
   },

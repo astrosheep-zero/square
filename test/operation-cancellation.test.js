@@ -32,16 +32,15 @@ test('pre-aborted lifecycle operations do not mutate the artifact', async () => 
 test('request operations abort under an exclusive artifact lock without a deferred mutation', async () => {
   const { fs, path, root } = await tempDirectory('square-request-cancel-');
   const location = path.join(root, 'SQUARE.square');
-  const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
   const writerBody = body('writer');
   const readerBody = body('reader');
-  const built = await Square.build({ path: location, markdown: 'context', env });
+  const built = await Square.build({ path: location, markdown: 'context' });
   const writer = (await built.join('Writer', { owner: writerBody })).participant;
   await built.close();
-  const readerSquare = await Square.at({ path: location, env });
+  const readerSquare = await Square.at({ path: location });
   await readerSquare.join('Reader', { owner: readerBody });
   await readerSquare.close();
-  const writerSquare = await Square.at({ path: location, env });
+  const writerSquare = await Square.at({ path: location });
   await (await writerSquare.participant('Writer', { owner: writerBody })).express('unread', { force: true, mentions: ['Reader'] });
   await writerSquare.close();
 
@@ -55,7 +54,7 @@ test('request operations abort under an exclusive artifact lock without a deferr
     async square => square.join('Newcomer', { owner: body('newcomer') }),
   ];
   const pending = requests.map(async operate => {
-    const square = await Square.at({ cwd: root, env, path: location }, { signal: controller.signal });
+    const square = await Square.at({ cwd: root, path: location }, { signal: controller.signal });
     try { await operate(square); } finally { await square.close(); }
   });
   const abort = setTimeout(() => controller.abort(new Error('cancelled')), 50);
@@ -116,7 +115,7 @@ test('a published build keeps its result when cancellation follows publication',
   const link = fs.promises.link;
   fs.promises.link = async (...args) => { await link(...args); controller.abort(new Error('late response cancellation')); };
   try {
-    const result = await Square.build({ path: location, env: { SQUARE_DELIVERY: path.join(root, 'delivery.sqlite') }, markdown: 'published', hardCap: 3 }, { signal: controller.signal });
+    const result = await Square.build({ path: location, markdown: 'published', hardCap: 3 }, { signal: controller.signal });
     assert.equal(result.location, location);
     assert.equal((await result.status()).hardCap, 3);
     await result.close();
@@ -235,9 +234,8 @@ test('concurrent joins from one body establish one artifact seat and one join ac
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const location = path.join(root, 'SQUARE.square');
   const coordinate = body('same-session');
-  const env = { ...process.env, SQUARE_INDEX: path.join(root, 'index.ndjsonl') };
-  const square = await Square.build({ path: location, markdown: 'context', env });
-  const peer = await Square.at({ path: location, env });
+  const square = await Square.build({ path: location, markdown: 'context' });
+  const peer = await Square.at({ path: location });
   try {
     await Promise.all([square.join('Same', { owner: coordinate }), peer.join('Same', { owner: coordinate })]);
     assert.equal((await square.history()).activities.filter(activity => activity.kind === 'join').length, 1);
