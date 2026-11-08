@@ -38,6 +38,24 @@ function ownershipLeaks(identifier, owners) {
     .map((file) => `${identifier}: ${file}`);
 }
 
+test('Square resource and posting boundaries stay free of process.env and CLI clock hooks', () => {
+  const envFreeModules = [
+    'index.ts', 'square-api.ts', 'square-facade.ts', 'square-location.ts',
+    'sqlite-square.ts', 'square-posting.ts', 'operation-control.ts',
+    'decisions.ts', 'perceive-decisions.ts', 'perception-projection.ts',
+  ];
+  for (const file of envFreeModules) {
+    const source = productionSources.get(file) ?? '';
+    assert.doesNotMatch(source, /\bprocess\.env\b|\bNodeJS\.ProcessEnv\b|\bSQUARE_DELIVERY\b|\bSQUARE_NOW_MS\b/, file);
+    assert.doesNotMatch(source, /\b(?:CLAUDE_CODE_SESSION_ID|CODEX_THREAD_ID|OPENCODE_SESSION_ID|PI_SESSION_ID|PASEO_AGENT_ID)\b/, file);
+  }
+  assert.deepEqual(filesContaining(/\b(?:squareClock|SQUARE_NOW_MS)\b/, ['cli/context.ts']), []);
+  assert.deepEqual(ownershipLeaks('operationEnv', []), []);
+  const toolsSource = productionSources.get('square-tools.ts') ?? '';
+  assert.match(toolsSource, /export interface ToolIdentity \{\s*readonly owner\?: Owner;\s*readonly wakeAddress\?: WakeAddress;?\s*\}/);
+  assert.match(toolsSource, /discover\(options: DiscoveryOptions, control: OperationControl\): Promise<DiscoveryResult>;/);
+});
+
 test('the local resource accepts transport injection without composing harness defaults', () => {
   const resource = productionSources.get('sqlite-square.ts');
   assert.ok(resource);
