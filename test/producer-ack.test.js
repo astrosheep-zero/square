@@ -15,14 +15,14 @@ const notice = (turn = 'turn/7', to = ['observer']) => ({ from: 'keiyaku-notice'
   body: `result ${turn}`, metadata: { keiyaku: { kind: 'akuma.turn-outcome', akumaId: 'aku/intern/12345678', historyId: turn }, extra: 'allowed' } });
 async function setup(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-producer-'));
-  process.env.SQUARE_DELIVERY = path.join(root, 'delivery.sqlite');
+  const ledgerLocation = path.join(root, 'delivery.sqlite');
   let now = 1000;
-  const input = { path: path.join(root, 'world.square'), clock: () => now };
+  const input = { path: path.join(root, 'world.square'), clock: () => now, ledgerLocation };
   const square = await Square.build({ ...input, markdown: '' });
   const observer = (await square.join('observer', { owner: `observer:${root}` })).participant;
   const other = (await square.join('other', { owner: `other:${root}` })).participant;
   const reopened = await Square.at(input);
-  const ledger = await DeliveryLedger.open();
+  const ledger = await DeliveryLedger.open({ location: ledgerLocation });
   t.after(async () => { await reopened.close(); await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   const owner = `observer:${root}`;
   async function cards(forOwner = owner) {

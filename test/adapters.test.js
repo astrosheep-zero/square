@@ -467,8 +467,6 @@ test('package facade participant verbs persist through shared actions', async ()
   const squarePath = path.join(dir, 'SQUARE.square');
   const body = "pi" + ":" + ('alice-session');
   const square = await Square.build({ path: squarePath, markdown: 'warmup' });
-  const previousDisableWake = process.env.SQUARE_DISABLE_PASEO_WAKE;
-  process.env.SQUARE_DISABLE_PASEO_WAKE = '1';
   try {
     const alice = (await square.join('Alice', { owner: body })).participant;
     await alice.express('one @Alice', { force: true, mentions: ['Alice'] });
@@ -478,8 +476,6 @@ test('package facade participant verbs persist through shared actions', async ()
     assert.deepEqual(persisted.acts.map((item) => item.kind), ['join', 'say', 'done']);
     assert.deepEqual(persisted.acts.map((item) => item.index), [0, 1, 2]);
   } finally {
-    if (previousDisableWake === undefined) delete process.env.SQUARE_DISABLE_PASEO_WAKE;
-    else process.env.SQUARE_DISABLE_PASEO_WAKE = previousDisableWake;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

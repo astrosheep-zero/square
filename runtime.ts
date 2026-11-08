@@ -1,17 +1,10 @@
-import { SquareError, type WatchLease } from './model.js';
+import type { WatchLease } from './model.js';
 import type { ParticipantCounts, ParticipantFact, SquareRead } from './ports.js';
 
-function parseIntegerEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  const value = parseInt(raw, 10);
-  if (!Number.isFinite(value) || value <= 0) throw new SquareError('invalid_args', `Invalid ${name}: expected a positive integer.`);
-  return value;
-}
-export const WATCH_HEARTBEAT_MS = parseIntegerEnv('SQUARE_WATCH_HEARTBEAT_MS', 60000);
-export const WATCH_STALE_MS = parseIntegerEnv('SQUARE_WATCH_STALE_MS', 180000);
-export const THROTTLE_WINDOW_MS = parseIntegerEnv('SQUARE_THROTTLE_WINDOW_MS', 60000);
-export const UNREAD_BLOCK_GRACE_MS = parseIntegerEnv('SQUARE_UNREAD_BLOCK_GRACE_MS', 90000);
+export const WATCH_HEARTBEAT_MS = 60000;
+export const WATCH_STALE_MS = 180000;
+export const THROTTLE_WINDOW_MS = 60000;
+export const UNREAD_BLOCK_GRACE_MS = 90000;
 export const FACT_PAGE_SIZE = 100;
 
 export function inSquareCount(facts: SquareRead): number { return facts.participantCounts().joined; }
@@ -47,7 +40,7 @@ export function presenceAnchor(facts: SquareRead, name: string): number {
   const evidence = Math.max(boundary, own ?? boundary, facts.receiptFacts(name, boundary).latestActorActivityIndex ?? boundary);
   return facts.activityHeads({ afterIndex: boundary, throughIndex: evidence, kinds: ['say', 'done'] }, { edge: 'newest', limit: 1 }).items[0]?.index ?? -1;
 }
-export function freshWatchLease(facts: SquareRead, name: string, at = Date.now()): WatchLease | undefined {
+export function freshWatchLease(facts: SquareRead, name: string, at: number): WatchLease | undefined {
   const lease = facts.lease(name);
   return lease === undefined || lease.expiresAt <= at || at - lease.heartbeatAt > WATCH_STALE_MS ? undefined : lease;
 }

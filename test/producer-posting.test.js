@@ -11,18 +11,17 @@ import { DeliveryLedger } from '../dist/delivery-ledger.js';
 
 for (const stage of ['before-post', 'after-post']) test(`producer recovery preserves ownership and idempotence at ${stage}`, { timeout: 10000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-post-crash-'));
-  process.env.SQUARE_DELIVERY = path.join(root, 'delivery.sqlite');
-  const env = { ...process.env };
-  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '' });
+  const ledgerLocation = path.join(root, 'delivery.sqlite');
+  const square = await Square.build({ path: path.join(root, 'world.square'), ledgerLocation, markdown: '' });
   const owner = `crash:${root}`;
   await square.join('recipient', { owner });
   const location = await fs.realpath(square.location);
   const artifact = createArtifactPort(location);
-  const ledger = await DeliveryLedger.open();
+  const ledger = await DeliveryLedger.open({ location: ledgerLocation });
   let child;
   t.after(async () => { child?.kill('SIGKILL'); await artifact.close(); await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   await artifact.transactAs({ kind: 'send', actor: 'notice' }, facts => facts.insertNotice({ from: 'notice', to: 'recipient', body: 'one durable card' }, Date.now()));
-  child = fork(new URL('./fixtures/producer-export-crash.js', import.meta.url), [location, stage], { env, execArgv: [], stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  child = fork(new URL('./fixtures/producer-export-crash.js', import.meta.url), [location, stage, ledgerLocation], { execArgv: [], stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let errorText = '';
   child.stderr.on('data', value => { errorText += value; });
   await Promise.race([once(child, 'message'), once(child, 'exit').then(() => { throw new Error(`Exporter exited before ownership: ${errorText}`); })]);
@@ -43,9 +42,9 @@ for (const stage of ['before-post', 'after-post']) test(`producer recovery prese
 
 test('a metadata-only card receipt leaves the structured activity unread until explicit perceive', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-structured-card-'));
-  process.env.SQUARE_DELIVERY = path.join(root, 'delivery.sqlite');
-  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '' });
-  const ledger = await DeliveryLedger.open();
+  const ledgerLocation = path.join(root, 'delivery.sqlite');
+  const square = await Square.build({ path: path.join(root, 'world.square'), ledgerLocation, markdown: '' });
+  const ledger = await DeliveryLedger.open({ location: ledgerLocation });
   t.after(async () => { await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   const alice = (await square.join('Alice', { owner: `a:${root}` })).participant;
   const bob = (await square.join('Bob', { owner: `b:${root}` })).participant;
@@ -65,9 +64,9 @@ test('a metadata-only card receipt leaves the structured activity unread until e
 
 test('two recipient seats of one host owner keep distinct cards and independent read state across attachment rotation', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-multiseat-card-'));
-  process.env.SQUARE_DELIVERY = path.join(root, 'delivery.sqlite');
-  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '' });
-  const ledger = await DeliveryLedger.open();
+  const ledgerLocation = path.join(root, 'delivery.sqlite');
+  const square = await Square.build({ path: path.join(root, 'world.square'), ledgerLocation, markdown: '' });
+  const ledger = await DeliveryLedger.open({ location: ledgerLocation });
   t.after(async () => { await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   const alice = (await square.join('Alice', { owner: `a:${root}` })).participant;
   const shared = `shared:${root}`;

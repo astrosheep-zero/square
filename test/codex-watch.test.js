@@ -74,13 +74,13 @@ async function fixture(t) {
 
 test('each Stop queues once without any native contact and exits; the next Stop starts a fresh watcher', async t => {
   const f = await fixture(t);
-  assert.ok((await createDefaultDeliveryTransports(f.env)).every(transport => transport.kind !== 'codex-queue'));
+  assert.ok((await createDefaultDeliveryTransports()).every(transport => transport.kind !== 'codex-queue'));
   let producerCalls = 0;
   const first = f.command();
   await until(f.locked, 'first Stop watcher');
   const duplicate = f.command();
   assert.deepEqual(await duplicate.exited, [0, null]);
-  await postAndDispatch(f.ledger, { owner: f.owner, key: 'first', text: 'receiver-owned text' }, { env: f.env,
+  await postAndDispatch(f.ledger, { owner: f.owner, key: 'first', text: 'receiver-owned text' }, {
     transports: [{ kind: 'codex-queue', send: async () => { producerCalls++; return 'accepted'; } }] });
   assert.equal(producerCalls, 0);
   assert.deepEqual(await first.exited, [0, null]);

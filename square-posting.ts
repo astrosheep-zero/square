@@ -104,14 +104,14 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
       if (session?.state !== 'attached') continue;
       const rendered = renderPost(location, post), token = randomUUID();
       const owned = (await artifact.transactAs({ kind: 'producer' }, facts =>
-        facts.acquirePost({ ...post, full: rendered.full }, token, process.pid, clock(), Date.now()), signal)).value;
+        facts.acquirePost({ ...post, full: rendered.full }, token, process.pid, clock()), signal)).value;
       if (!owned) continue;
       let posted = false, knownUnsent = true;
       try {
         // This check is not custody across the await; the ledger independently fences delivery.
         const current = await ledger.session(post.owner, signal);
         if (current?.state !== 'attached' || current.generation !== session.generation
-          || !(await artifact.read(facts => facts.ownsPost(token, Date.now()), signal)).value) continue;
+          || !(await artifact.read(facts => facts.ownsPost(token), signal)).value) continue;
         knownUnsent = false;
         const result = await ledger.post({ owner: post.owner, key: squarePostKey(location, post), text: rendered.text,
           ...(post.kind === 'activity' ? { details: { kind: 'presentation', origin: displayAttentionPath(location),
@@ -137,7 +137,7 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
       const pendingKeys = new Set((await ledger.pending(owner, { generation: session.generation }, signal)).map(card => card.key));
       for (const post of posts.filter(post => post.owner === owner)) {
         const key = squarePostKey(location, post);
-        if (pendingKeys.has(key)) await dispatchPostedCard(ledger, post.owner, key, result => lifetime?.track(result), undefined, signal);
+        if (pendingKeys.has(key)) await dispatchPostedCard(ledger, post.owner, key, result => lifetime?.track(result), signal);
       }
     }
   } catch {

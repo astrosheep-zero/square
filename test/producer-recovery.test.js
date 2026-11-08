@@ -15,23 +15,22 @@ import { flushSquarePosts } from '../dist/square-posting.js';
 const DAY = 24 * 60 * 60 * 1000;
 async function setup(t, route) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-export-recovery-'));
-  Object.assign(process.env, { SQUARE_DELIVERY: path.join(root, 'delivery.sqlite'), SQUARE_DISABLE_PASEO_WAKE: '1' });
-  const env = { ...process.env, SQUARE_NOW_MS: '1000' };
-  const square = await Square.build({ path: path.join(root, 'world.square'), markdown: '', clock: () => 1000 });
+  const ledgerLocation = path.join(root, 'delivery.sqlite');
+  const square = await Square.build({ path: path.join(root, 'world.square'), ledgerLocation, markdown: '', clock: () => 1000 });
   const owner = `recipient:${root}`;
   const bob = (await square.join('Bob', { owner, ...(route ? { wakeAddress: route } : {}) })).participant;
   const artifact = createArtifactPort(await fs.realpath(square.location));
-  const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY, clock: () => Date.now() });
+  const ledger = await DeliveryLedger.open({ location: ledgerLocation, clock: () => Date.now() });
   t.after(async () => { await artifact.close(); await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   const session = await ledger.session(owner);
-  return { root, env, square, bob, owner, artifact, ledger, session,
+  return { root, ledgerLocation, square, bob, owner, artifact, ledger, session,
     cards: () => ledger.pending(owner, { generation: session.generation }),
     insert: body => artifact.transactAs({ kind: 'send', actor: 'notice' }, facts => facts.insertNotice({ from: 'notice', to: 'Bob', body }, 1000)),
   };
 }
 async function exporter(t, c, stage) {
-  const child = fork(new URL('./fixtures/producer-export-crash.js', import.meta.url), [await fs.realpath(c.square.location), stage],
-    { env: c.env, execArgv: [], stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  const child = fork(new URL('./fixtures/producer-export-crash.js', import.meta.url), [await fs.realpath(c.square.location), stage, c.ledgerLocation],
+    { execArgv: [], stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   t.after(() => child.kill('SIGKILL'));
   let stderr = '';
   child.stderr.on('data', data => { stderr += data; });
@@ -173,7 +172,7 @@ test('an unsent recovery cannot erase an earlier uncertain insertion or resurrec
     const current = await originalSession.call(this, owner);
     return ++checks === 2 ? { ...current, state: 'detached' } : current;
   });
-  await flushSquarePosts(c.artifact, await fs.realpath(c.square.location), () => 1000);
+  await flushSquarePosts(c.artifact, await fs.realpath(c.square.location), () => 1000, undefined, c.ledgerLocation);
   assert.ok(checks >= 2);
   assert.equal(calls, 1, 'recovered attempt aborted before invoking post');
   finalCheck.mock.restore();
@@ -215,7 +214,7 @@ test('done withdraws only its captured unclaimed cards without consuming history
   assert.equal(pending.some(card => card.key.includes(`#${first.id}/recipient/bob/`)), false);
   assert.ok(pending.some(card => card.key.includes(`/recipient/carol/`)), 'another seat under the same owner is not withdrawn');
   assert.equal(pending.some(card => card.key === held.key), false, 'suppressed custody is not pending');
-  const db = new DatabaseSync(c.env.SQUARE_DELIVERY, { readOnly: true });
+  const db = new DatabaseSync(c.ledgerLocation, { readOnly: true });
   try { assert.equal(db.prepare('SELECT 1 FROM cards WHERE owner=? AND key=?').get(c.owner, held.key) !== undefined, true, 'in-custody row remains until settlement'); }
   finally { db.close(); }
   assert.equal((await c.artifact.read(facts => facts.receipt('Bob', Number(first.id.slice(4))))).value, undefined);

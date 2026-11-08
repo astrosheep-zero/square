@@ -50,12 +50,12 @@ export class SqliteSquare {
     readonly location: string,
     private readonly artifact: SquareArtifactPort,
     private readonly clock: () => number,
-    private readonly deliveryLocation = location,
+    private readonly canonicalLocation = location,
     private readonly ledgerLocation?: string,
   ) {}
-  private reconcile(signal?: AbortSignal): Promise<void> { return reconcileSquareDelivery(this.artifact, this.deliveryLocation, this.clock, signal, this.ledgerLocation); }
+  private reconcile(signal?: AbortSignal): Promise<void> { return reconcileSquareDelivery(this.artifact, this.canonicalLocation, this.clock, signal, this.ledgerLocation); }
   // Posting is retryable after commit; a delivery failure cannot make a landed write unsent.
-  private async flush(signal?: AbortSignal): Promise<void> { await flushSquarePosts(this.artifact, this.deliveryLocation, this.clock, signal, this.ledgerLocation).catch(() => undefined); }
+  private async flush(signal?: AbortSignal): Promise<void> { await flushSquarePosts(this.artifact, this.canonicalLocation, this.clock, signal, this.ledgerLocation).catch(() => undefined); }
 
   static async at(input: SquareAtInput, control?: OperationControl): Promise<SqliteSquare> {
     const location = squareLocation(input);

@@ -43,6 +43,7 @@ test('Square resource and posting boundaries stay free of process.env and CLI cl
     'index.ts', 'square-api.ts', 'square-facade.ts', 'square-location.ts',
     'sqlite-square.ts', 'square-posting.ts', 'operation-control.ts',
     'decisions.ts', 'perceive-decisions.ts', 'perception-projection.ts',
+    'runtime.ts', 'notifications.ts', 'wake-transports.ts',
   ];
   for (const file of envFreeModules) {
     const source = productionSources.get(file) ?? '';
