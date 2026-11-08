@@ -34,7 +34,6 @@ import type {
 } from './square-facade.js';
 
 export type * from './square-facade.js';
-export { squareClock } from './operation-control.js';
 export { formatActivityId, parseActivityId, MAX_IDENTITY_SET_SIZE } from './square-core.js';
 export { PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT } from './perceive-decisions.js';
 export { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';

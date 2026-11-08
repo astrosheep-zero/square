@@ -67,7 +67,7 @@ interface ToolBinding {
   identity: ToolIdentity;
   readonly now?: () => number;
   open(location: string | undefined, control: OperationControl): Promise<Square>;
-  discover(options: DiscoveryOptions, control: OperationControl): Promise<{ result: DiscoveryResult; now: number }>;
+  discover(options: DiscoveryOptions, control: OperationControl): Promise<DiscoveryResult>;
 }
 
 export function createSquareToolRunner() {
@@ -195,8 +195,8 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     inputSchema: listSchema,
     async runDiscovery(args, control, binding) {
       const options = listSchema.parse(args);
-      const { result, now } = await binding.discover({ ...options, owner: binding.identity.owner }, control);
-      return renderSquareList(result, { now, depth: options.depth ?? DEFAULT_LIST_DEPTH, limit: options.limit ?? DEFAULT_LIST_LIMIT, surface: 'tool' });
+      const result = await binding.discover({ ...options, owner: binding.identity.owner }, control);
+      return renderSquareList(result, { now: (binding.now ?? Date.now)(), depth: options.depth ?? DEFAULT_LIST_DEPTH, limit: options.limit ?? DEFAULT_LIST_LIMIT, surface: 'tool' });
     },
   },
   tool('join', 'Step into the square under your name. Do this once before you speak or perceive. You arrive seeing what was said most recently.', {

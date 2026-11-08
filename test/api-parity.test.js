@@ -25,7 +25,7 @@ async function fixture(t, label) {
   return { cwd, path: squarePath, env, body, square };
 }
 async function mcp(t, options) {
-  const server = createSquareMcpServer({ cwd: options.cwd, env: options.env, owner: options.body });
+  const server = createSquareMcpServer({ cwd: options.cwd, env: options.env, owner: options.body, clock: () => 1000 });
   const client = new Client({ name: 'square-parity-test', version: '1' });
   const [left, right] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(right), client.connect(left)]);

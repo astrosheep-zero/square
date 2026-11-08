@@ -4,9 +4,17 @@ import { harnessSessionSources } from '../participant-identity.js';
 import { codexWakeAddress } from '../codex-address.js';
 
 import { commandUsageHint } from '../help.js';
-import { type HardCap, type WakeAddress, parseParticipantList, validateName } from '../model.js';
-import { Square, squareClock } from '../square-api.js';
+import { SquareError, type HardCap, type WakeAddress, parseParticipantList, validateName } from '../model.js';
+import { Square } from '../square-api.js';
 import type { OperationControl } from '../square-facade.js';
+
+function squareClock(env: NodeJS.ProcessEnv, clock?: () => number): () => number {
+  if (clock !== undefined) return clock;
+  if (env.SQUARE_NOW_MS === undefined) return Date.now;
+  const value = Number.parseInt(env.SQUARE_NOW_MS, 10);
+  if (!Number.isFinite(value)) throw new SquareError('invalid_args', 'Invalid SQUARE_NOW_MS: expected integer milliseconds.');
+  return () => value;
+}
 
 export interface CommandContext {
   cwd: string;

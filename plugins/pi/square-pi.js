@@ -1,7 +1,7 @@
 import { Box, Markdown, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
 import { z } from 'zod/v4';
 
-import { Square, discover, squareClock } from '../../dist/square-api.js';
+import { Square, discover } from '../../dist/square-api.js';
 import { harnessOwner } from '../../dist/owner.js';
 import { DeliveryLedger } from '../../dist/delivery-ledger.js';
 import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/delivery-frame.js';
@@ -115,12 +115,10 @@ export default function squarePiExtension(pi) {
       async execute(_id, args, signal, _onUpdate, ctx) {
         const { text, isError } = await invoke(tool, args, { signal }, () => {
           const sessionId = ctx.sessionManager.getSessionId();
-          const now = squareClock(process.env);
           return {
             identity: { owner: harnessOwner({ channel: 'pi', session: sessionId }) },
-            now,
-            open: (location, control) => Square.at({ cwd: ctx.cwd, path: location, clock: now }, control),
-            discover: async (options, control) => ({ result: await discover({ cwd: ctx.cwd }, options, control), now: now() }),
+            open: (location, control) => Square.at({ cwd: ctx.cwd, path: location }, control),
+            discover: (options, control) => discover({ cwd: ctx.cwd }, options, control),
           };
         });
         return { ...(isError ? { isError } : {}), content: [{ type: 'text', text }] };

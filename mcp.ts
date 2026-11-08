@@ -4,7 +4,7 @@ import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, createSquareToolRunner, squareT
 import { codexWakeAddress } from './codex-address.js';
 import { readClaudeMcpCall } from './claude-mcp-context.js';
 import { SQUARE_IDENTITY } from './identity.js';
-import { Square, discover, squareClock } from './square-api.js';
+import { Square, discover } from './square-api.js';
 import { harnessOwner, type Owner } from './square-api.js';
 import type { SquareAtInput } from './square-facade.js';
 import type { WakeAddress } from './model.js';
@@ -45,16 +45,13 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
           || wakeAddress.kind === 'paseo' && wakeAddress.address.agentId === baseEnv.PASEO_AGENT_ID
           || wakeAddress.kind === 'opencode-server' && wakeAddress.address.sessionId === opencodeSessionId)
           ? wakeAddress : undefined;
-        const now = squareClock(baseEnv, resourceOptions.clock);
+        const clock = resourceOptions.clock ?? Date.now;
         return {
           identity: { owner, wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
             ? { ...codexWakeAddress(threadId, baseEnv), kind: 'codex-queue' as const } : callWake },
-          now,
-          open: (location, control) => Square.at({ cwd: claude?.cwd ?? resourceOptions.cwd, path: location, clock: now }, control),
-          discover: async (discovery, control) => ({
-            result: await discover({ cwd: claude?.cwd ?? resourceOptions.cwd }, discovery, control),
-            now: now(),
-          }),
+          now: clock,
+          open: (location, control) => Square.at({ ...resourceOptions, cwd: claude?.cwd ?? resourceOptions.cwd, path: location, clock }, control),
+          discover: (discovery, control) => discover({ cwd: claude?.cwd ?? resourceOptions.cwd }, discovery, control),
         };
       }).then(({ text, isError }) => ({
         ...(isError ? { isError } : {}), content: [{ type: 'text' as const, text }],

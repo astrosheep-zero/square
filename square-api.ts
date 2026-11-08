@@ -28,7 +28,7 @@ export async function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | '
 }
 export { ACTIVITY_METADATA_MAX_BYTES } from './model.js';
 export { localUserOwner, harnessOwner, decodeHarnessOwner } from './owner.js';
-export { squareClock, formatActivityId, parseActivityId, MAX_IDENTITY_SET_SIZE,
+export { formatActivityId, parseActivityId, MAX_IDENTITY_SET_SIZE,
   PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT,
   DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT,
   diagnoseSquare, discover, inbox } from './sqlite-square.js';

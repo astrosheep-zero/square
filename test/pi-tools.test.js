@@ -156,9 +156,9 @@ test('Pi retains a blocked express in memory and retries only by draft token', a
   await call('join', { as: 'rei' });
   await call('join', { as: 'bob' });
   await call('express', { as: 'bob', body: 'question for rei', mentions: ['rei'] });
-  const previousNow = process.env.SQUARE_NOW_MS;
-  process.env.SQUARE_NOW_MS = String(Date.now() + 100_000);
-  t.after(() => { if (previousNow === undefined) delete process.env.SQUARE_NOW_MS; else process.env.SQUARE_NOW_MS = previousNow; });
+  const realNow = Date.now;
+  Date.now = () => realNow() + 100_000;
+  t.after(() => { Date.now = realNow; });
   const body = 'Pi keeps this exact body without writing it to disk';
   const refused = await call('express', { as: 'rei', body, reply: 'act/2', mentions: ['bob'] });
   assert.equal(refused.isError, true);
