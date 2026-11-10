@@ -26,8 +26,8 @@ test('expanding a clipped history page keeps its activity coordinates', async ()
     const c = await rei.express('newer words', { force: true });
     const result = await square.history({ cursor: { id: c.activity.id, direction: 'before' }, limit: 2, observe: true });
     const text = renderHistoryResult('/tmp/example.square', result);
-    assert.ok(text.includes(`history --at ${a.activity.id},${b.activity.id} --no-truncate`));
-    assert.doesNotMatch(text, /history --no-truncate/);
+    assert.ok(text.includes(`history --at ${a.activity.id},${b.activity.id} --full`));
+    assert.doesNotMatch(text, /history --full/);
   } finally { await square.close(); }
 });
 

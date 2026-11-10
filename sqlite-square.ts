@@ -482,10 +482,10 @@ export class SqliteSquare {
     if (query.order !== undefined && query.order !== 'asc' && query.order !== 'desc')
       throw new SquareError('invalid_args', 'History order must be asc or desc.');
     if (query.since !== undefined && !Number.isFinite(query.since)) throw new SquareError('invalid_args', 'History timestamp must be finite');
-    for (const count of [query.contextBefore, query.contextAfter])
-      if (count !== undefined && (!Number.isSafeInteger(count) || count < 0)) throw new SquareError('invalid_args', 'History context must be a non-negative safe integer');
+    if (query.context !== undefined && (!Number.isSafeInteger(query.context) || query.context < 0 || query.context > HISTORY_MAX_LIMIT))
+      throw new SquareError('invalid_args', `History context must be a non-negative integer no greater than ${HISTORY_MAX_LIMIT}`);
     const limit = query.limit === undefined ? (query.at?.length ? null : HISTORY_DEFAULT_LIMIT) : query.limit;
-    const contextual = !!query.at?.length || query.contextBefore !== undefined || query.contextAfter !== undefined;
+    const contextual = !!query.at?.length || query.context !== undefined;
     const kinds = contextual || query.since !== undefined ? [...NON_READ, 'read' as const] : NON_READ;
     return (await this.artifact.read(facts => {
       const selected = selectHistory(facts, query, limit, kinds, query.observe === true);

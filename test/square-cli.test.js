@@ -104,12 +104,12 @@ test('bare activities land without an audience and listeners receive later bare 
   assert.match(repeated.stdout, /already turns an ear toward @Alice/);
   const heard = run(withName(file, 'Alice', ['express', 'listener thought']));
   assert.equal(heard.status, 0, heard.stderr);
-  const perceived = run(withName(file, 'Bob', ['perceive', '--now']));
+  const perceived = run(withName(file, 'Bob', ['perceive']));
   assert.equal(perceived.status, 0, perceived.stderr);
   assert.match(perceived.stdout, /listener thought/);
   assert.doesNotMatch(perceived.stdout, /bare thought/);
 
-  const listening = run(withName(file, 'Bob', ['listening']));
+  const listening = run(withName(file, 'Bob', ['status']));
   assert.equal(listening.status, 0, listening.stderr);
   assert.match(listening.stdout, /@Alice/);
   const ignored = run(withName(file, 'Bob', ['ignore', 'Alice']));
@@ -121,7 +121,7 @@ test('bare activities land without an audience and listeners receive later bare 
 });
 
 test('listener and perceive help teach future-only directed attention', () => {
-  for (const command of ['listen', 'ignore', 'listening', 'perceive']) {
+  for (const command of ['listen', 'ignore', 'unlisten', 'perceive']) {
     const result = run([command, '--help']);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /future|directed|listening/i);
@@ -142,10 +142,10 @@ test('listener commands do not rejoin a participant who already left', async () 
     const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
     await bob.done();
   });
-  const before = run(withPath(file, ['history', '--no-truncate']));
+  const before = run(withPath(file, ['history', '--full']));
   const refused = run(withName(file, 'Bob', ['listen', 'Alice']));
   assert.equal(refused.status, 2);
-  const after = run(withPath(file, ['history', '--no-truncate']));
+  const after = run(withPath(file, ['history', '--full']));
   assert.equal(after.stdout, before.stdout);
 });
 
@@ -372,20 +372,20 @@ test('join and perceive preserve CLI behavior while seat ownership follows the a
   assert.doesNotMatch(bobJoin.stdout, /perceive --idle 30m/);
 
   assert.equal(run(withName(file, 'Bob', ['express', '--force', '--mention', 'Alice', 'hello Alice @Alice']), { env: bobBody }).status, 0);
-  const alicePerceive = run(withName(file, 'Alice', ['perceive', '--now']), { env: aliceBody });
+  const alicePerceive = run(withName(file, 'Alice', ['perceive']), { env: aliceBody });
   assert.equal(alicePerceive.status, 0, alicePerceive.stderr);
   assert.match(alicePerceive.stdout, /hello Alice/);
   assert.doesNotMatch(alicePerceive.stdout, /perceive --idle 30m/);
-  const aliceQuiet = run(withName(file, 'Alice', ['perceive', '--now']), { env: aliceBody });
+  const aliceQuiet = run(withName(file, 'Alice', ['perceive']), { env: aliceBody });
   assert.match(aliceQuiet.stdout, /only footsteps/);
   assert.doesNotMatch(aliceQuiet.stdout, /perceive --idle 30m/);
 
   assert.equal(run(withName(file, 'Alice', ['express', '--force', '--mention', 'Bob', 'hello Bob @Bob']), { env: aliceBody }).status, 0);
-  const bobPerceive = run(withName(file, 'Bob', ['perceive', '--now']), { env: bobBody });
+  const bobPerceive = run(withName(file, 'Bob', ['perceive']), { env: bobBody });
   assert.equal(bobPerceive.status, 0, bobPerceive.stderr);
   assert.match(bobPerceive.stdout, /hello Bob/);
   assert.doesNotMatch(bobPerceive.stdout, /perceive --idle 30m/);
-  const bobQuiet = run(withName(file, 'Bob', ['perceive', '--now']), { env: bobBody });
+  const bobQuiet = run(withName(file, 'Bob', ['perceive']), { env: bobBody });
   assert.match(bobQuiet.stdout, /only footsteps/);
   assert.doesNotMatch(bobQuiet.stdout, /perceive --idle 30m/);
 
@@ -434,7 +434,7 @@ test('a foreign perceive cannot take ownership of a standing participant', async
   const archive = run(withName(file, 'Alice', ['history', '--limit', '5']), { env: worker });
   assert.equal(archive.status, 0, archive.stderr);
   assert.deepEqual(fs.readFileSync(file), before, 'archive reading must not claim or consume');
-  const perceived = run(withName(file, 'Alice', ['perceive', '--now']), { env: worker });
+  const perceived = run(withName(file, 'Alice', ['perceive']), { env: worker });
   assert.equal(perceived.status, 2, perceived.stdout);
   assert.match(perceived.stderr, /not held by this owner/);
   assert.doesNotMatch(perceived.stderr, /error/i);
@@ -515,7 +515,7 @@ test('join --takeover replaces a participant seat after a different body is refu
 test('unknown participant errors end with the join recovery command', () => {
   const file = tempSquare();
   assert.equal(build(file).status, 0);
-  const perceived = run(withName(file, 'Stranger', ['perceive', '--now']));
+  const perceived = run(withName(file, 'Stranger', ['perceive']));
   assert.equal(perceived.status, 2);
   assert.match(perceived.stderr, /has never stepped into this square/);
   assert.match(perceived.stderr, /join/);
@@ -548,7 +548,7 @@ test('status offers the full history read only when the latest body is clipped',
   const unclipped = run(withName(short, 'Alice', ['status']));
   assert.equal(unclipped.status, 0, unclipped.stderr);
   assert.doesNotMatch(unclipped.stdout, /more chars/);
-  assert.doesNotMatch(unclipped.stdout, /history --at act\/\d+ -C 2 --no-truncate/);
+  assert.doesNotMatch(unclipped.stdout, /history --at act\/\d+ -C 2 --full/);
 
   // A short body that merely says "more chars" must not look clipped.
   const literal = await persistSquare(async ({ square, body, wakeAddress }) => {
@@ -558,7 +558,7 @@ test('status offers the full history read only when the latest body is clipped',
   const literalStatus = run(withName(literal, 'Alice', ['status']));
   assert.equal(literalStatus.status, 0, literalStatus.stderr);
   assert.match(literalStatus.stdout, /more chars fits without clipping/);
-  assert.doesNotMatch(literalStatus.stdout, /history --at act\/\d+ -C 2 --no-truncate/);
+  assert.doesNotMatch(literalStatus.stdout, /history --at act\/\d+ -C 2 --full/);
 
   const clipped = await persistSquare(async ({ square, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
@@ -567,7 +567,7 @@ test('status offers the full history read only when the latest body is clipped',
   const clippedStatus = run(withName(clipped, 'Alice', ['status']));
   assert.equal(clippedStatus.status, 0, clippedStatus.stderr);
   assert.match(clippedStatus.stdout, /… \d+ more chars/);
-  assert.match(clippedStatus.stdout, /history --at act\/\d+ -C 2 --no-truncate/);
+  assert.match(clippedStatus.stdout, /history --at act\/\d+ -C 2 --full/);
 });
 
 test('doctor is a dry validator and rejects Markdown bytes', () => {
@@ -591,25 +591,13 @@ test('doctor --fix is not a command', async () => {
   assert.match(result.stderr, /invalid arguments for doctor/);
 });
 
-test('perceive conflicts and removed modes are refused while bare perceive is the default now', async () => {
+test('perceive takeover requires idle', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
   });
-  const rejected = [
-    ['perceive', '--now', '--idle', '1s'],
-    ['perceive', '--follow'],
-    ['perceive', '--count', '2'],
-    ['perceive', '--force', '--now'],
-    ['perceive', '--now', '--takeover'],
-  ];
-  const results = await Promise.all(rejected.map((args) => runAsync(withName(file, 'Alice', args))));
-  for (const [index, result] of results.entries()) {
-    assert.notEqual(result.status, 0, rejected[index].join(' '));
-  }
-  assert.match(results[0].stderr, /perceive accepts --now or --idle, not both/);
-  assert.match(results[4].stderr, /--takeover can only be used with --idle/);
-  assert.equal(run(withName(file, 'Alice', ['perceive'])).status, 0);
-  assert.equal(run(withName(file, 'Alice', ['perceive', '--now'])).status, 0);
+  const result = run(withName(file, 'Alice', ['perceive', '--takeover']));
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--takeover can only be used with --idle/);
 });
 
 test('bare perceive takes pending activity now and consumes it', async () => {

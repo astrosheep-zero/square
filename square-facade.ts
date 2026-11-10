@@ -112,8 +112,7 @@ export interface HistoryQuery extends ActivityQuery, ObservationOptions {
   readonly order?: 'asc' | 'desc';
   readonly mention?: string;
   readonly since?: number;
-  readonly contextBefore?: number;
-  readonly contextAfter?: number;
+  readonly context?: number;
 }
 export interface HistoryResult {
   readonly activities: readonly Activity[];

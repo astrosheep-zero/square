@@ -149,15 +149,19 @@ test('CLI metadata input and retry keep the original JSON without a body redirec
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('the shared express tool accepts a body or draft token and rejects metadata input', () => {
+test('the shared express tool requires location and body and rejects metadata input', () => {
   const definition = SQUARE_TOOLS.find(tool => tool.name === 'express');
   assert.ok(definition);
-  const refused = definition.inputSchema.safeParse({ metadata: { tool: true } });
+  const args = { location: 'conversation.square', body: 'words' };
+  const refused = definition.inputSchema.safeParse({ ...args, metadata: { tool: true } });
   assert.equal(refused.success, false);
   assert.match(JSON.stringify(refused.error.issues), /metadata/);
-  assert.equal(definition.inputSchema.safeParse({}).success, true);
-  assert.equal(definition.inputSchema.parse({ body: 'words' }).body, 'words');
-  assert.equal(definition.inputSchema.parse({ draft: 'dr_test' }).draft, 'dr_test');
+  for (const field of ['location', 'body']) {
+    const incomplete = { ...args };
+    delete incomplete[field];
+    assert.equal(definition.inputSchema.safeParse(incomplete).success, false);
+  }
+  assert.deepEqual(definition.inputSchema.parse(args), args);
 });
 
 test('shared history and directed perceive render metadata-only activities without exposing metadata', async () => {

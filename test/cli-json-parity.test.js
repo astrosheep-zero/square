@@ -74,11 +74,11 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
     assert.equal(reconnected.activity, null);
     await f.parity('Bob', ['join'], square => square.join('Bob', { owner: body, wakeAddress: f.wakeAddress, last: 10, takeover: false }));
   });
-  await t.test('listen and listening', async () => {
+  await t.test('listen', async () => {
     const listened = await f.parity('Alice', ['listen', 'Bob'], async square => (await square.participant('Alice', { owner: body })).listen('Bob'));
     assert.equal(listened.activity.target, 'Bob');
     assert.equal((await f.parity('Alice', ['listen', 'Bob'], async square => (await square.participant('Alice', { owner: body })).listen('Bob'))).activity, null);
-    assert.deepEqual((await f.parity('Alice', ['listening'], async square => (await square.participant('Alice', { owner: body })).listening())).listening, ['Bob']);
+    assert.deepEqual((await f.parity('Alice', ['status'], square => square.status({ viewer: 'Alice' }))).listening, ['Bob']);
   });
   let sent;
   await t.test('express preserves SDK warnings, hint, metadata and reply', async () => {
@@ -91,7 +91,7 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
     assert.ok(sent.hint);
   });
   await t.test('perceive retains perception, route and consumption receipt', async () => {
-    const perceived = await f.parity('Bob', ['perceive', '--now', '--limit', '2'], async square => (await square.participant('Bob', { owner: body })).perceive({ limit: 2 }));
+    const perceived = await f.parity('Bob', ['perceive', '--limit', '2'], async square => (await square.participant('Bob', { owner: body })).perceive({ limit: 2 }));
     assert.equal(perceived.activities[0].id, sent.activity.id);
     assert.equal(perceived.activities[0].perception, 'full');
     assert.equal(perceived.activities[0].via, 'mention');

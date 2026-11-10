@@ -64,15 +64,7 @@ export function requireValue(args: string[], index: number, flag: string): strin
   return value;
 }
 
-export function parseDurationMs(value: string, flag: string): number {
-  const match = value.match(/^([1-9]\d*)(ms|s|m|h)$/);
-  if (!match) fail(`✕ invalid ${flag}: expected a positive duration with unit ms, s, m, or h (for example 500ms, 30s, 3m, 1h)`);
-  const amount = Number.parseInt(match[1], 10);
-  const multiplier: Record<string, number> = { ms: 1, s: 1000, m: 60000, h: 3600000 };
-  const milliseconds = amount * multiplier[match[2]];
-  if (!Number.isSafeInteger(milliseconds)) fail(`✕ invalid ${flag}: duration is too large`);
-  return milliseconds;
-}
+export { parseDurationMs } from '../time.js';
 
 export function parsePositiveInteger(value: string, flag: string): number {
   if (!/^[1-9]\d*$/.test(value)) fail(`✕ invalid ${flag}: expected a positive integer`);
@@ -121,7 +113,6 @@ const LOCATION_REQUIRED_COMMANDS = new Set([
   'listen',
   'ignore',
   'unlisten',
-  'listening',
   'done',
   'history',
   'status',

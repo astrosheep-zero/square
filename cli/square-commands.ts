@@ -9,7 +9,6 @@ import {
   renderJoinResult,
   renderLifecycleResult,
   renderListenerChange,
-  renderListeningResult,
 } from '../operation-presentation.js';
 import { Square, requireOwner, requireJoinName, selectOwnSeat } from '../square-api.js';
 import { executeExpression } from './express-presentation.js';
@@ -42,7 +41,7 @@ interface BodyIntent {
   body?: string;
 }
 interface ListenerIntent {
-  target?: string;
+  target: string;
 }
 const JOIN_DEFAULT_LAST = 10;
 const JOIN_MAX_LAST = 100;
@@ -174,18 +173,16 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
   present: () => {},
 };
 
-function parseListener(argv: string[], context: CommandContext, targetRequired: boolean): ListenerIntent {
-  const args = argv.filter((arg) => arg !== '--json');
-  if (targetRequired ? args.length !== 1 : args.length !== 0) usage(context.command);
-  return targetRequired ? { target: args[0] } : {};
-}
-
 function listenerCommand(verb: 'listen' | 'ignore' | 'unlisten'): CommandSpec<ListenerIntent, string> {
   return {
-    parse(argv, context) { return parseListener(argv, context, true); },
+    parse(argv, context) {
+      const args = argv.filter((arg) => arg !== '--json');
+      if (args.length !== 1) usage(context.command);
+      return { target: args[0] };
+    },
     async execute(intent, context) {
       const squarePath = requireSquarePath(context);
-      const data = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name))[verb](intent.target!, context.json ? {} : { observe: true }));
+      const data = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name))[verb](intent.target, context.json ? {} : { observe: true }));
       return context.json ? jsonResult(data) : renderListenerChange(squarePath, verb, data)!;
     },
     present: (result) => process.stdout.write(result),
@@ -194,15 +191,6 @@ function listenerCommand(verb: 'listen' | 'ignore' | 'unlisten'): CommandSpec<Li
 export const listenCommand = listenerCommand('listen');
 export const ignoreCommand = listenerCommand('ignore');
 export const unlistenCommand = listenerCommand('unlisten');
-export const listeningCommand: CommandSpec<ListenerIntent, string> = {
-  parse(argv, context) { return parseListener(argv, context, false); },
-  async execute(_intent, context) {
-    const squarePath = requireSquarePath(context);
-    const data = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name)).listening(context.json ? {} : { observe: true }));
-    return context.json ? jsonResult(data) : renderListeningResult(squarePath, data)!;
-  },
-  present: (result) => process.stdout.write(result),
-};
 
 export const doneCommand: CommandSpec<BodyIntent, string> = {
   parse(argv, context) {

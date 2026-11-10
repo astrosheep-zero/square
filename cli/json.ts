@@ -1,5 +1,5 @@
 export const JSON_COMMANDS: ReadonlySet<string> = new Set([
-  'join', 'express', 'perceive', 'history', 'listen', 'ignore', 'unlisten', 'listening',
+  'join', 'express', 'perceive', 'history', 'listen', 'ignore', 'unlisten',
   'done', 'status', 'inbox',
 ]);
 

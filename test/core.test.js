@@ -411,7 +411,7 @@ test('activity history at indexes unions their context windows', async () => {
     ],
   });
   try {
-    const selected = (await cell.read((facts) => selectHistory(facts, { at: ['act/2', 'act/3'], contextBefore: 0, contextAfter: 0 }, null, undefined))).value.activities;
+    const selected = (await cell.read((facts) => selectHistory(facts, { at: ['act/2', 'act/3'], context: 0 }, null, undefined))).value.activities;
     assert.deepEqual(selected.map((activity) => activity.index), [2, 3]);
   } finally {
     await cell.close();

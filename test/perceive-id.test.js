@@ -75,8 +75,8 @@ test('CLI exact perceive returns the full body and rejects conflicting flags bef
     assert.notEqual(result.status, 0, JSON.stringify(args));
     assert.ok(!result.stdout.includes(body));
   }
-  for (const flags of [[], ['--now']]) {
-    const result = run(withName(file, 'Bob', ['perceive', '--id', second.id, ...flags]));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = run(withName(file, 'Bob', ['perceive', '--id', second.id]));
     assert.equal(result.status, 0, result.stderr);
     assert.ok(result.stdout.includes(body), 'exact perceive must not clip the body');
   }

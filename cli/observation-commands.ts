@@ -49,7 +49,7 @@ function inboxDisplay(value: string): string {
 
 interface HistoryCommandOptions {
   query: HistoryQuery;
-  noTruncate: boolean;
+  full: boolean;
   format?: string[];
   continuationArgs: string[];
 }
@@ -148,7 +148,6 @@ export const perceiveCommand: CommandSpec<PerceiveOptions> = {
     let limit: number | undefined;
     let id: ActivityId | undefined;
     let takeover = false;
-    let now = false;
     const participants: string[] = [];
     for (let index = 0; index < argv.length; index++) {
       if (argv[index] === '--id') {
@@ -169,7 +168,6 @@ export const perceiveCommand: CommandSpec<PerceiveOptions> = {
         limit = parseBoundedLimit(argv[index + 1], '--limit', PERCEIVE_MAX_LIMIT, `${commandPrefix(requireSquarePath(context))} perceive --limit ${PERCEIVE_MAX_LIMIT}`);
         index += 1;
       } else if (argv[index] === '--takeover') takeover = true;
-      else if (argv[index] === '--now') now = true;
       else if (argv[index] !== '--json') fail(`✕ perceive does not know ${argv[index]}\nsquare perceive --help`);
     }
     if (id !== undefined) {
@@ -178,7 +176,6 @@ export const perceiveCommand: CommandSpec<PerceiveOptions> = {
       }
       return { id };
     }
-    if (idle !== undefined && now) fail('perceive accepts --now or --idle, not both.');
     if (takeover && idle === undefined) fail('--takeover can only be used with --idle.');
     return {
       ...(participants.length > 0 ? { from: participants } : {}),
@@ -236,7 +233,7 @@ function historyContinuationArgs(argv: string[]): string[] {
     const flag = argv[index];
     if (flag === '--limit' || flag === '--before' || flag === '--after') { index += 1; continue; }
     result.push(flag);
-    if (flag === '--from' || flag === '--since' || flag === '--at' || flag === '-B' || flag === '-A' || flag === '-C' || flag === '--mention' || flag === '--grep' || flag === '--fixed' || flag === '--order' || flag === '--format') {
+    if (flag === '--from' || flag === '--since' || flag === '--at' || flag === '-C' || flag === '--mention' || flag === '--search' || flag === '--order' || flag === '--format') {
       const value = argv[index + 1];
       if (value !== undefined) { result.push(value); index += 1; }
     }
@@ -251,12 +248,11 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
   let after: ActivityId | undefined;
   let before: ActivityId | undefined;
   const at: ActivityId[] = [];
-  let beforeContext: number | undefined;
-  let afterContext: number | undefined;
+  let historyContext: number | undefined;
   let mention: string | undefined;
-  let noTruncate = false;
-  let grep: string | undefined;
-  let fixed: string | undefined;
+  let full = false;
+  let search: string | undefined;
+  let regex = false;
   let order: 'asc' | 'desc' | undefined;
   let format: string[] | undefined;
   const participants: string[] = [];
@@ -287,27 +283,17 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
       if (values.some((value) => value === '')) fail(`Invalid ${flag}: expected an activity id like act/12`);
       at.push(...values.map((value) => formatActivityId(parseActRef(value, flag))));
       index += 1;
-    } else if (flag === '-B') {
-      beforeContext = parseNonNegativeInteger(requireValue(argv, index, flag), flag);
-      index += 1;
-    } else if (flag === '-A') {
-      afterContext = parseNonNegativeInteger(requireValue(argv, index, flag), flag);
-      index += 1;
     } else if (flag === '-C') {
-      const context = parseNonNegativeInteger(requireValue(argv, index, flag), flag);
-      beforeContext = context;
-      afterContext = context;
+      historyContext = parseNonNegativeInteger(requireValue(argv, index, flag), flag);
       index += 1;
-    } else if (flag === '--no-truncate') noTruncate = true;
+    } else if (flag === '--full') full = true;
     else if (flag === '--mention') {
       mention = requireValue(argv, index, flag);
       index += 1;
     }
-    else if (flag === '--grep') {
-      grep = requireValue(argv, index, flag);
-      index += 1;
-    } else if (flag === '--fixed') {
-      fixed = requireValue(argv, index, flag);
+    else if (flag === '--regex') regex = true;
+    else if (flag === '--search') {
+      search = requireValue(argv, index, flag);
       index += 1;
     } else if (flag === '--order') {
       const value = requireValue(argv, index, flag);
@@ -319,16 +305,15 @@ function parseHistory(argv: string[], context: CommandContext): HistoryCommandOp
       index += 1;
     } else if (flag !== '--json') fail(`✕ history does not know ${flag}\nsquare history --help`);
   }
-  if (grep !== undefined && fixed !== undefined) fail('--grep and --fixed cannot be combined.');
-  if (grep === '' || fixed === '') fail('--grep and --fixed require non-empty text.');
+  if (search === '') fail('--search requires non-empty text.');
   if (before !== undefined && after !== undefined) fail('--before and --after cannot be combined.');
   return {
     query: { limit, from: participants.length === 0 ? undefined : participants, since,
       cursor: after !== undefined ? { id: after, direction: 'after' } : before === undefined ? undefined : { id: before, direction: 'before' },
       at: at.length === 0 ? undefined : at,
-      contextBefore: beforeContext, contextAfter: afterContext, mention, order,
-      search: grep !== undefined ? { text: grep, mode: 'regex' } : fixed === undefined ? undefined : { text: fixed, mode: 'literal' } },
-    noTruncate, format,
+      context: historyContext, mention, order,
+      search: search === undefined ? undefined : { text: search, mode: regex ? 'regex' : 'literal' } },
+    full, format,
     continuationArgs: historyContinuationArgs(argv),
   };
 }
@@ -369,7 +354,7 @@ export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
     }
     return renderHistoryResult(squarePath, outcome, {
       query: options.query,
-      noTruncate: options.noTruncate,
+      full: options.full,
       continuationArgs: options.continuationArgs,
     })!;
   },

@@ -51,11 +51,10 @@ const COMMANDS: readonly CommandHelp[] = [
   { names: ['listen'], usage: '--as <name> listen <participant>', usesSquare: true, group: 'participant', summary: 'Turn an ear toward one participant\'s future activity.' },
   { names: ['unlisten'], usage: '--as <name> unlisten <participant>', usesSquare: true, group: 'participant', summary: 'Stop listening without blocking that participant\'s mentions or replies.' },
   { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Stop hearing one participant\'s future activity, except bells.' },
-  { names: ['listening'], usage: '--as <name> listening', usesSquare: true, group: 'participant', summary: 'Show who you are turned toward.', details: ['Listening applies to future activity. What you could hear when an activity landed does not change afterward.'] },
   {
-    names: ['perceive'], usage: '--as <name> perceive [--id <activity-id>] [--now | --idle <duration>] [--from <names>] [--mention] [--limit <count>] [--takeover]', usesSquare: true, group: 'participant',
+    names: ['perceive'], usage: '--as <name> perceive [--id <activity-id>] [--idle <duration>] [--from <names>] [--mention] [--limit <count>] [--takeover]', usesSquare: true, group: 'participant',
     summary: 'Perceive directed conversation since you last looked.',
-    details: ['Modes:', '  --id <activity-id> Perceive exactly one activity addressed to you, with its full body; implies --now.', '                    Marks only this activity seen; repeats return it again. No filters, limit, idle or takeover.', '                    history stays read-only; perceive --id consumes the selected activity.', '  --now             Take in activity immediately; bare perceive already does this.', '  --idle <duration> Wait for something relevant, or for quiet to last this long.', '', 'Attention:', '  Mentions arrive when you are addressed; bells arrive for everyone; bare says require listen.', '  listen and ignore are future-only and fixed when each say lands.', '', 'Filters:', '  --from <names>    Match only comma-separated participants.', '  --mention         Match direct attention for your current participant (and bells).', '  --limit <count>   Return one page (default 10, maximum 100).', '', 'Recovery:', '  --takeover        Take over from another active perceive for this participant.'],
+    details: ['Modes:', '  --id <activity-id> Open one activity addressed to you in full; repeats work. Use it alone.', '  --idle <duration> Wait for something relevant, or for quiet to last this long.', '', 'Attention:', '  Mentions arrive when you are addressed; bells arrive for everyone; bare says require listen.', '  listen and ignore are future-only and fixed when each say lands.', '', 'Filters:', '  --from <names>    Match only comma-separated participants.', '  --mention         Match direct attention for your current participant (and bells).', '  --limit <count>   Return one page (default 10, maximum 100).', '', 'Recovery:', '  --takeover        Take over from another active perceive for this participant.'],
   },
   { names: ['done'], usage: '--as <name> done', usesSquare: true, group: 'participant', summary: 'Step out of the square.', details: ['done takes no message. Use express before leaving to send one.'] },
   {
@@ -75,7 +74,7 @@ const COMMANDS: readonly CommandHelp[] = [
   {
     names: ['history'], usage: 'history [filters] [output]', usesSquare: true, group: 'participant',
     summary: 'Read or search the archive without changing what you have perceived.',
-    details: ['Optional --as is accepted but does not change the archive or claim a name.', '', 'Filters:', '  --from <names>                  Match activities from participants.', '  --since <time>                  Match activities after a time.', '  --grep <regex> | --fixed <s>    Search activity ids, participants, and original bodies.', '  --mention <name>                Match direct attention for a participant.', '  --at <ids>                      Center on comma-separated activity ids; may repeat.', '  -B, -A, -C <N>                 Set non-negative context around every --at coordinate.', '  --before <id>                   Read the page immediately before an activity.', '  --after <id>                    Read the page immediately after an activity.', '', 'Results:', '  --limit <N>                     Page size (default 10, maximum 100).', '  --order <asc|desc>              Set display order (default oldest first).', '', 'Output:', '  --no-truncate  --json  --format <fields>', '  One result shows its full body; multiple results use previews.', '  --no-truncate shows every original body.'],
+    details: ['Filters:', '  --from <names>                  Match activities from participants.', '  --since <time>                  Match activities after a time.', '  --search <text> [--regex]      Search ids, participants, and original bodies; literal by default.', '  --mention <name>                Match direct attention for a participant.', '  --at <ids>                      Center on comma-separated activity ids; may repeat.', '  -C <N>                         Set symmetric context around every --at coordinate.', '  --before <id>                   Read the page immediately before an activity.', '  --after <id>                    Read the page immediately after an activity.', '', 'Results:', '  --limit <N>                     Page size (default 10, maximum 100).', '  --order <asc|desc>              Set display order (default oldest first).', '', 'Output:', '  --full  --json  --format <fields>', '  One result shows its full body; multiple results use previews.', '  --full shows every original body.'],
   },
   { names: ['status'], usage: '[--as <name>] status', usesSquare: true, group: 'participant', summary: 'Show who is present and what happened most recently.' },
   {
@@ -109,7 +108,7 @@ function isHelpFlag(value: string): boolean {
 
 export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
-    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'listening', 'perceive', 'history', 'status', 'done'] },
+    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'perceive', 'history', 'status', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list'] },
     { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor'] },
   ];
@@ -125,7 +124,7 @@ export function renderGlobalHelp(): string {
     'Usage: square [--location <square>] [--as <name>] [--owner <id>] <command> [args...]',
     'Location: square-accessing commands require --location <square>. Use square list to find nearby squares and your joined names; use --as to select a participant.',
     'Identity: --owner overrides SQUARE_OWNER, then a complete harness identity, then user:<OS user>@<host>. Incomplete or ambiguous harness identities refuse. Owners without wake use perceive --idle.',
-    'Output: --json on join, express, perceive, history, listen, ignore, unlisten, listening, done, status and inbox prints the SDK result without observation; a participant handle becomes {name}.',
+    'Output: --json on join, express, perceive, history, listen, ignore, unlisten, done, status and inbox prints the SDK result without observation; a participant handle becomes {name}.',
     'History emits one JSON document; stream --ndjson emits one SDK record per line.',
     '',
     ...commandLines,

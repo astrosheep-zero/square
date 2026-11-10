@@ -141,7 +141,7 @@ test('context uses existing activity positions while facade omits read', async (
   const { square, cell } = measuredSquare(fixture(acts));
   try {
     const app = await archiveSquare(t, fixture(acts));
-    const application = await app.history({ observe: true, at: ['act/50'], contextBefore: 1, contextAfter: 1 });
+    const application = await app.history({ observe: true, at: ['act/50'], context: 1 });
     assert.deepEqual(application.observation.visibleActivities.map((a) => a.index), [7, 80]);
     assert.deepEqual(application.observation.activities.map((activity) => activity.index), [7, 50, 80]);
     assert.deepEqual(application.activities.map((activity) => activity.id), ['act/7', 'act/80']);
@@ -197,13 +197,13 @@ test('history bounds contextual windows and uses the same validation for SDK and
     ...Array.from({ length: 101 }, (_, index) => ({ kind: 'say', actor: 'Alice', at: index + 1, index: index + 1, body: `message ${index}` })),
   ]);
   const app = await archiveSquare(t, state);
-  await assert.rejects(app.history({ observe: true, at: ['act/50'], contextBefore: 100, contextAfter: 100 }), (error) => {
+  await assert.rejects(app.history({ observe: true, at: ['act/50'], context: 100 }), (error) => {
     assert.equal(error.code, 'invalid_args');
     assert.deepEqual(error.operation, { operation: 'history', historyBounds: { maxLimit: 100, totalMatches: 102 } });
     return true;
   });
-  assert.equal((await app.history({ observe: true, at: ['act/50'], contextBefore: 100, contextAfter: 100, limit: 100 })).activities.length, 100);
-  for (const query of [{ limit: 101 }, { search: { text: '', mode: 'literal' } }, { since: Infinity }, { contextBefore: -1 }, { cursor: { id: 'act/5', direction: 'sideways' } }, { at: ['bad'] }]) {
+  assert.equal((await app.history({ observe: true, at: ['act/50'], context: 100, limit: 100 })).activities.length, 100);
+  for (const query of [{ limit: 101 }, { search: { text: '', mode: 'literal' } }, { since: Infinity }, { context: -1 }, { cursor: { id: 'act/5', direction: 'sideways' } }, { at: ['bad'] }]) {
     await assert.rejects(app.history(query), (error) => error.code === 'invalid_args');
   }
   assert.equal((await app.history({ limit: null, search: { text: 'message', mode: 'regex' } })).activities.length, 101);

@@ -1,3 +1,13 @@
+import { SquareError } from './model.js';
+
+export function parseDurationMs(value: string, label: string): number {
+  const match = value.match(/^([1-9]\d*)(ms|s|m|h)$/);
+  if (!match) throw new SquareError('invalid_args', `✕ invalid ${label}: expected a positive duration with unit ms, s, m, or h (for example 500ms, 30s, 3m, 1h)`);
+  const milliseconds = Number(match[1]) * ({ ms: 1, s: 1000, m: 60000, h: 3600000 }[match[2]]!);
+  if (!Number.isSafeInteger(milliseconds)) throw new SquareError('invalid_args', `✕ invalid ${label}: duration is too large`);
+  return milliseconds;
+}
+
 function pad(value: number, length = 2): string {
   return String(value).padStart(length, '0');
 }

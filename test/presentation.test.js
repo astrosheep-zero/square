@@ -94,11 +94,6 @@ test('quiet graduates with the idle length and an empty perceive never repeats i
   const empty = renderWatchStatus({ ...base, status: 'drained' });
   assert.match(empty, /^○ only footsteps in the square — nothing new for you$/m);
   assert.match(empty, /perceive --idle 30m/);
-  assert.doesNotMatch(empty, /perceive --now/);
-
-  // A quiet perceive repeats neither itself nor a second copy of the same command.
-  const stale = renderWatchStatus({ ...base, status: 'idle', idleMs: 45_000 });
-  assert.doesNotMatch(stale, /perceive --now/);
 });
 
 test('the capped status counts what was spoken and the throttle names its lull', () => {

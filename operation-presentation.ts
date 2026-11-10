@@ -3,7 +3,7 @@ import { sameName } from './model.js';
 import { formatActivityId } from './square-core.js';
 import type {
   PerceiveOptions, PerceiveResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
-  JoinResult, LifecycleResult, ListenerChangeResult, ListeningResult, OperationFailureDetail,
+  JoinResult, LifecycleResult, ListenerChangeResult, OperationFailureDetail,
   StatusResult, DiscoveryResult,
 } from './square-facade.js';
 import {
@@ -67,7 +67,7 @@ export function renderJoinResult(data: JoinPresentation, owner?: string, surface
     now: after.now, preview: 200, perception: event.perception,
   })).filter(Boolean).join('\n\n');
   const fallback = after.deliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
-    '', surface === 'tool' ? formatToolAction('perceive', { location: displayPath(after.location), as: name, idle: 1800000 }) : `${participantCommandPrefix(after.location, name, owner)} perceive --idle 30m`,
+    '', surface === 'tool' ? formatToolAction('perceive', { location: displayPath(after.location), as: name, idle: '30m' }) : `${participantCommandPrefix(after.location, name, owner)} perceive --idle 30m`,
     '  · stay within earshot — keep this perceive open for new activity',
   ];
   const entryLine = data.kind === 'joined' ? '● you stepped into the square'
@@ -119,11 +119,11 @@ export function renderExpression(squarePath: string, data: ExpressResult, owner?
 }
 
 function continuationCommand(squarePath: string, name: string, options: PerceiveOptions, owner?: string): string {
-  const args = ['--now'];
+  const args: string[] = [];
   if (options.from?.length) args.push('--from', options.from.join(','));
   if (options.mention) args.push('--mention');
   if (options.limit !== undefined) args.push('--limit', String(options.limit));
-  return `${participantCommandPrefix(squarePath, name, owner)} perceive ${args.join(' ')}`;
+  return [participantCommandPrefix(squarePath, name, owner), 'perceive', ...args].join(' ');
 }
 
 /** Render settled perceive facts; no selection, terminal decisions, receipts or wait machinery. */
@@ -162,7 +162,7 @@ export function renderPerceiveOutcome(
     ...(stop === 'idle' && options.idle !== undefined ? { idleMs: options.idle } : {}),
   });
   const fallback = stop === undefined && !projection.deliveryAvailable && data.remaining === 0
-    ? `${surface === 'tool' ? formatToolAction('perceive', { location: displayPath(location), as: name, idle: 1800000 }) : `${participantCommandPrefix(location, name, owner)} perceive --idle 30m`}\n  stay available for new activity` : '';
+    ? `${surface === 'tool' ? formatToolAction('perceive', { location: displayPath(location), as: name, idle: '30m' }) : `${participantCommandPrefix(location, name, owner)} perceive --idle 30m`}\n  stay available for new activity` : '';
   const hint = data.hint === undefined ? '' : style('dim', `· ${data.hint}`);
   return {
     stdout: withPathOutput(location, [terminal, rendered, hint, remaining, fallback].filter(Boolean).join('\n\n'), header),
@@ -173,12 +173,12 @@ export function renderPerceiveOutcome(
 function renderHistoryProjection(
   projection: HistoryObservation,
   visible: HistoryObservation['visibleActivities'],
-  noTruncate: boolean,
+  full: boolean,
   squarePath: string,
   surface: PresentationSurface,
 ): string {
   const shown = visible;
-  const preview = noTruncate || shown.length <= 1 ? undefined : 200;
+  const preview = full || shown.length <= 1 ? undefined : 200;
   const chunks: string[] = [];
   // Presence anchors collect into one closing line instead of interrupting the page.
   const anchored: string[] = [];
@@ -192,7 +192,7 @@ function renderHistoryProjection(
   if (chunks.length === 0) return '○ no activity matches this history query';
   if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && (activity.body?.length ?? 0) > preview)) {
     const ids = shown.map((activity) => formatActivityId(activity.index));
-    chunks.push(surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), at: ids, noTruncate: true }) : `${commandPrefix(squarePath)} history --at ${ids.join(',')} --no-truncate`);
+    chunks.push(surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), at: ids, full: true }) : `${commandPrefix(squarePath)} history --at ${ids.join(',')} --full`);
   }
   if (anchored.length > 0) chunks.push(renderPresenceAnchor(anchored));
   return chunks.join('\n\n');
@@ -208,10 +208,12 @@ function historyQueryArgs(query: HistoryQuery): string[] {
   if (query.from?.length) args.push('--from', query.from.join(','));
   if (query.since !== undefined) args.push('--since', formatTimestamp(query.since));
   if (query.at?.length) args.push('--at', query.at.join(','));
-  if (query.contextBefore !== undefined) args.push('-B', String(query.contextBefore));
-  if (query.contextAfter !== undefined) args.push('-A', String(query.contextAfter));
+  if (query.context !== undefined) args.push('-C', String(query.context));
   if (query.mention !== undefined) args.push('--mention', query.mention);
-  if (query.search !== undefined) args.push(query.search.mode === 'regex' ? '--grep' : '--fixed', query.search.text);
+  if (query.search !== undefined) {
+    args.push('--search', query.search.text);
+    if (query.search.mode === 'regex') args.push('--regex');
+  }
   if (query.order !== undefined) args.push('--order', query.order);
   return args;
 }
@@ -219,19 +221,19 @@ function historyQueryArgs(query: HistoryQuery): string[] {
 export function renderHistoryResult(
   squarePath: string,
   data: HistoryResult,
-  options: { query?: HistoryQuery; noTruncate?: boolean; continuationArgs?: readonly string[]; surface?: PresentationSurface } = {},
+  options: { query?: HistoryQuery; full?: boolean; continuationArgs?: readonly string[]; surface?: PresentationSurface } = {},
 ): string | undefined {
   const projection = data.observation;
   if (projection === undefined) return undefined;
   const query = options.query ?? {};
-  const noTruncate = options.noTruncate === true;
+  const full = options.full === true;
   const search = query.search;
   const output = search === undefined
-    ? renderHistoryProjection(projection, projection.visibleActivities, noTruncate, squarePath, options.surface ?? 'cli')
-    : renderGrepActivitiesView(projection.visibleActivities, projection.totalMatches, noTruncate, squarePath, search.text, search.mode === 'literal', () => 'full', options.surface);
+    ? renderHistoryProjection(projection, projection.visibleActivities, full, squarePath, options.surface ?? 'cli')
+    : renderGrepActivitiesView(projection.visibleActivities, projection.totalMatches, full, squarePath, search.text, search.mode === 'literal', () => 'full', options.surface);
   const next = projection.continuation;
-  const base = options.continuationArgs ?? historyQueryArgs(query);
-  const continuation = next === undefined ? '' : `\n\n${options.surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), ...(query.from?.length ? { from: query.from } : {}), ...(query.since !== undefined ? { since: formatTimestamp(query.since) } : {}), ...(query.at?.length ? { at: query.at } : {}), ...(query.contextBefore !== undefined && query.contextBefore === query.contextAfter ? { context: query.contextBefore } : { ...(query.contextBefore !== undefined ? { contextBefore: query.contextBefore } : {}), ...(query.contextAfter !== undefined ? { contextAfter: query.contextAfter } : {}) }), ...(query.mention !== undefined ? { mention: query.mention } : {}), ...(query.search !== undefined ? (query.search.mode === 'regex' ? { grep: query.search.text } : { fixed: query.search.text }) : {}), ...(query.order !== undefined ? { order: query.order } : {}), ...(noTruncate ? { noTruncate: true } : {}), [next.direction]: next.cursor, limit: next.limit }) : historyContinuationCommand(squarePath, [...base, `--${next.direction}`, next.cursor, '--limit', String(next.limit)])}`;
+  const base = options.continuationArgs ?? [...historyQueryArgs(query), ...(full ? ['--full'] : [])];
+  const continuation = next === undefined ? '' : `\n\n${options.surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), ...(query.from?.length ? { from: query.from } : {}), ...(query.since !== undefined ? { since: formatTimestamp(query.since) } : {}), ...(query.at?.length ? { at: query.at } : {}), ...(query.context !== undefined ? { context: query.context } : {}), ...(query.mention !== undefined ? { mention: query.mention } : {}), ...(query.search !== undefined ? { search: query.search.text, ...(query.search.mode === 'regex' ? { regex: true } : {}) } : {}), ...(query.order !== undefined ? { order: query.order } : {}), ...(full ? { full: true } : {}), [next.direction]: next.cursor, limit: next.limit }) : historyContinuationCommand(squarePath, [...base, `--${next.direction}`, next.cursor, '--limit', String(next.limit)])}`;
   return withPathOutput(squarePath, output + continuation, { participantCount: projection.standingCount });
 }
 
@@ -293,7 +295,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
   }
   if (presentation.joinCount > 3) latest.push(style('dim', `  → … ${presentation.joinCount - 3} more stepped in`));
   if (visible.bodyClipped && data.latestActivity !== undefined) {
-    latest.push(options.surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), at: [data.latestActivity.id], context: 2, noTruncate: true }) : `${commandPrefix(squarePath)} history --at ${data.latestActivity.id} -C 2 --no-truncate`);
+    latest.push(options.surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), at: [data.latestActivity.id], context: 2, full: true }) : `${commandPrefix(squarePath)} history --at ${data.latestActivity.id} -C 2 --full`);
   }
   const counts = [
     `${orderedHere.length} here`,
@@ -312,15 +314,6 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
     ]),
   ].join('\n');
   return withPathOutput(squarePath, output, { participantCount: presentation.standingCount });
-}
-
-export function renderListeningResult(squarePath: string, data: ListeningResult): string | undefined {
-  const projection = data.observation;
-  if (projection?.participant === undefined) return undefined;
-  const body = data.listening.length === 0
-    ? `○ ${participantIdentity(projection.participant)} is not turned toward anyone`
-    : ['listening', ...data.listening.map((target) => `  · ${participantIdentity(target)}`)].join('\n');
-  return withPathOutput(squarePath, body, { participantCount: projection.standingCount });
 }
 
 export type ListenerVerb = 'listen' | 'ignore' | 'unlisten';

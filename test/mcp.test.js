@@ -89,20 +89,25 @@ test('MCP tools validate JSON arguments and return only CLI text', async () => {
     assert.deepEqual(client.getServerVersion(), { name: 'square', version: packageVersion });
     const tools = (await client.listTools()).tools;
     assert.deepEqual(tools.map((tool) => tool.name), [
-      'list', 'join', 'express', 'perceive', 'history', 'attention', 'done', 'status',
+      'list', 'join', 'express', 'perceive', 'history', 'listen', 'unlisten', 'ignore', 'done', 'status',
     ]);
     for (const tool of tools) {
       assert.equal(tool.outputSchema, undefined);
-      assert.equal(tool.inputSchema.required?.includes('location') ?? false, !['list', 'express'].includes(tool.name));
+      assert.equal(tool.inputSchema.required?.includes('location') ?? false, tool.name !== 'list');
       assert.equal('location' in tool.inputSchema.properties, tool.name !== 'list');
     }
-    for (const name of ['join', 'perceive', 'history', 'attention', 'done', 'status']) {
+    for (const name of ['join', 'perceive', 'history', 'listen', 'unlisten', 'ignore', 'done', 'status']) {
       assert.equal((await client.callTool({ name, arguments: {} })).isError, true, `${name} requires location`);
     }
     const missingLocation = await client.callTool({ name: 'express', arguments: { body: 'no location' } });
     assert.equal(missingLocation.isError, true);
     assert.match(missingLocation.content[0].text, /Square needs a location/);
     assert.doesNotMatch(missingLocation.content[0].text, /draft kept/);
+    for (const [name, field] of [['perceive', 'limit'], ['history', 'limit'], ['history', 'context']]) {
+      const result = await client.callTool({ name, arguments: { location: squarePath, [field]: 101 } });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /"maximum": 100/);
+    }
     const invalid = await client.callTool({ name: 'express', arguments: { location: squarePath, body: 7 } });
     assert.equal(invalid.isError, true);
 
@@ -216,16 +221,16 @@ test('one MCP server accepts per-call participants without a configured default'
   const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env: baseEnv, owner: body }));
   try {
     const tools = (await client.listTools()).tools;
-    for (const name of ['join', 'express', 'perceive', 'attention', 'done', 'status']) {
+    for (const name of ['join', 'express', 'perceive', 'listen', 'unlisten', 'ignore', 'done', 'status']) {
       const schema = tools.find((tool) => tool.name === name).inputSchema;
       assert.equal(schema.properties.as.type, 'string');
-      assert.equal(schema.properties.as.description, name === 'status' ? 'Whose listening to show. Leave it out if you hold exactly one name here.' : name === 'join' ? 'Your name in the square. Give it explicitly when joining.' : 'Your name in the square. Leave it out if you hold exactly one name here.');
-      assert.equal(schema.required?.includes('as') ?? false, false);
+      assert.equal(schema.properties.as.description, name === 'status' ? 'Whose listening to show. Leave it out if you hold exactly one name here.' : name === 'join' ? 'Your name in the square.' : 'Your name in the square. Leave it out if you hold exactly one name here.');
+      assert.equal(schema.required?.includes('as') ?? false, name === 'join');
       assert.equal('session' in schema.properties, false);
     }
     const missing = await client.callTool({ name: 'join', arguments: { location: squarePath } });
     assert.equal(missing.isError, true);
-    assert.match(missing.content[0].text, /explicit participant name/);
+    assert.match(missing.content[0].text, /"path":\s*\[\s*"as"/);
     for (const as of ['alice', 'bob']) {
       const joined = await client.callTool({ name: 'join', arguments: { location: squarePath, as } });
       assert.equal(joined.isError, undefined);
@@ -241,10 +246,10 @@ test('one MCP server accepts per-call participants without a configured default'
     } finally { await square.close(); }
     assert.match(history.content[0].text, /alice speaks/);
     assert.match(history.content[0].text, /bob speaks/);
-    await client.callTool({ name: 'attention', arguments: { location: squarePath, as: 'alice', action: 'listen', target: 'bob' } });
+    await client.callTool({ name: 'listen', arguments: { location: squarePath, as: 'alice', target: 'bob' } });
     const listening = await client.callTool({ name: 'status', arguments: { location: squarePath, as: 'alice' } });
     assert.match(listening.content[0].text, /you listen to\n  · @bob/);
-    await client.callTool({ name: 'attention', arguments: { location: squarePath, as: 'alice', action: 'ignore', target: 'bob' } });
+    await client.callTool({ name: 'ignore', arguments: { location: squarePath, as: 'alice', target: 'bob' } });
     assert.match((await client.callTool({ name: 'status', arguments: { location: squarePath, as: 'alice' } })).content[0].text, /not turned toward anyone/);
     for (const [name, args] of [['perceive', {}], ['done', {}]]) {
       const result = await client.callTool({ name, arguments: { location: squarePath, as: 'alice', ...args } });
@@ -480,7 +485,7 @@ test('stdio disconnect aborts throttled express and idle perceive without later 
   await request('tools/call', { name: 'express', arguments: { location: squarePath, body: 'first word' } });
   await request('tools/call', { name: 'perceive', arguments: { location: squarePath } });
   send('tools/call', { name: 'express', arguments: { location: squarePath, body: 'orphan expression' } });
-  send('tools/call', { name: 'perceive', arguments: { location: squarePath, idle: 60_000 } });
+  send('tools/call', { name: 'perceive', arguments: { location: squarePath, idle: '60s' } });
   await request('ping');
   await sleep(100);
 

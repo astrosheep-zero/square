@@ -19,7 +19,7 @@ test('join gives actionable listening guidance while the skill preserves embodie
     assert.doesNotMatch(joined.stdout, /every word here lands on a real ear/);
   }
   assert.ok(fs.readFileSync(path.join(ROOT, 'skills/square/SKILL.md'), 'utf8').includes(skillGuidance));
-  const history = run(withPath(file, ['history', '--no-truncate']));
+  const history = run(withPath(file, ['history', '--full']));
   assert.equal(history.status, 0, history.stderr);
   assert.ok(!history.stdout.includes(joinBanner), 'guidance is not a participant activity');
 });

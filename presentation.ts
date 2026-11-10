@@ -355,7 +355,7 @@ export function renderActivityUncertain(opts: ParticipantOutputOptions & { draft
     ...(opts.detail === undefined ? [] : [`  · ${truncateExternalDiagnostic(opts.detail)}`]),
     ...draftSavedLines(opts.draftPath),
     '  · the draft is a saved copy; sending it again could repeat your activity',
-    `${commandPrefix(opts.squarePath)} history${opts.landedId === undefined ? ' --limit 10' : ` --at ${opts.landedId}`} --no-truncate`,
+    `${commandPrefix(opts.squarePath)} history${opts.landedId === undefined ? ' --limit 10' : ` --at ${opts.landedId}`} --full`,
   ], opts);
 }
 
@@ -391,7 +391,7 @@ const GREP_PREVIEW_CHARS = 160;
 export function renderGrepActivitiesView(
   visible: readonly HydratedAct[],
   totalMatches: number,
-  noTruncate: boolean | undefined,
+  full: boolean | undefined,
   squarePath: string,
   pattern: string,
   fixed = false,
@@ -411,7 +411,7 @@ export function renderGrepActivitiesView(
       chunks.push(header);
       continue;
     }
-    if (noTruncate === true) {
+    if (full === true) {
       const body = rawBody.split('\n').map((line) => `  ${line}`).join('\n');
       chunks.push(`${header}\n${body}`);
       continue;
@@ -435,12 +435,12 @@ export function renderGrepActivitiesView(
 
   if (publicVisible.length === 1) {
     chunks.push(surface === 'tool'
-      ? formatToolAction('history', { location: displayPath(squarePath), at: [formatActivityId(publicVisible[0].index)], context: 2, ...(truncated ? { noTruncate: true } : {}) })
-      : `${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2${truncated ? ' --no-truncate' : ''}`);
+      ? formatToolAction('history', { location: displayPath(squarePath), at: [formatActivityId(publicVisible[0].index)], context: 2, ...(truncated ? { full: true } : {}) })
+      : `${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2${truncated ? ' --full' : ''}`);
   } else if (truncated && publicVisible.length > 1) {
     chunks.push(surface === 'tool'
-      ? formatToolAction('history', { location: displayPath(squarePath), at: [formatActivityId(publicVisible[0].index)], context: 2, noTruncate: true })
-      : `${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2 --no-truncate`);
+      ? formatToolAction('history', { location: displayPath(squarePath), at: [formatActivityId(publicVisible[0].index)], context: 2, full: true })
+      : `${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2 --full`);
   }
   return chunks.join('\n\n');
 }
@@ -463,7 +463,7 @@ export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string
     `  · an active perceive is already running for ${participantIdentity(opts.name)}`,
     `  · ${opts.surface === 'tool' ? 'takeover' : '--takeover'} lets a new perceive take over`,
     opts.surface === 'tool'
-      ? formatToolAction('perceive', { location: displayPath(opts.squarePath), as: opts.name, idle: 1800000, takeover: true })
+      ? formatToolAction('perceive', { location: displayPath(opts.squarePath), as: opts.name, idle: '30m', takeover: true })
       : `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} perceive --idle 30m --takeover`,
   ].join('\n');
 }
@@ -501,7 +501,7 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
           ? style('dim', `○ dust settles on the flagstones — ${formatDuration(idleMs)} of quiet`)
           : style('dim', '○ only footsteps in the square — nothing new for you');
       // The quiet report never repeats the perceive just run.
-      const hints = [opts.surface === 'tool' ? formatToolAction('perceive', { location: displayPath(opts.squarePath), as: opts.name, idle: 1800000 }) : `${prefix} perceive --idle 30m`];
+      const hints = [opts.surface === 'tool' ? formatToolAction('perceive', { location: displayPath(opts.squarePath), as: opts.name, idle: '30m' }) : `${prefix} perceive --idle 30m`];
       return [
         quiet,
         ...(opts.showPerceiveHint === false ? [] : hints),

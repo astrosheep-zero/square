@@ -1,4 +1,4 @@
-import { buildCommand, doneCommand, expressCommand, ignoreCommand, joinCommand, listenCommand, listeningCommand, unlistenCommand } from './square-commands.js';
+import { buildCommand, doneCommand, expressCommand, ignoreCommand, joinCommand, listenCommand, unlistenCommand } from './square-commands.js';
 import { doctorCommand } from './maintenance-commands.js';
 import { type CommandContext, type CommandSpec } from './context.js';
 import { harnessCommand, installCommand, uninstallCommand } from './harness-command.js';
@@ -39,7 +39,6 @@ export const commandRegistry: readonly RegisteredCommand[] = [
   { names: ['listen'], spec: listenCommand },
   { names: ['ignore'], spec: ignoreCommand },
   { names: ['unlisten'], spec: unlistenCommand },
-  { names: ['listening'], spec: listeningCommand },
   { names: ['done'], spec: doneCommand },
   { names: ['install'], spec: installCommand },
   { names: ['uninstall'], spec: uninstallCommand },

@@ -205,7 +205,7 @@ test('history closes the page with one presence anchor line', async () => {
     await alice.express('shared coordinate @Bob', { force: true, mentions: ['Bob'] });
   });
 
-  assert.equal(run(withName(file, 'Bob', ['perceive', '--now'])).status, 0);
+  assert.equal(run(withName(file, 'Bob', ['perceive'])).status, 0);
   const history = run(['--location', file, 'history', '--limit', '100']);
   assert.equal(history.status, 0, history.stderr);
   const lines = history.stdout.trimEnd().split('\n');

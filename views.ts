@@ -42,13 +42,13 @@ export function parseRequiredActivityId(id: ActivityId): number {
 
 /** History adds archive context and ordering to the shared storage-side query predicates. */
 export function selectHistory(facts: SquareRead, query: HistoryQuery, limit: number | null, kinds: ActivityFilter['kinds'], presentation = true) {
-  const shared = activityQueryFilter(query, ['observe', 'order', 'mention', 'since', 'contextBefore', 'contextAfter']);
+  const shared = activityQueryFilter(query, ['observe', 'order', 'mention', 'since', 'context']);
   const { afterIndex } = shared;
   const recipient = query.mention == null ? undefined : resolveKnownName(facts, query.mention);
   if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) throw new SquareError('invalid_args', 'History limit must be a positive integer');
   const filter: ActivityFilter = {
     ...shared, afterAt: query.since,
-    ...(shared.indexes === undefined ? {} : { indexes: facts.contextIndexes(shared.indexes, query.contextBefore ?? 0, query.contextAfter ?? 0) }),
+    ...(shared.indexes === undefined ? {} : { indexes: facts.contextIndexes(shared.indexes, query.context ?? 0, query.context ?? 0) }),
     kinds: query.search === undefined ? kinds : ['say', 'done'],
   };
   let selected: readonly ActivityHead[], totalMatches: number, publicBefore = false, publicAfter = false;

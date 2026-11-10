@@ -190,10 +190,9 @@ test('behind recovery offers perceive then an ordinary retry without promoting a
   assert.match(saved.commands[0], /--no-wait --mention 'Bob' --reply act\/2 -/);
   assert.doesNotMatch(saved.output, /optional: express over unread activity with --force/);
   assert.match(saved.output, /perceive\n  · take it in, then retry:/);
-  assert.doesNotMatch(saved.output, /perceive --now/);
   assert.ok(saved.output.indexOf('perceive') < saved.output.indexOf(saved.commands[0]));
   assert.equal(executeRecovery(saved.commands[0]).status, 1);
-  assert.equal(run(withName(file, 'Alice', ['perceive', '--now'])).status, 0);
+  assert.equal(run(withName(file, 'Alice', ['perceive'])).status, 0);
   assert.equal(executeRecovery(saved.commands[0]).status, 0);
   assert.equal((await says(file)).at(-1).reply, 'act/2');
 });
@@ -224,7 +223,7 @@ test('only admission rejection proves a failed express unsent; post-commit failu
   for (const landedId of [undefined, 'act/1']) {
     const rendered = renderActivityUncertain({ squarePath: '/tmp/test.square', name: 'Alice', draftPath: '/tmp/draft.md', landedId });
     assert.match(rendered, /sending it again could repeat your activity/);
-    assert.match(rendered, /history .*--no-truncate/);
+    assert.match(rendered, /history .*--full/);
     assert.doesNotMatch(rendered, / express |--force|< '\/tmp\/draft.md'/);
   }
   await square.close();
@@ -256,7 +255,7 @@ test('a failed observation clock cannot prevent raw draft saving or landed recon
     assert.equal(draftAtRecovery, raw);
     assert.equal(fs.readFileSync(draftPathFrom(output), 'utf8'), raw);
     assert.match(output, /act\/2/);
-    assert.match(output, /history .*--no-truncate/);
+    assert.match(output, /history .*--full/);
     assert.doesNotMatch(output, / express |--force|< /);
   } finally {
     stderr.mock.restore();

@@ -79,9 +79,9 @@ async function assertTextParity(t, setup, cliArgs, tool, toolArgs) {
   const expected = normalized(result.stdout, cliPath);
   if (tool === 'perceive') {
     assert.match(expected, /square --location .* perceive --idle 30m/);
-    assert.equal(actual, expected.replace("square --location '<square>' --as 'rei' perceive --idle 30m", 'perceive {\"location\":\"<square>\",\"as\":\"rei\",\"idle\":1800000}'));
+    assert.equal(actual, expected.replace("square --location '<square>' --as 'rei' perceive --idle 30m", 'perceive {"location":"<square>","as":"rei","idle":"30m"}'));
   } else assert.equal(actual, expected);
-  assert.doesNotMatch(actual, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
+  assert.doesNotMatch(actual, /square --location|--kick|--full|square done --help|\bparticipants --/);
   return response;
 }
 
@@ -132,16 +132,16 @@ test('mutating tools print the same result as the CLI', async (t) => {
     }, ['--as', 'rei', 'perceive'], 'perceive', { as: 'rei' });
   });
   await t.test('listen', async (t) => {
-    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'listen', 'bob'], 'attention', { as: 'rei', action: 'listen', target: 'bob' });
+    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'listen', 'bob'], 'listen', { as: 'rei', target: 'bob' });
   });
   await t.test('ignore', async (t) => {
-    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'ignore', 'bob'], 'attention', { as: 'rei', action: 'ignore', target: 'bob' });
+    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'ignore', 'bob'], 'ignore', { as: 'rei', target: 'bob' });
   });
   await t.test('unlisten', async (t) => {
     await assertTextParity(t, async (square, body) => {
       await joinReiAndBob(square, body);
       await (await square.participant('rei', { owner: body })).listen('bob');
-    }, ['--as', 'rei', 'unlisten', 'bob'], 'attention', { as: 'rei', action: 'unlisten', target: 'bob' });
+    }, ['--as', 'rei', 'unlisten', 'bob'], 'unlisten', { as: 'rei', target: 'bob' });
   });
   await t.test('done', async (t) => {
     await assertTextParity(t, async (square, body) => { await square.join('rei', { owner: body }); },
@@ -163,7 +163,7 @@ test('failures print the CLI recovery lines instead of JSON', async (t) => {
   assert.match(text, /✕ @ghost has never stepped into this square/);
   assert.match(result.stderr, /square --location .* --as 'ghost' join/);
   assert.ok(text.includes(`join ${JSON.stringify({ location: mcpPath, as: 'ghost' })}`));
-  assert.doesNotMatch(text, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
+  assert.doesNotMatch(text, /square --location|--kick|--full|square done --help|\bparticipants --/);
 });
 
 
@@ -182,14 +182,14 @@ test('tool recovery and watch guidance use native actions; CLI keeps its command
   ]) {
     const text = renderFailureLines(failure, opts).join('\n');
     assert.ok(text.includes(expected), text);
-    assert.doesNotMatch(text, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
+    assert.doesNotMatch(text, /square --location|--kick|--full|square done --help|\bparticipants --/);
   }
   assert.doesNotMatch(renderFailureLines({ code: 'x', message: 'bad', facts: { reason: 'invalid_done_body' } }, opts).join('\n'), /--help/);
   assert.match(renderWatchAlreadyActive({ ...opts }), /already perceiving/);
   assert.match(renderWatchAlreadyActive({ ...opts }), /takeover lets a new perceive take over/);
-  assert.ok(renderWatchAlreadyActive({ ...opts }).includes(action('perceive', { as: name, idle: 1800000, takeover: true })));
+  assert.ok(renderWatchAlreadyActive({ ...opts }).includes(action('perceive', { as: name, idle: '30m', takeover: true })));
   assert.match(renderWatchAlreadyActive({ squarePath, name }), /--takeover/);
-  assert.ok(renderWatchStatus({ ...opts, status: 'idle' }).includes(action('perceive', { as: name, idle: 1800000 })));
+  assert.ok(renderWatchStatus({ ...opts, status: 'idle' }).includes(action('perceive', { as: name, idle: '30m' })));
   assert.ok(renderWatchStatus({ ...opts, status: 'capped' }).includes(action('done', { as: name })));
   assert.match(renderWatchStatus({ squarePath, name, status: 'capped' }), /square --location .* done/);
 });
@@ -217,14 +217,27 @@ test('MCP history paging and expansions produce tool actions', async t => {
     for (let i = 0; i < 12; i++) await participant.express(`needle ${i} ${'x'.repeat(300)}`, { force: true });
   });
   const call = await openMcp(t, squarePath);
-  const history = (await call('history', { fixed: 'needle', limit: 2 })).content[0].text;
-  assert.match(history, /history .*"at":\["act\/\d+"\].*"context":2.*"noTruncate":true/);
-  assert.match(history, /history .*"fixed":"needle".*"before":"act\/\d+".*"limit":2/);
-  assert.doesNotMatch(history, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
-  const expanded = (await call('history', { at: ['act/11'], context: 1, noTruncate: true })).content[0].text;
+  const history = (await call('history', { search: 'needle', limit: 2 })).content[0].text;
+  assert.match(history, /history .*"at":\["act\/\d+"\].*"context":2.*"full":true/);
+  assert.match(history, /history .*"search":"needle".*"before":"act\/\d+".*"limit":2/);
+  assert.doesNotMatch(history, /square --location|--kick|--full|square done --help|\bparticipants --/);
+  const regex = (await call('history', { search: 'needle \\d+', regex: true, at: ['act/11'], context: 2, full: true, limit: 2 })).content[0].text;
+  assert.match(regex, /needle 10 x{300}/);
+  const continuation = regex.split('\n').find(line => line.startsWith('history ') && line.includes('"before"'));
+  const args = JSON.parse(continuation.slice('history '.length));
+  assert.equal(args.context, 2);
+  assert.equal(args.search, 'needle \\d+');
+  assert.equal(args.regex, true);
+  assert.equal(args.full, true);
+  const earlier = await call('history', args);
+  assert.equal(earlier.isError, undefined, earlier.content[0].text);
+  assert.match(earlier.content[0].text, /needle 8 x{300}/);
+  const literal = (await call('history', { search: 'needle \\d+' })).content[0].text;
+  assert.match(literal, /no activity matched/);
+  const expanded = (await call('history', { at: ['act/11'], context: 1, full: true })).content[0].text;
   assert.match(expanded, /needle 10 x{200}/);
   const status = (await call('status')).content[0].text;
-  assert.match(status, /history .*"at":\["act\/\d+"\].*"context":2.*"noTruncate":true/);
-  assert.doesNotMatch(status, /square --location|--kick|--no-truncate|square done --help|\bparticipants --/);
-  assert.match(cli(squarePath, ['history', '--fixed', 'needle', '--limit', '2']).stdout, /square --location .*history/);
+  assert.match(status, /history .*"at":\["act\/\d+"\].*"context":2.*"full":true/);
+  assert.doesNotMatch(status, /square --location|--kick|--full|square done --help|\bparticipants --/);
+  assert.match(cli(squarePath, ['history', '--search', 'needle', '--limit', '2']).stdout, /square --location .*history/);
 });

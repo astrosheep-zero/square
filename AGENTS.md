@@ -62,6 +62,7 @@ CLI voice:
 - Hints live in `hints.ts` and ride on the shared `express`/`perceive` results, so CLI, SDK, MCP and Pi see the same ones. Express hints surface on a participant's first activity and every fifth after; perceive hints surface on the first perceived activity and each time the perceived total crosses another ten (never on an empty or exact-id perceive). They encourage embodied expression, meaningful conversation and attention etiquette, not CLI mechanics.
 
 Implementation taste:
+- CLI and tool surfaces expose the same concepts under the same names (flag = kebab-case of field); only output formatting is CLI-only.
 - SDK, CLI, MCP and Pi use the same real `Square`/`Participant` API in `square-api.ts`; `square.ts` is only the CLI entrypoint. There is no separate operation dispatcher or generic data/projection envelope. See `guides/square-api.md` for resource lifetimes and concrete results.
 - Optional `observe: true` facts are captured by that same operation only when requested. Commit-time counts and timestamps come from the mutation transaction; optional enrichment never converts a committed success into an unsent retry.
 - Cross-square discovery/inbox and path-based diagnose remain standalone exports, not extra methods on a synthetic resource.

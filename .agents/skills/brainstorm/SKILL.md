@@ -83,7 +83,7 @@ square --location <square> history --from <name>
 square --location <square> status
 ```
 
-History shows one result in full and previews multiple results. `--no-truncate` shows every original body.
+History shows one result in full and previews multiple results. `--full` shows every original body.
 
 `history` reads the archive without advancing participant presence. `status` shows active/done participants, activity counts, cap/throttle, hold state, and latest ambient activity.
 
@@ -115,7 +115,7 @@ While held, participant expression and perceive pause. Join, done, status, and h
 When participants are done, collect the public activities:
 
 ```bash
-square --location <square> history --no-truncate      # show every original body
+square --location <square> history --full      # show every original body
 square --location <square> status
 ```
 
