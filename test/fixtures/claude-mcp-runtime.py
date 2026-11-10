@@ -1,4 +1,4 @@
-"""Main/child MCP identity through the shipped Claude native hooks."""
+"""Main/child MCP identity through the shipped Claude mod."""
 import json
 import os
 import pathlib
@@ -28,10 +28,10 @@ def reply(data):
             agent = next((name for name in names if name in ['Agent', 'Task']), None)
             if agent and 'agent' not in stages:
                 stages.add('agent')
-                session = next(row['input']['session_id'] for row in fixture.records('invocations.jsonl')
-                               if row.get('input', {}).get('hook_event_name') == 'SessionStart')
+                session = next(row['input']['sessionId'] for row in fixture.records('invocations.jsonl')
+                               if row.get('argv') == ['claude-mod'])
                 posted = subprocess.run([str(NODE), '--import', str(REPO / 'test/sandbox-env.js'),
-                    str(REPO / 'test/fixtures/claude-hook-runtime-driver.mjs'), str(R), 'post', session,
+                    str(REPO / 'test/fixtures/claude-mod-runtime-driver.mjs'), str(R), 'post', session,
                     'notice:tool-boundary', 'NATIVE_DURING_TURN_TOOL_NOTICE'], capture_output=True, text=True, env=fixture.env, timeout=10)
                 assert posted.returncode == 0, posted.stderr
                 return {'type': 'tool_use', 'id': 'toolu_fixture_agent', 'name': agent, 'input': {
@@ -40,7 +40,7 @@ def reply(data):
             if not child and 'agent' in stages and 'collision' not in stages:
                 stages.add('collision')
                 seeded = subprocess.run([str(NODE), '--import', str(REPO / 'test/sandbox-env.js'),
-                    str(REPO / 'test/fixtures/claude-hook-runtime-driver.mjs'), str(R), 'seed-call', 'foreign-session',
+                    str(REPO / 'test/fixtures/claude-mod-runtime-driver.mjs'), str(R), 'seed-call', 'foreign-session',
                     'toolu_fixture_collision'], capture_output=True, text=True, env=fixture.env, timeout=10)
                 assert seeded.returncode == 0, seeded.stderr
                 return {'type': 'tool_use', 'id': 'toolu_fixture_collision', 'name': join,
@@ -66,7 +66,7 @@ try:
             if not fixture.read():
                 break
             invocations = fixture.records('invocations.jsonl')
-            if not sent and any(row.get('input', {}).get('hook_event_name') == 'SessionStart' for row in invocations):
+            if not sent and any(row.get('argv') == ['claude-mod'] for row in invocations):
                 if not any(row.get('method') == 'tools/list' for row in fixture.records('mcp-in.jsonl')):
                     continue
                 time.sleep(1)
@@ -74,18 +74,18 @@ try:
                 time.sleep(.3)
                 os.write(fixture.master, b'\r')
                 sent = True
-            terminal = {row.get('input', {}).get('tool_use_id') for row in invocations
-                        if row.get('input', {}).get('hook_event_name') in ['PostToolUse', 'PostToolUseFailure']}
-            denied = any(row.get('input', {}).get('tool_use_id') == 'toolu_fixture_collision'
-                         and 'permissionDecision' in row.get('stdout', '') and 'deny' in row['stdout']
-                         for row in fixture.records('bridge.jsonl'))
+            returned = {row.get('id') for row in fixture.records('mcp-out.jsonl') if row.get('result') and not row['result'].get('isError')}
+            requests = fixture.records('mcp-in.jsonl')
+            completed = {row.get('params', {}).get('_meta', {}).get('claudecode/toolUseId') for row in requests
+                         if row.get('method') == 'tools/call' and row.get('id') in returned}
             denied_observed = any('Square MCP call identity is unavailable' in json.dumps(call['data'].get('messages', []))
                                   for call in fixture.calls)
-            if {'toolu_fixture_main', 'toolu_fixture_child'} <= terminal and denied and denied_observed:
+            stored = [json.loads(file.read_text())['toolUseId'] for file in (R / 'claude-mcp-calls').glob('*.json')]
+            if {'toolu_fixture_main', 'toolu_fixture_child'} <= completed and denied_observed and stored == ['toolu_fixture_collision']:
                 complete = True
                 break
 finally:
     signal.alarm(0)
 assert complete, 'No completed main/child calls; inspect ' + str(R)
-(R / 'summary.json').write_text(json.dumps({'mainChildToolHooksCompleted': True, 'toolNamespaced': 'mcp__plugin_square_square__join'}) + '\n')
-print(json.dumps({'evidence': str(R), 'mainChildToolHooksCompleted': complete}))
+(R / 'summary.json').write_text(json.dumps({'mainChildModCallsCompleted': True, 'toolNamespaced': 'mcp__plugin_square_square__join'}) + '\n')
+print(json.dumps({'evidence': str(R), 'mainChildModCallsCompleted': complete}))

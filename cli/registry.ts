@@ -7,8 +7,7 @@ import { mcpServerCommand } from './mcp-server-command.js';
 import { JSON_COMMANDS } from './json.js';
 import {
   perceiveCommand,
-  claudeHookCommand,
-  claudeWatchCommand,
+  claudeModCommand,
   codexHookCommand,
   codexWatchCommand,
   codexInterruptCommand,
@@ -31,8 +30,7 @@ export const commandRegistry: readonly RegisteredCommand[] = [
   { names: ['join'], spec: joinCommand },
   { names: ['stream'], spec: streamCommand },
   { names: ['inbox'], spec: inboxCommand },
-  { names: ['claude-hook'], spec: claudeHookCommand },
-  { names: ['claude-watch'], spec: claudeWatchCommand },
+  { names: ['claude-mod'], spec: claudeModCommand },
   { names: ['codex-hook'], spec: codexHookCommand },
   { names: ['codex-watch'], spec: codexWatchCommand },
   { names: ['codex-interrupt'], spec: codexInterruptCommand },

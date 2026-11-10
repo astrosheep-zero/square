@@ -80,8 +80,8 @@ export async function doctorClaudePlugin(homeDir: string, run: ClaudeCommandRunn
   return [
     fs.existsSync(bundle) ? `✓ Square Claude plugin bundle ${root}` : `○ Square Claude plugin bundle missing ${root}`,
     installed ? `✓ ${CLAUDE_PLUGIN_ID} installed` : `○ ${CLAUDE_PLUGIN_ID} unavailable`,
-    `Claude delivery uses synchronous prompt/tool hooks and one finite 24-hour asyncRewake Stop observer; actual coverage ends at native boundaries.`,
-    `Idle Escape cannot disarm a watcher, and already emitted notifications cannot be recalled; busy Escape disarms at the next prompt boundary.`,
-    `Native stderr output is recorded unknown until its exact token/hash frame appears at a later prompt boundary; model comprehension is not observed.`,
+    `Claude delivery uses a mod: busy turns append context and log it; idle main sessions submit an attributed plugin prompt.`,
+    `Stop suppresses the current delivery batch; clear, resume and module reload retire the captured helper and attachment.`,
+    `Exact native acceptance records presentation, not model comprehension. Paseo does not yet expose Claude ui_log events.`,
   ];
 }

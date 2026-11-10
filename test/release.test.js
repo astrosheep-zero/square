@@ -70,22 +70,12 @@ test('generated release artifacts expose the current identity and supported host
   assert.equal(paseoPlugin.requirements.paseo, '>=0.11.2');
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', '.claude-plugin')), false);
   assert.equal(fs.existsSync(path.join(root, 'skills', 'square', 'hooks')), false);
-  for (const event of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'])
-    assert.equal(claudeHooks.hooks[event][0].hooks[0].command, 'square claude-hook');
-  for (const event of ['PreToolUse', 'PostToolUseFailure'])
-    assert.equal(claudeHooks.hooks[event][0].matcher, '^mcp__plugin_square_square__.*');
-  assert.equal(claudeHooks.hooks.PostToolUse[0].matcher, undefined);
-  const claudeStop = claudeHooks.hooks.Stop[0].hooks[0];
-  assert.equal(claudeStop.command, 'square claude-watch');
-  assert.equal(claudeStop.asyncRewake, true);
-  assert.equal(claudeStop.timeout, 86400);
-  assert.equal('async' in claudeStop, false);
+  assert.deepEqual(claudeHooks, { modules: ['./register.js'] });
+  assert.equal(fs.existsSync(path.join(root, 'plugins/claude/hooks/register.js')), true);
   assert.deepEqual(claudeMcp, { mcpServers: { square: {
     command: 'square', args: ['mcp-server'], env: { SQUARE_CLAUDE_MCP_CONTEXT: '1' },
   } } });
-  assert.equal(fs.existsSync(path.join(root, 'dist', 'claude-hook.js')), true);
-  assert.equal(fs.existsSync(path.join(root, 'dist', 'claude-mod.js')), false);
-  assert.equal(fs.existsSync(path.join(root, 'dist', 'claude-transport.js')), false);
+  assert.equal(fs.existsSync(path.join(root, 'dist', 'claude-mod.js')), true);
 
   const leaf = path.join(root, 'dist', 'packages', 'agent-delivery', 'src', 'claude-native.js');
   assert.equal(fs.existsSync(leaf), true);
@@ -137,6 +127,8 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
   for (const file of [
     'plugins/claude/.mcp.json',
     'plugins/claude/hooks/hooks.json',
+    'plugins/claude/hooks/register.js',
+    'dist/claude-mod.js',
     'plugins/claude/.claude-plugin/plugin.json',
     'plugins/codex/.codex-plugin/plugin.json',
     'plugins/codex/hooks/hooks.json',
@@ -159,11 +151,11 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
   assert.equal(packed.files.some((entry) => entry.path.includes('/node_modules/')), false);
   assert.equal(packed.files.some((entry) => /^(?:claude-plugin|codex-plugin|extensions)\//.test(entry.path)), false);
   assert.equal(packed.files.some((entry) => entry.path === 'dist/opencode.js' || entry.path === 'dist/opencode-delivery.js'), false);
-  assert.equal(packed.files.some((entry) => entry.path === 'dist/claude-mod.js' || entry.path === 'dist/claude-transport.js'), false);
-  assert.ok(packed.files.some((entry) => entry.path === 'dist/claude-hook.js'));
+  assert.ok(packed.files.some((entry) => entry.path === 'dist/claude-mod.d.ts'));
   await run('tar', ['-xzf', path.join(fixture, packed.filename), '-C', fixture]);
   const shipped = path.join(fixture, 'package');
-  assert.equal(fs.readFileSync(path.join(shipped, 'dist/claude-hook.js'), 'utf8'), fs.readFileSync(path.join(root, 'dist/claude-hook.js'), 'utf8'));
+  assert.equal(fs.readFileSync(path.join(shipped, 'dist/claude-mod.js'), 'utf8'), fs.readFileSync(path.join(root, 'dist/claude-mod.js'), 'utf8'));
+  assert.equal(fs.readFileSync(path.join(shipped, 'plugins/claude/hooks/register.js'), 'utf8'), fs.readFileSync(path.join(root, 'plugins/claude/hooks/register.js'), 'utf8'));
   assert.equal(fs.readFileSync(path.join(shipped, leafPath), 'utf8'), fs.readFileSync(path.join(root, leafPath), 'utf8'));
   const endpoint = path.join(fixture, 'in.sock');
   const server = net.createServer((socket) => {

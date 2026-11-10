@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { once } from 'node:events';
-import { runClaudeHook, runClaudeWatch } from '../claude-hook.js';
+import { runClaudeMod } from '../claude-mod.js';
 import { runCodexHook, runCodexInterrupt } from '../codex-hook.js';
 import { runCodexWatch } from '../codex-watch.js';
 import { isSquareError } from '../model.js';
@@ -434,20 +434,9 @@ function hookCommand(runHook: (input: string) => string | Promise<string>): Comm
   };
 }
 
-export const claudeHookCommand: CommandSpec<undefined, string> = {
+export const claudeModCommand: CommandSpec<undefined, string> = {
   parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
-  execute: async () => {
-    try {
-      return await runClaudeHook(await readStdin(), process.env, text => new Promise<void>((resolve, reject) => {
-        process.stdout.write(text, error => { if (error) reject(error); else resolve(); });
-      }));
-    } catch { return ''; }
-  },
-  present: () => {},
-};
-export const claudeWatchCommand: CommandSpec<undefined, string> = {
-  parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
-  execute: async () => runClaudeWatch(await readStdin(), process.env),
+  execute: async () => runClaudeMod(await readStdin(), process.env),
   present: () => {},
 };
 export const codexHookCommand: CommandSpec<undefined, string> = {

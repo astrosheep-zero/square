@@ -1,11 +1,3 @@
 {
-  "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "square claude-hook", "timeout": 5 }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "square claude-hook", "timeout": 3 }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "square claude-hook", "timeout": 5 }] }],
-    "PreToolUse": [{ "matcher": "^mcp__plugin_square_square__.*", "hooks": [{ "type": "command", "command": "square claude-hook", "timeout": 5 }] }],
-    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "square claude-hook", "timeout": 5 }] }],
-    "PostToolUseFailure": [{ "matcher": "^mcp__plugin_square_square__.*", "hooks": [{ "type": "command", "command": "square claude-hook", "timeout": 5 }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "square claude-watch", "asyncRewake": true, "timeout": 86400 }] }]
-  }
+  "modules": ["./register.js"]
 }

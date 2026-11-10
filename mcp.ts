@@ -30,7 +30,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
       return invoke(tool, args, { signal: extra.signal }, async () => {
         const threadId = extra._meta?.threadId;
         const opencodeSessionId = extra._meta?.['ai.opencode/sessionID'];
-        // Claude's bundled plugin requires a per-call native hook association; startup identity is not a fallback.
+        // Claude's bundled mod requires a per-call native association; startup identity is not a fallback.
         const claude = baseEnv.SQUARE_CLAUDE_MCP_CONTEXT === '1'
           ? await readClaudeMcpCall(extra._meta?.['claudecode/toolUseId'], baseEnv)
           : undefined;

@@ -1,7 +1,8 @@
 {
   "name": "square",
   "version": "0.4.7",
-  "description": "Native Claude Code hook delivery for Square participants",
+  "description": "Claude Code mod delivery for Square participants",
+  "license": "MIT",
   "author": {
     "name": "Square"
   }

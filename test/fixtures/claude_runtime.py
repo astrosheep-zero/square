@@ -40,10 +40,11 @@ if sys.argv[1:]==['mcp-server']:
 value=sys.stdin.read()
 try: record('invocations.jsonl',{'argv':sys.argv[1:],'input':json.loads(value)})
 except ValueError: record('invocations.jsonl',{'argv':sys.argv[1:],'raw':value})
-p=subprocess.run(cmd,input=value,text=True,capture_output=True,timeout=86410 if sys.argv[1:]==['claude-watch'] else 12)
-try: record('bridge.jsonl',{'input':json.loads(value),'stdout':p.stdout,'stderr':p.stderr,'exit':p.returncode})
-except ValueError: pass
-sys.stdout.write(p.stdout);sys.stderr.write(p.stderr);sys.exit(p.returncode)
+assert sys.argv[1:]==['claude-mod'], 'Unexpected Square process'
+read,write=os.pipe()
+os.write(write,value.encode());os.close(write)
+os.dup2(read,0);os.close(read)
+os.execv(cmd[0],cmd)
 '''
 
 

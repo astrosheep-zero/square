@@ -11,11 +11,10 @@ import { presentPendingAtBoundary } from '../dist/boundary-presentation.js';
 import { attachDeliverySession } from '../dist/session-lifecycle.js';
 import { dispatchEligibleCards, postAndDispatch } from '../dist/notifications.js';
 import { runCodexWatch } from '../dist/codex-watch.js';
-import { runClaudeWatch } from '../dist/claude-hook.js';
+import { runClaudeMod } from '../dist/claude-mod.js';
 import { codexHookResponse } from '../dist/codex-hook.js';
 import { receiveOpenCodePending } from '../dist/plugins/opencode-shared/delivery.js';
 import { retainDeliveryLedger } from '../dist/delivery-lifetime.js';
-import { claudeBoundaryStore } from '../dist/claude-boundary-state.js';
 
 const owner = 'busy:owner';
 const routes = [{ kind: 'controlled', address: {} }];
@@ -233,9 +232,6 @@ test('retirement cancels an unrelated blocked writer so retained late settlement
 
 test('host, watcher, notification and OpenCode entry signals bound busy ledger opens and leave no delivery effects', { timeout: 5000 }, async t => {
   const f = await fixture(t);
-  const boundary = claudeBoundaryStore('busy', f.env);
-  await boundary.start(async () => f.session.generation);
-  await boundary.prompt('prompt');
   await f.ledger.post({ owner, key: 'one', text: 'one' });
   f.lock.exec('BEGIN EXCLUSIVE');
   const abort = new AbortController(), reason = new Error('host lifetime ended');
@@ -245,10 +241,10 @@ test('host, watcher, notification and OpenCode entry signals bound busy ledger o
     dispatchEligibleCards(f.ledger, owner, { signal: abort.signal }),
     postAndDispatch(f.ledger, { owner, key: 'never', text: 'never' }, { signal: abort.signal }),
     receiveOpenCodePending('busy', f.session.generation, { kind: 'controlled', send: () => assert.fail('must remain unsent') }, f.env, abort.signal),
+    runClaudeMod(JSON.stringify({ sessionId: 'busy' }), f.env, abort.signal, () => assert.fail('helper must remain unstarted')),
   ].map(promise => assert.rejects(promise, error => error === reason));
   const watches = [
     runCodexWatch(JSON.stringify({ hook_event_name: 'Stop', session_id: 'busy', turn_id: 'turn' }), f.env, abort.signal),
-    runClaudeWatch(JSON.stringify({ hook_event_name: 'Stop', session_id: 'busy', prompt_id: 'prompt' }), f.env, abort.signal),
   ];
   const traces = [];
   const hook = codexHookResponse({ hook_event_name: 'PostToolUse', session_id: 'busy' }, () => assert.fail('no output'),
