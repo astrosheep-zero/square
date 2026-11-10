@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import { z } from 'zod/v4';
 import { isSquareError, SquareError } from './model.js';
 import { requireOwner, requireJoinName, selectOwnSeat, HISTORY_MAX_LIMIT, PERCEIVE_MAX_LIMIT, PERCEIVE_DEFAULT_LIMIT, DEFAULT_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_DEPTH, MAX_LIST_LIMIT, type Square } from './square-api.js';
@@ -16,53 +15,6 @@ import {
 export interface ToolIdentity { readonly owner?: Owner; readonly wakeAddress?: WakeAddress }
 type JsonObject = Record<string, unknown>;
 
-interface ExpressDraft {
-  readonly owner?: Owner;
-  readonly args: JsonObject;
-  readonly expiresAt: number;
-}
-
-/** Process-local recovery: FIFO 64, fixed two-hour TTL, consumed only by a successful express. */
-const EXPRESS_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
-const EXPRESS_DRAFT_LIMIT = 64;
-
-export class SquareExpressDrafts {
-  private readonly drafts = new Map<string, ExpressDraft>();
-
-  private purgeExpired(): void {
-    const now = Date.now();
-    for (const [token, draft] of this.drafts) if (draft.expiresAt <= now) this.drafts.delete(token);
-  }
-
-  resolve(args: JsonObject, owner?: Owner): { args: JsonObject; token?: string } {
-    if (args.draft === undefined) return { args };
-    this.purgeExpired();
-    if (typeof args.draft !== 'string' || Object.keys(args).length !== 1)
-      throw new SquareError('invalid_args', 'An express draft token cannot be combined with other arguments.');
-    const draft = this.drafts.get(args.draft);
-    if (draft === undefined || draft.owner !== owner)
-      throw new SquareError('invalid_args', 'Unknown, expired, or inaccessible express draft.');
-    return { args: draft.args, token: args.draft };
-  }
-
-  consume(token?: string): void {
-    if (token !== undefined) this.drafts.delete(token);
-  }
-
-  retain(args: JsonObject, owner: Owner | undefined, token: string | undefined, failure: JsonObject, expressAttempted: boolean): string | undefined {
-    const effect = (failure.operation as { expressEffect?: string } | undefined)?.expressEffect;
-    // After an attempt, only an admission or argument refusal proves that retrying cannot duplicate an activity.
-    const unsent = !expressAttempted || effect === 'unsent' || (effect === undefined && failure.code === 'invalid_args');
-    if (!unsent || effect === 'landed' || effect === 'unknown' || typeof args.body !== 'string' || args.draft !== undefined
-      || typeof args.location !== 'string' || !args.location.trim()) return undefined;
-    this.purgeExpired();
-    if (token !== undefined && this.drafts.has(token)) return token;
-    const created = `dr_${crypto.randomBytes(16).toString('base64url')}`;
-    this.drafts.set(created, { owner, args, expiresAt: Date.now() + EXPRESS_DRAFT_TTL_MS });
-    if (this.drafts.size > EXPRESS_DRAFT_LIMIT) this.drafts.delete(this.drafts.keys().next().value!);
-    return created;
-  }
-}
 interface ToolBinding {
   identity: ToolIdentity;
   readonly now?: () => number;
@@ -71,39 +23,21 @@ interface ToolBinding {
 }
 
 export function createSquareToolRunner() {
-  const drafts = new SquareExpressDrafts();
   return async (tool: ToolDefinition, args: JsonObject, control: OperationControl,
     bind: () => Promise<ToolBinding> | ToolBinding,
   ): Promise<{ text: string; isError?: true }> => {
-    let toolArgs = args;
-    let owner: Owner | undefined;
-    let token: string | undefined;
-    let attempted = false;
     let square: Square | undefined;
     try {
       const binding = await bind();
-      owner = binding.identity.owner;
-      if ('runDiscovery' in tool) return { text: await tool.runDiscovery(toolArgs, control, binding) };
-      if (tool.name === 'express') {
-        const resolved = drafts.resolve(toolArgs, owner);
-        toolArgs = resolved.args;
-        token = resolved.token;
-      }
-      square = await binding.open(toolArgs.location as string | undefined, control);
-      let text: string;
+      if ('runDiscovery' in tool) return { text: await tool.runDiscovery(args, control, binding) };
+      square = await binding.open(args.location as string | undefined, control);
       try {
-        attempted = tool.name === 'express';
-        text = await tool.run(square, toolArgs, control, binding.identity, binding.now);
-        drafts.consume(token);
+        return { text: await tool.run(square, args, control, binding.identity, binding.now) };
       } finally { await square.close(); }
-      return { text };
     } catch (error) {
-      const failure = squareToolFailure(error, control.signal);
-      const draft = tool.name === 'express' ? drafts.retain(toolArgs, owner, token, failure, attempted) : undefined;
-      return { isError: true, text: squareToolFailureText(failure, {
-        location: square?.location ?? (toolArgs.location as string | undefined),
-        participant: typeof toolArgs.as === 'string' ? toolArgs.as : undefined,
-        draft,
+      return { isError: true, text: squareToolFailureText(squareToolFailure(error, control.signal), {
+        location: square?.location ?? (args.location as string | undefined),
+        participant: typeof args.as === 'string' ? args.as : undefined,
       }) };
     }
   };
@@ -128,7 +62,6 @@ interface DiscoveryToolDefinition {
 type ToolDefinition = SingleSquareToolDefinition | DiscoveryToolDefinition;
 
 const location = z.string().describe('Path to the .square file, relative to the working directory.');
-const expressLocation = location.optional().describe('Path to the .square file, relative to the working directory. Not needed with draft.');
 const participant = z.string().optional().describe('Your name in the square. Leave it out if you hold exactly one name here.');
 const activityId = z.string().regex(/^act\/(0|[1-9][0-9]*)$/) as z.ZodType<ActivityId>;
 const stringArray = z.array(z.string());
@@ -142,7 +75,7 @@ function tool<S extends z.ZodRawShape>(name: string, description: string, shape:
   run: (square: Square, args: z.output<z.ZodObject<S>>, control: OperationControl, identity: ToolIdentity, now?: () => number) => Outcome,
   render: ToolRender,
 ): SingleSquareToolDefinition {
-  const inputSchema = z.object({ ...shape, location: name === 'express' ? expressLocation : location }).strict();
+  const inputSchema = z.object({ ...shape, location }).strict();
   return { name, description, inputSchema,
     run: async (square, args, control, identity, now) => {
       const { location: _location, ...operationArgs } = inputSchema.parse(args) as JsonObject;
@@ -202,19 +135,15 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     rendering((result: JoinPresentation) => renderJoinResult(result, undefined, 'tool'))),
   tool('express', 'Speak or act in the square. Plain words, half-formed ideas and *actions* all belong here. Mention or reply to someone to be heard by them; ring the bell to be heard by everyone. Said to no one in particular, your words reach those who listen to you.', {
     as: participant,
-    body: z.string().optional().describe('What you say or do. Markdown works; *asterisks* mark an action. Not needed with draft.'),
-    draft: z.string().optional().describe('Token from a failed express; pass it alone to retry.'),
+    body: z.string().describe('What you say or do. Markdown works; *asterisks* mark an action.'),
     mentions: stringArray.optional().describe('Who you are speaking to. An @name in the body that matches someone here counts too.'),
     bell: z.boolean().optional().describe('Call everyone in the square. Not with mentions.'),
     reply: activityId.optional().describe('The activity you are answering, like act/12. Its author hears you if still here.'),
     noMention: z.boolean().optional().describe('Leave @names in the body as plain text. Mentions and reply still reach people.'),
     force: z.boolean().optional().describe('Speak now, even if something reached you that you have not perceived yet.'),
     noWait: z.boolean().optional().describe('If you are speaking too fast, return at once instead of waiting.'),
-  }, async (square, { body, draft, bell, as, ...options }, control, identity) => {
-    if (draft !== undefined) throw new SquareError('invalid_args', 'Unknown or expired express draft.');
-    if (body === undefined) throw new SquareError('invalid_args', 'Express needs a body or a draft token.');
-    return (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, ...(bell ? { reach: 'bell' } : {}), observe: true }, control);
-  },
+  }, async (square, { body, bell, as, ...options }, control, identity) =>
+    (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, ...(bell ? { reach: 'bell' } : {}), observe: true }, control),
     rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result, undefined, 'tool'))),
   tool('perceive', 'Take in what reached you since you last looked: mentions, replies, bells, and words from those you listen to. What you perceive no longer waits for you; history lets you look back.', {
     as: participant,
@@ -284,14 +213,6 @@ export function squareToolFailure(error: unknown, signal?: AbortSignal): JsonObj
 }
 
 /** Readable failure text with tool-native recovery actions, never raw JSON. */
-export function squareToolFailureText(failure: JsonObject, context: { location?: string; participant?: string; draft?: string } = {}): string {
-  const report = failure as unknown as FailureReport;
-  const lines = renderFailureLines(report, { squarePath: context.location, name: context.participant, surface: 'tool' });
-  if (context.draft !== undefined) {
-    lines.push(`· draft kept in memory: ${context.draft}`);
-    lines.push(report.code === 'behind'
-      ? '· perceive the pending activity, then retry express with only:'
-      : '· correct the problem above, then retry express with only:', `{ "draft": "${context.draft}" }`);
-  }
-  return lines.join('\n');
+export function squareToolFailureText(failure: JsonObject, context: { location?: string; participant?: string } = {}): string {
+  return renderFailureLines(failure as unknown as FailureReport, { squarePath: context.location, name: context.participant, surface: 'tool' }).join('\n');
 }

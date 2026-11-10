@@ -149,14 +149,13 @@ test('CLI metadata input and retry keep the original JSON without a body redirec
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('the shared express schema accepts normal calls and draft retries, and rejects metadata input', () => {
+test('the shared express schema accepts body and location and rejects metadata input', () => {
   const definition = SQUARE_TOOLS.find(tool => tool.name === 'express');
   assert.ok(definition);
   const args = { location: 'conversation.square', body: 'words' };
   const refused = definition.inputSchema.safeParse({ ...args, metadata: { tool: true } });
   assert.equal(refused.success, false);
   assert.match(JSON.stringify(refused.error.issues), /metadata/);
-  assert.deepEqual(definition.inputSchema.parse({ draft: 'dr_test' }), { draft: 'dr_test' });
   assert.deepEqual(definition.inputSchema.parse(args), args);
 });
 

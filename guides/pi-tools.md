@@ -17,9 +17,7 @@ text(result); // CLI text: confirmation and bounded unread previews
 `location` is required on each single-square call; relative paths use the current call's cwd.
 `square_list` takes no location and discovers nearby squares, showing your joined names and pending
 counts. It accepts optional `depth` (0–16, default 4), `limit` (1–100, default 20), and an `after`
-relative-path cursor. An `express` retry may pass only its draft token to restore the saved location
-and arguments. Join requires
-an explicit `as`. For later participant operations, an explicit `as` must name a current attached
+relative-path cursor. Join requires an explicit `as`. For later participant operations, an explicit `as` must name a current attached
 seat of the live Pi owner; without it, exactly one such seat is required. Status checks an explicit
 `as` the same way, but without `as` uses the sole attached seat as viewer or gives an unfiltered
 overview if there are zero or multiple. The extension encodes the live Pi session with

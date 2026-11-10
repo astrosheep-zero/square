@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import Ajv from 'ajv';
 import squarePiExtension from '../plugins/pi/square-pi.js';
 import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
@@ -28,7 +27,7 @@ async function fixture(t, options = {}) {
   const tools = registeredTools();
   const context = (id = 'pi-tools-first', directory = cwd) => ({ cwd: directory, sessionManager: { getSessionId: () => id } });
   const call = async (name, args = {}, ctx = context(), signal) => {
-    const result = await tools.get(`square_${name}`).execute('test', { ...(name !== 'list' && args.draft === undefined ? { location: 'test.square' } : {}), ...args }, signal, undefined, ctx);
+    const result = await tools.get(`square_${name}`).execute('test', { ...(name !== 'list' ? { location: 'test.square' } : {}), ...args }, signal, undefined, ctx);
     assert.equal(result.structuredContent, undefined);
     assert.equal(result.content.length, 1);
     assert.equal(result.content[0].type, 'text');
@@ -55,7 +54,7 @@ test('Pi registers the shared contract as namespaced codemode tools', () => {
     assert.equal(tool.description, shared.description);
     assert.equal(tool.parameters.type, 'object');
     assert.equal(tool.parameters.additionalProperties, false);
-    assert.equal(tool.parameters.required?.includes('location') ?? false, !['list', 'express'].includes(shared.name));
+    assert.equal(tool.parameters.required?.includes('location') ?? false, shared.name !== 'list');
     assert.equal('location' in tool.parameters.properties, shared.name !== 'list');
     assert.equal('session' in tool.parameters.properties, false);
     assert.equal(tool.outputSchema, undefined);
@@ -133,7 +132,6 @@ test('Pi list uses live owner and cwd, while single-square calls require locatio
   const missing = await tools.get('square_express').execute('test', { body: 'no destination' }, undefined, undefined, context());
   assert.equal(missing.isError, true);
   assert.match(missing.content[0].text, /Square needs a location/);
-  assert.doesNotMatch(missing.content[0].text, /draft kept/);
   await call('join', { as: 'rei' });
   await call('join', { as: 'bob' });
   await call('express', { as: 'bob', body: 'for rei', mentions: ['rei'], force: true });
@@ -149,41 +147,6 @@ test('Pi list uses live owner and cwd, while single-square calls require locatio
   assert.match((await call('list', {}, context('pi-tools-first', subdir))).content[0].text, /no squares found/);
   assert.match((await call('perceive', { as: 'rei' })).content[0].text, /for rei/);
   assert.doesNotMatch((await call('list')).content[0].text, /waiting/);
-});
-
-test('Pi retains a blocked express in memory and retries only by draft token', async (t) => {
-  const { cwd, squarePath, tools, context, call } = await fixture(t);
-  const validate = new Ajv({ strict: false }).compile(tools.get('square_express').parameters);
-  await call('join', { as: 'rei' });
-  await call('join', { as: 'bob' });
-  await call('express', { as: 'bob', body: 'question for rei', mentions: ['rei'] });
-  const realNow = Date.now;
-  Date.now = () => realNow() + 100_000;
-  t.after(() => { Date.now = realNow; });
-  const body = 'Pi keeps this exact body without writing it to disk';
-  const refused = await call('express', { as: 'rei', body, reply: 'act/2', mentions: ['bob'] });
-  assert.equal(refused.isError, true);
-  assert.match(refused.content[0].text, /your words stay unsent/);
-  const token = refused.content[0].text.match(/draft kept in memory: (dr_\S+)/)?.[1];
-  assert.ok(token, refused.content[0].text);
-  assert.equal(validate({ draft: token }), true, JSON.stringify(validate.errors));
-  assert.equal(fs.existsSync(path.join(cwd, 'drafts')), false);
-  const foreign = await call('express', { draft: token }, context('another-session'));
-  assert.equal(foreign.isError, true);
-  assert.match(foreign.content[0].text, /Unknown, expired, or inaccessible/);
-  await call('perceive', { as: 'rei' });
-  const retry = await call('express', { draft: token });
-  assert.equal(retry.isError, undefined, retry.content[0].text);
-  const history = await call('history', { limit: 10 });
-  assert.match(history.content[0].text, /Pi keeps this exact body without writing it to disk/);
-  const square = await Square.at({ path: squarePath });
-  try {
-    const landed = (await square.history({ limit: 1, order: 'desc' })).activities[0];
-    assert.equal(landed.body, body);
-    assert.deepEqual(landed.mentions, ['bob']);
-    assert.equal(landed.reply, 'act/2');
-  } finally { await square.close(); }
-  assert.equal((await call('express', { draft: token })).isError, true);
 });
 
 test('Pi cancellation reaches a waiting operation without landing its body', async (t) => {

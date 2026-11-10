@@ -93,7 +93,7 @@ test('MCP tools validate JSON arguments and return only CLI text', async () => {
     ]);
     for (const tool of tools) {
       assert.equal(tool.outputSchema, undefined);
-      assert.equal(tool.inputSchema.required?.includes('location') ?? false, !['list', 'express'].includes(tool.name));
+      assert.equal(tool.inputSchema.required?.includes('location') ?? false, tool.name !== 'list');
       assert.equal('location' in tool.inputSchema.properties, tool.name !== 'list');
     }
     for (const name of ['join', 'perceive', 'history', 'listen', 'unlisten', 'ignore', 'done', 'status']) {
@@ -101,8 +101,7 @@ test('MCP tools validate JSON arguments and return only CLI text', async () => {
     }
     const missingLocation = await client.callTool({ name: 'express', arguments: { body: 'no location' } });
     assert.equal(missingLocation.isError, true);
-    assert.match(missingLocation.content[0].text, /Square needs a location/);
-    assert.doesNotMatch(missingLocation.content[0].text, /draft kept/);
+    assert.match(missingLocation.content[0].text, /expected string.*at location/);
     for (const [name, field] of [['perceive', 'limit'], ['history', 'limit'], ['history', 'context']]) {
       const result = await client.callTool({ name, arguments: { location: squarePath, [field]: 101 } });
       assert.equal(result.isError, true);
@@ -166,51 +165,6 @@ test('MCP list discovers without location and shows only the caller’s joined s
       assert.equal((await client.callTool({ name: 'list', arguments: arguments_ })).isError, true);
     }
   } finally { await square.close(); }
-});
-
-test('MCP retries an unsent express from an in-memory draft without repeating its arguments', async (t) => {
-  let now = Date.now();
-  t.mock.method(Date, 'now', () => now);
-  const { cwd, squarePath, env, body: owner } = await fixture();
-  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
-  const { client, close } = await connectedClient(createSquareMcpServer({ cwd, env, owner }));
-  try {
-    await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'rei' } });
-    await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'bob' } });
-    const question = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'bob', body: 'question for rei', mentions: ['rei'] } });
-    assert.equal(question.isError, undefined);
-    now += 100_000;
-    const body = 'a long answer that the model must not need to repeat\nwith every original option intact';
-    const refused = await client.callTool({ name: 'express', arguments: {
-      location: squarePath, as: 'rei', body, mentions: ['bob'], reply: 'act/2', noMention: true,
-    } });
-    assert.equal(refused.isError, true);
-    assert.match(refused.content[0].text, /your words stay unsent/);
-    assert.match(refused.content[0].text, /perceive the pending activity/);
-    const token = refused.content[0].text.match(/draft kept in memory: (dr_\S+)/)?.[1];
-    assert.ok(token, refused.content[0].text);
-    assert.doesNotMatch(refused.content[0].text, /a long answer/);
-    assert.equal(fs.existsSync(path.join(cwd, 'drafts')), false);
-
-    const foreign = await client.callTool({ name: 'express', arguments: { draft: token }, _meta: { threadId: 'foreign' } });
-    assert.equal(foreign.isError, true);
-    assert.match(foreign.content[0].text, /Unknown, expired, or inaccessible/);
-    await client.callTool({ name: 'perceive', arguments: { location: squarePath, as: 'rei' } });
-    const retry = await client.callTool({ name: 'express', arguments: { draft: token } });
-    assert.equal(retry.isError, undefined, retry.content[0].text);
-    const history = await client.callTool({ name: 'history', arguments: { location: squarePath, limit: 10 } });
-    assert.match(history.content[0].text, /a long answer that the model must not need to repeat/);
-    const square = await Square.at({ path: squarePath });
-    try {
-      const landed = (await square.history({ limit: 1, order: 'desc' })).activities[0];
-      assert.equal(landed.body, body);
-      assert.deepEqual(landed.mentions, ['bob']);
-      assert.equal(landed.reply, 'act/2');
-    } finally { await square.close(); }
-    const consumed = await client.callTool({ name: 'express', arguments: { draft: token } });
-    assert.equal(consumed.isError, true);
-    assert.match(consumed.content[0].text, /Unknown, expired, or inaccessible/);
-  } finally { await close(); }
 });
 
 test('one MCP server accepts per-call participants without a configured default', async () => {
