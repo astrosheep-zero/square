@@ -6,9 +6,10 @@ import { midLineHeight } from "../shared/text-layout.ts";
 
 const presentation: CardPresentation = { kind: "presentation", origin: "design", at: 0, reach: "attention", body: "hi" };
 
-test("presentations require a finite landing time and a known reach", () => {
+test("presentations reject malformed landing time or reach, yet accept cards that predate them", () => {
   assert.ok(isCardPresentation(presentation));
-  for (const changed of [{ at: undefined }, { at: NaN }, { at: Infinity }, { reach: undefined }, { reach: "other" }]) {
+  assert.ok(isCardPresentation({ ...presentation, at: undefined, reach: undefined }));
+  for (const changed of [{ at: NaN }, { at: Infinity }, { reach: "other" }]) {
     assert.equal(isCardPresentation({ ...presentation, ...changed }), false);
   }
 });

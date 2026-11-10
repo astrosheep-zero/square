@@ -4,8 +4,9 @@ export type CardPresentation = {
   readonly origin: string;
   readonly author?: string;
   readonly ref?: string;
-  readonly at: number;
-  readonly reach: 'mention' | 'reply' | 'attention' | 'bell';
+  /** Absent on cards produced before landing time and reach were recorded. */
+  readonly at?: number;
+  readonly reach?: 'mention' | 'reply' | 'attention' | 'bell';
   readonly body: string;
 };
 
@@ -13,7 +14,7 @@ export function isCardPresentation(value: unknown): value is CardPresentation {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
   return item.kind === 'presentation' && typeof item.origin === 'string' && typeof item.body === 'string'
-    && typeof item.at === 'number' && Number.isFinite(item.at)
-    && ['mention', 'reply', 'attention', 'bell'].includes(item.reach as string)
+    && (item.at === undefined || (typeof item.at === 'number' && Number.isFinite(item.at)))
+    && (item.reach === undefined || ['mention', 'reply', 'attention', 'bell'].includes(item.reach as string))
     && ['author', 'ref'].every(key => item[key] === undefined || typeof item[key] === 'string');
 }

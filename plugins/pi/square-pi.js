@@ -85,7 +85,7 @@ export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
     return {
       markdown: new Markdown(source, 0, 0, markdownTheme(theme), { color: bodyColor }),
       guide: fg(theme, label ? 'warning' : 'borderMuted')('│ '),
-      time: structured ? timeLabel(item.at, now, true) : '',
+      time: structured && item.at !== undefined ? timeLabel(item.at, now, true) : '',
     };
   });
   const timeWidth = Math.max(0, ...messages.map(item => visibleWidth(item.time)));

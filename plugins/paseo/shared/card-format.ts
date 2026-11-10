@@ -1,6 +1,6 @@
 import type { CardPresentation } from "./card-presentation.ts";
 
-export function reachLabel(reach: CardPresentation["reach"]): string | undefined {
+export function reachLabel(reach?: CardPresentation["reach"]): string | undefined {
   return reach === "mention" ? "@you" : reach === "attention" ? undefined : reach;
 }
 

@@ -60,21 +60,22 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
     setExpanded(value => !value);
   };
 
-  return <View style={{ backgroundColor: surface1, borderWidth: palette.card.borderWidth,
-    borderColor: border, borderRadius: palette.card.borderRadius, paddingVertical: 9, paddingHorizontal: 12 }}>
-    <Pressable disabled={!overflows} onPress={toggle}
-      accessibilityRole={overflows ? "button" : undefined}
-      accessibilityLabel={overflows ? `${open ? "Collapse" : "Expand"} ${originName}` : originName}
-      accessibilityState={overflows ? { expanded: open } : undefined}
-      onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
-      style={{ flexDirection: "row", alignItems: "center", gap: 7, height: 16 }}>
+  // The whole card toggles, as before; short cards have nothing to toggle.
+  return <Pressable disabled={!overflows} onPress={toggle}
+    accessibilityRole={overflows ? "button" : undefined}
+    accessibilityLabel={overflows ? `${open ? "Collapse" : "Expand"} ${originName}` : originName}
+    accessibilityState={overflows ? { expanded: open } : undefined}
+    onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
+    style={{ backgroundColor: surface1, borderWidth: palette.card.borderWidth,
+      borderColor: border, borderRadius: palette.card.borderRadius, paddingVertical: 9, paddingHorizontal: 12 }}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 7, height: 16 }}>
       <View style={{ width: 5, height: 5, backgroundColor: accent }} />
       <Text numberOfLines={1} style={{ color: muted, fontSize: 11, fontWeight: "500", flexShrink: 1 }}>{originName}</Text>
       {entries.length > 1 && <Text style={{ color: detail, fontSize: 11 }}>{entries.length} messages</Text>}
       <View style={{ flex: 1 }} />
       {!!refs && <Text numberOfLines={1} style={{ color: detail, fontSize: 11, fontVariant: ["tabular-nums"], flexShrink: 1 }}>{refs}</Text>}
       {overflows && <Icon name={open ? "ChevronUp" : "ChevronDown"} size={10} color={detail} />}
-    </Pressable>
+    </View>
     <View style={{ marginTop: 8, marginLeft: 2, height, maxHeight: height ?? COLLAPSED_HEIGHT, overflow: "hidden" }}>
       <ScrollView ref={scroll} style={height === undefined ? undefined : { height }} scrollEnabled={open} nestedScrollEnabled
         showsVerticalScrollIndicator={false} scrollEventThrottle={16}
@@ -92,7 +93,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
                 paddingLeft: palette.quote.paddingLeft, marginTop: index > 0 ? 8 : 0 }}>
                 <SquareMarkdownBody text={structured ? entry.body : entry.text} palette={palette}
                   author={structured ? entry.author : undefined} reach={reach}
-                  time={structured ? timeLabel(entry.at) : undefined} />
+                  time={structured && entry.at !== undefined ? timeLabel(entry.at) : undefined} />
               </View>;
             })}
           </View>
@@ -101,5 +102,5 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
       {fade && <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, bottom: 0,
         height: open ? 26 : 22, ...gradient(`linear-gradient(${withAlpha(surface1, 0)}, ${surface1})`) }} />}
     </View>
-  </View>;
+  </Pressable>;
 }
