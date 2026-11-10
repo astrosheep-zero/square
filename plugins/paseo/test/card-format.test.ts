@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { cardReferences, reachLabel, timeLabel } from "../shared/card-format.ts";
 import { isCardPresentation, type CardPresentation } from "../shared/card-presentation.ts";
-import { midLineHeight } from "../shared/text-layout.ts";
+import { wholeLineHeight } from "../shared/text-layout.ts";
 
 const presentation: CardPresentation = { kind: "presentation", origin: "design", at: 0, reach: "attention", body: "hi" };
 
@@ -38,11 +38,7 @@ test("references merge contiguous activities without implying gaps or mixing ori
     "design act/14–15, jobs act/16");
 });
 
-test("clipping selects a text line before the limit even when the limit falls in whitespace", () => {
-  const lines = [{ top: 0, height: 20 }, { top: 27, height: 18 }, { top: 100, height: 20 }];
-  const cut = midLineHeight(lines, 90)!;
-  const line = lines.find(line => cut > line.top && cut < line.top + line.height);
-  assert.ok(line);
-  assert.equal(line, lines[1]);
-  assert.ok(cut <= 90);
+test("clipping ends after the last whole text line, even when the limit falls in whitespace", () => {
+  const lines = [{ top: 0, height: 20 }, { top: 27, height: 18 }, { top: 70, height: 20 }, { top: 100, height: 20 }];
+  assert.equal(wholeLineHeight(lines, 80), 45);
 });

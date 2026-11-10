@@ -35,10 +35,9 @@ containing Square tags is ordinary content.
 
 Both states share the same Markdown and one 32,000 UTF-16-unit display budget,
 including omission lines. Long bodies retain their beginning and end without splitting
-surrogate pairs. The collapsed window shows up to 4.5 body lines and ends within a
-measured text line, with a bottom fade. Expansion moves only the bottom edge, up to
-260px, then scrolls internally; the fade disappears at the end. Short content has no
-chevron, fade or expansion action. Plain or malformed details use bounded `detail.text`
+surrogate pairs. The collapsed window shows up to 4 body lines and ends after the last
+whole measured text line. Expansion moves only the bottom edge, up to 260px, then
+scrolls internally. Short content has no chevron or expansion action. Plain or malformed details use bounded `detail.text`
 with a neutral heading. Rendering never fetches producer storage or marks activity seen.
 Live events and fetched history use the same transformer, and model input is unchanged.
 
