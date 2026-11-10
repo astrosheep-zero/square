@@ -6,7 +6,7 @@ select text, or copy it in full. The card follows the active Paseo theme on
 desktop and mobile.
 
 Requires Paseo 0.11.2 or newer with custom-message tool rows (#6090). Structured messages
-carry producer-neutral origin, author, reference, badge and full body details. Plain messages and
+carry producer-neutral origin, author, reference, landing time, reach and full body details. Plain messages and
 joining context use a neutral notification heading.
 
 The plugin changes presentation only. It does not send prompts or alter model

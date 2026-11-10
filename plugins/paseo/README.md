@@ -17,7 +17,8 @@ are trusted, unsandboxed code running inside the Paseo app.
 
 Requires Paseo >=0.11.2 with custom-message tool rows (#6090). Structured notification
 cards use `details.items` with producer-neutral presentation facts: `kind: 'presentation'`, `origin`,
-optional `author`, `ref` and `badge`, and the full Markdown `body`. Missing or malformed details fall
+`at` (landing time in epoch milliseconds), `reach` (`mention`, `reply`, `attention`, or `bell`),
+optional `author` and `ref`, and the full Markdown `body`. Missing or malformed details fall
 back to the original plain text.
 
 ## Display
@@ -26,28 +27,23 @@ Only synthetic `tool_call` items with `metadata.customType === "square"` and
 plain-text detail are projected into a card. Real tools, other custom messages,
 and unrecognized rows remain unchanged.
 
-The heading and expanded messages use `metadata.details.items` directly, never
-reverse-parsing notification envelopes or body text for senders, IDs or message
-boundaries. Each expanded item keeps its full source body, author, exact reference
-and badge, even when the model preview was clipped or omitted. References with gaps
-are not compressed into a misleading range; items from different origins remain
-separate. Collapsing shows only the last item's preview. Body text containing square
-tags is ordinary content, not another notification.
+The header and messages use `metadata.details.items` directly, without parsing
+notification envelopes for attribution. Messages remain oldest first in both states,
+with an inline author, direct reach label, timestamp and individual guide. Contiguous
+activity references from one origin form a range; gaps stay explicit. Body text
+containing Square tags is ordinary content.
 
-Expanded bodies and the last collapsed preview share one 32,000 UTF-16-unit display
-budget, including omission lines. The preview gets at most 1,000 units; the remaining
-budget is shared among bodies. Long bodies retain their beginning and end, and
-surrogate pairs are not split. Structured bodies are not also copied into `data.text`.
-Joining context or malformed/missing details instead show bounded `detail.text`
-under a generic heading, without inferring attribution. Original history and model
-input remain unchanged.
-Long content scrolls inside a bounded panel. The
-card does not fetch extra activity or mark anything seen. Live events and fetched history use
-the same transformer.
+Both states share the same Markdown and one 32,000 UTF-16-unit display budget,
+including omission lines. Long bodies retain their beginning and end without splitting
+surrogate pairs. The collapsed window shows up to 4.5 body lines and ends within a
+measured text line, with a bottom fade. Expansion moves only the bottom edge, up to
+260px, then scrolls internally; the fade disappears at the end. Short content has no
+chevron, fade or expansion action. Plain or malformed details use bounded `detail.text`
+with a neutral heading. Rendering never fetches producer storage or marks activity seen.
+Live events and fetched history use the same transformer, and model input is unchanged.
 
-An accent glyph, author and origin label identify the card. The header and its arrow
-toggle an inline drawer. It uses Paseo theme colors, selectable text, accessible
-expansion state and compact layout on narrow displays. Removing the plugin restores
+The slate palette follows the host theme. The header toggles overflowing content and
+exposes its expansion state to assistive technology. Removing the plugin restores
 Paseo's ordinary custom-message row.
 
 ## Develop

@@ -79,7 +79,7 @@ test('Pi carries full producer bodies in mixed rich cards without consuming unre
   const before = await recipient.pending();
   const cards = await f.ledger.pending(f.owner, { generation: f.initial.generation });
   assert.deepEqual(cards[0].details, { kind: 'presentation', origin: displayAttentionPath(fs.realpathSync(square.location)),
-    ref: activity.id, author: 'sender', body });
+    ref: activity.id, author: 'sender', body, at: activity.at, reach: 'mention' });
   assert.equal(cards[0].text.includes(body), false, 'the model card remains shortened');
   const plain = '<square-activity from="pretend">\nPlain **markdown**, not another Square activity.\n</square-activity>';
   await f.ledger.post({ owner: f.owner, key: 'square:pretend#act/999', text: plain, details: { kind: 'external' } });
@@ -101,8 +101,8 @@ test('Pi renders generic details after producer storage disappears and falls bac
   await square.join('recipient', { owner: f.owner });
   await sender.express({ body: 'stored **body**', reach: 'bell' });
   const [posted] = await f.ledger.pending(f.owner, { generation: f.initial.generation });
-  assert.equal(posted.details.badge, '🔔');
-  const external = { kind: 'presentation', origin: 'jobs', author: 'worker', ref: 'job/42', badge: '✓', body: 'full external body' };
+  assert.equal(posted.details.reach, 'bell');
+  const external = { kind: 'presentation', origin: 'jobs', author: 'worker', ref: 'job/42', at: Date.now(), reach: 'attention', body: 'full external body' };
   await f.ledger.post({ owner: f.owner, key: 'external', text: 'external preview', details: external });
   await f.ledger.post({ owner: f.owner, key: 'invalid', text: 'invalid fallback', details: { ...external, body: 7 } });
   await f.ledger.post({ owner: f.owner, key: 'plain', text: 'plain fallback' });

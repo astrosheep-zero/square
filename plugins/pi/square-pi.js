@@ -1,4 +1,5 @@
-import { Box, Markdown, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
+import { Box, Markdown, stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
+import { cardReferences, reachLabel, timeLabel } from '../../dist/card-format.js';
 import { z } from 'zod/v4';
 
 import { Square, discover } from '../../dist/square-api.js';
@@ -25,81 +26,99 @@ function markdownTheme(theme) {
     heading: color('mdHeading'), link: color('mdLink'), linkUrl: color('mdLinkUrl'), code: color('mdCode'),
     codeBlock: color('mdCodeBlock'), codeBlockBorder: color('mdCodeBlockBorder'), quote: color('mdQuote'),
     quoteBorder: color('mdQuoteBorder'), hr: color('mdHr'), listBullet: color('mdListBullet'),
-    bold: style(theme, 'bold'), italic: (text) => fg(theme, 'muted')(style(theme, 'italic')(text)),
+    // The inline parser has already applied the body foreground; let muted win without dropping bold/link styles.
+    bold: style(theme, 'bold'), italic: (text) => fg(theme, 'muted')(style(theme, 'italic')(
+      text.replace(/\x1b\[(?:38;[\d;]+|3[0-79]|9[0-7])m/g, ''))),
     underline: style(theme, 'underline'), strikethrough: style(theme, 'strikethrough'),
   };
 }
 
-/** Keep the short references; the long origin is the part that may ellipsize. */
+/** Keep references intact before spending the remaining columns on the origin. */
 function cardHeader(left, right, width) {
-  if (!right) return truncateToWidth(left, width);
+  if (!right) return truncateToWidth(left, width, '…');
   const rightWidth = visibleWidth(right);
-  if (rightWidth + 4 >= width) return truncateToWidth(left, width);
+  if (rightWidth + 4 >= width) return truncateToWidth(right, width, '…');
   const leftWidth = width - rightWidth - 2;
-  return `${truncateToWidth(left, leftWidth)}${' '.repeat(width - Math.min(visibleWidth(left), leftWidth) - rightWidth)}${right}`;
+  const label = truncateToWidth(left, leftWidth, '…');
+  return `${label}${' '.repeat(width - visibleWidth(label) - rightWidth)}${right}`;
 }
 
 const escapeMarkdown = text => text.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, '\\$&');
 const shortOrigin = origin => origin.split(/[\\/]/).filter(Boolean).at(-1) || origin;
 
-/** The same quiet quote guide in collapsed and expanded states. */
-function guidedMarkdown(text, theme, { preview = false, lead } = {}) {
-  const source = lead ? `**${escapeMarkdown(lead)}** ${text}` : text;
-  const markdown = new Markdown(source, 0, 0, markdownTheme(theme), { color: fg(theme, 'customMessageText') });
-  const guide = fg(theme, 'mdQuoteBorder')('│ ');
+/** A final fence also covers very narrow terminals and Markdown tables/code. */
+function bounded(component) {
   return {
-    invalidate() { markdown.invalidate(); },
-    render(width) {
-      const contentWidth = Math.max(1, width - 2);
-      let lines = markdown.render(contentWidth);
-      if (preview) {
-        const visible = lines.filter(line => line.trim() !== '');
-        const clipped = visible.length > 2 || text.length >= 1_000;
-        lines = visible.slice(0, 2);
-        if (clipped && lines.length) lines[lines.length - 1] = truncateToWidth(`${lines.at(-1).trimEnd()}${fg(theme, 'dim')('…')}`, contentWidth);
-      }
-      return lines.map(line => guide + line);
-    },
+    invalidate() { component.invalidate?.(); },
+    render(width) { return component.render(Math.max(1, width)).map(line => truncateToWidth(line, Math.max(0, width), '…')); },
   };
 }
 
-/** People get the producer's display facts, never the model-facing reminder envelope. */
+/** Human display only: model-facing content and delivery receipts are independent. */
 export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
   if (typeof message.content !== 'string') return undefined;
   const items = message.details?.items;
   if (!Array.isArray(items) || items.length === 0
     || items.some(item => !isCardPresentation(item) && typeof item?.text !== 'string')) {
-    return new Markdown(message.content, outputPad, 0, markdownTheme(theme));
+    return bounded(new Markdown(message.content, outputPad, 0, markdownTheme(theme)));
   }
   const presentations = items.filter(isCardPresentation);
-  const authors = [...new Set(presentations.flatMap(item => item.author === undefined ? [] : [item.author]))];
   const origins = [...new Set(presentations.map(item => item.origin))];
   const originName = origins.map(shortOrigin).join(', ') || 'Notification';
-  const badge = presentations.at(-1)?.badge;
-  const byline = [authors.join(', '), badge].filter(Boolean).join(' · ');
-  const refs = presentations.flatMap(item => item.ref === undefined ? []
-    : [origins.length > 1 ? `${shortOrigin(item.origin)} ${item.ref}` : item.ref]).join(', ');
-  const trailing = [refs, presentations.length > 1 ? String(presentations.length) : undefined].filter(Boolean).join(' · ');
+  const refs = cardReferences(presentations, shortOrigin);
+  const count = items.length > 1 ? fg(theme, 'dim')(`  ${items.length} messages`) : '';
+  const left = `${fg(theme, 'accent')('■')} ${fg(theme, 'muted')(originName)}${count}`;
+  const now = Date.now();
+  const bodyColor = fg(theme, 'customMessageText');
+  // Restore the body color after each styled attribution inside the Markdown source.
+  const bodyPrefix = bodyColor('\0').split('\0')[0];
+  const messages = items.map(item => {
+    const structured = isCardPresentation(item);
+    const label = structured ? reachLabel(item.reach) : undefined;
+    const name = structured && item.author !== undefined
+      ? fg(theme, 'accent')(style(theme, 'bold')(escapeMarkdown(item.author))) : '';
+    const lead = [name, label ? fg(theme, 'warning')(label) : ''].filter(Boolean).join(`${bodyPrefix} `);
+    const body = structured ? item.body : item.text;
+    // Block Markdown keeps its own first row when there is no paragraph to run into.
+    const block = /^(?: {0,3})(?:`{3}|~{3}|#{1,6}\s|>|[-+*]\s|\d+[.)]\s|\|)/.test(body);
+    const source = lead ? `${lead}${bodyPrefix}${block ? '\n\n' : ' '}${body}` : body;
+    return {
+      markdown: new Markdown(source, 0, 0, markdownTheme(theme), { color: bodyColor }),
+      guide: fg(theme, label ? 'warning' : 'borderMuted')('│ '),
+      time: structured ? timeLabel(item.at, now, true) : '',
+    };
+  });
+  const timeWidth = Math.max(0, ...messages.map(item => visibleWidth(item.time)));
+  const gutter = timeWidth ? timeWidth + 2 : 0;
   const box = new Box(outputPad, 1, text => theme.bg?.('customMessageBg', text) ?? text);
-  const left = `${fg(theme, 'accent')('■')} ${style(theme, 'bold')(originName)}${byline ? fg(theme, 'muted')(` · ${byline}`) : ''}`;
-  const right = trailing ? fg(theme, 'dim')(trailing) : '';
-  box.addChild({ invalidate() {}, render(width) { return [cardHeader(left, right, width)]; } });
-  const bodyOf = item => isCardPresentation(item) ? item.body : item.text;
-  if (!expanded) {
-    const body = bodyOf(items.at(-1));
-    if (body.trim()) box.addChild(guidedMarkdown(body.slice(0, 1_000).replace(/[\uD800-\uDBFF]$/, ''), theme, { preview: true }));
-    return box;
-  }
-  for (const [index, item] of items.entries()) {
-    if (index > 0) box.addChild({
-      invalidate() {},
-      render(width) { return [`${fg(theme, 'mdQuoteBorder')('│ ')}${fg(theme, 'borderMuted')('─'.repeat(Math.max(1, width - 2)))}`]; },
-    });
-    box.addChild(guidedMarkdown(bodyOf(item), theme, {
-      lead: authors.length > 1 && isCardPresentation(item) ? item.author : undefined,
-    }));
-  }
-  return box;
+  box.addChild({
+    invalidate() { for (const item of messages) item.markdown.invalidate(); },
+    render(width) {
+      const bodyWidth = Math.max(1, width - 2 - gutter);
+      const lines = messages.flatMap(item => {
+        const body = item.markdown.render(bodyWidth);
+        // An empty activity can still carry attribution/time.
+        if (body.length === 0 && item.time) body.push('');
+        return body.map((words, index) => ({ guide: item.guide, words, time: index === 0 ? item.time : '' }));
+      });
+      const rows = expanded ? lines : lines.filter(line => stripTerminalSequences(line.words).trim() !== '');
+      const hidden = expanded ? 0 : Math.max(0, rows.length - 4);
+      const visible = (hidden ? rows.slice(0, 4) : rows).map((line, index) => {
+        let words = truncateToWidth(line.words, bodyWidth, '…');
+        if (hidden && index === 3) {
+          words = truncateToWidth(line.words, Math.max(0, bodyWidth - 1), '');
+          words = truncateToWidth(words, visibleWidth(stripTerminalSequences(words).trimEnd()), '') + fg(theme, 'dim')('…');
+        }
+        const time = line.time
+          ? ' '.repeat(Math.max(2, width - 2 - visibleWidth(words) - visibleWidth(line.time))) + fg(theme, 'dim')(line.time)
+          : '';
+        return truncateToWidth(line.guide + words + time, width, '…');
+      });
+      if (hidden) visible.push(truncateToWidth(fg(theme, 'dim')(`  +${hidden} ${hidden === 1 ? 'line' : 'lines'}`), width, '…'));
+      return [cardHeader(left, fg(theme, 'dim')(refs), width), ...visible];
+    },
+  });
+  return bounded(box);
 }
 
 export default function squarePiExtension(pi) {

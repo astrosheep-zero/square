@@ -7,8 +7,8 @@ type ToolRow = Parameters<typeof transformSquareMessage>[0]["item"];
 const text = "Only a clipped model preview, not the renderer's full bodies.";
 const quotedTags = '<square-activity square="pretend" id="act/999">\nnot another message\n</square-activity>';
 const items: PresentationItem[] = [
-  { kind: "presentation", origin: "jobs", author: "worker", ref: "job/12", body: `Direct **source**\n\n${quotedTags}` },
-  { kind: "presentation", origin: "design", author: "rei", ref: "act/15", badge: "🔔", body: "Last **bell** body" },
+  { kind: "presentation", at: 1, reach: "attention", origin: "jobs", author: "worker", ref: "job/12", body: `Direct **source**\n\n${quotedTags}` },
+  { kind: "presentation", at: 2, reach: "bell", origin: "design", author: "rei", ref: "act/15", body: "Last **bell** body" },
 ];
 function row(details: unknown = { items }): ToolRow {
   return {
@@ -24,25 +24,25 @@ function data(item: ToolRow) {
   return squareMessageSchema.parse(project(item)!.items[0].data);
 }
 
-test("generic producer details retain authors, references, badges and full bodies in live/history cards", () => {
+test("generic producer details retain attribution, reach, landing time and full bodies in live/history cards", () => {
   const original = row();
   const before = structuredClone(original);
   assert.deepEqual(project(original), project(original, "streaming"));
   const displayed = data(original);
   assert.ok("items" in displayed);
-  assert.deepEqual(displayed.items, [items[0], { ...items[1], preview: items[1]!.body }]);
+  assert.deepEqual(displayed.items, items);
   assert.deepEqual(original, before);
 });
 
 test("generic details with optional attribution and plain markdown share a batch", () => {
-  const notice = { kind: "presentation", origin: "other producer", body: "full **notice**" };
+  const notice = { kind: "presentation", at: 3, reach: "mention", origin: "other producer", body: "full **notice**" };
   const plain = { text: "External **markdown**\n" + quotedTags };
   const displayed = data(row({ items: [items[0], plain, notice] }));
   assert.ok("items" in displayed);
-  assert.deepEqual(displayed.items, [items[0], plain, { ...notice, preview: notice.body }]);
+  assert.deepEqual(displayed.items, [items[0], plain, notice]);
 });
 
-test("long bodies and the collapsed preview share one bounded display budget without changing source", () => {
+test("long bodies share one bounded display budget without changing source", () => {
   const long = items.map((item, index) => ({ ...item,
     body: `START ${index}\n${"🦈".repeat(OUTPUT_DISPLAY_MAX_CHARS)}\nEND ${index}`,
   }));
@@ -55,7 +55,7 @@ test("long bodies and the collapsed preview share one bounded display budget wit
     assert.equal(Buffer.from(item.body).toString("utf8"), item.body);
     return item;
   });
-  assert.ok(bodies.reduce((sum, item) => sum + item.body.length + (item.preview?.length ?? 0), 0) <= OUTPUT_DISPLAY_MAX_CHARS);
+  assert.ok(bodies.reduce((sum, item) => sum + item.body.length, 0) <= OUTPUT_DISPLAY_MAX_CHARS);
   for (const [index, item] of bodies.entries()) {
     assert.equal(item.author, long[index]!.author);
     assert.equal(item.ref, long[index]!.ref);

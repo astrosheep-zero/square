@@ -116,7 +116,7 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
         const result = await ledger.post({ owner: post.owner, key: squarePostKey(location, post), text: rendered.text,
           ...(post.kind === 'activity' ? { details: { kind: 'presentation', origin: displayAttentionPath(location),
             ref: formatActivityId(post.index), author: post.from, body: post.body ?? '',
-            ...(post.route === 'bell' ? { badge: '🔔' } : {}) } satisfies CardPresentation } : {}),
+            at: post.at, reach: post.route! } satisfies CardPresentation } : {}),
         }, signal);
         posted = ['posted', 'duplicate', 'suppressed'].includes(result.status);
         knownUnsent = !posted;

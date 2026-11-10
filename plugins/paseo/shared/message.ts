@@ -3,12 +3,10 @@ import { isCardPresentation, type CardPresentation } from "./card-presentation.t
 
 /** Aggregate client display budget, including omission lines; source history stays unchanged. */
 export const OUTPUT_DISPLAY_MAX_CHARS = 32_000;
-export const COLLAPSED_PREVIEW_MAX_CHARS = 1_000;
 export function outputPreview(text: string, maxChars = OUTPUT_DISPLAY_MAX_CHARS): string {
   if (maxChars <= 0) return "";
   if (text.length <= maxChars) return text;
   const middle = "\n\n… Showing the beginning and end; the middle is hidden in this preview. …\n\n";
-  // Even a small share of a multi-message budget must fit, without splitting a surrogate pair.
   if (maxChars <= middle.length) return text.slice(0, maxChars - 1).replace(/[\uD800-\uDBFF]$/, "") + "…";
   const headChars = Math.floor((maxChars - middle.length) / 2);
   const head = text.slice(0, headChars).replace(/[\uD800-\uDBFF]$/, "");
@@ -16,13 +14,10 @@ export function outputPreview(text: string, maxChars = OUTPUT_DISPLAY_MAX_CHARS)
   return head + middle + tail;
 }
 
-/** Receiver display facts, with a bounded preview derived on the client. */
-const presentationItemSchema = z.custom<CardPresentation>(isCardPresentation)
-  .and(z.object({ preview: z.string().optional() }));
+const presentationItemSchema = z.custom<CardPresentation>(isCardPresentation);
 export const squareCardDetailsSchema = z.object({
   items: z.array(z.union([presentationItemSchema, z.object({ text: z.string() })])).min(1),
 });
-
 export const squareMessageSchema = z.union([
   squareCardDetailsSchema,
   z.object({ text: z.string() }),

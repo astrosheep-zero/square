@@ -1,88 +1,105 @@
 import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
-import { useMemo, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
-import { COLLAPSED_PREVIEW_MAX_CHARS, outputPreview, type SquareMessageData } from "../shared/message";
-import { MONO, SquareInline, SquareMarkdownBody } from "./markdown";
-import { squarePalette } from "./palette";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Platform, Pressable, ScrollView, Text, View } from "react-native";
+import { cardReferences, reachLabel, timeLabel } from "../shared/card-format";
+import type { SquareMessageData } from "../shared/message";
+import { midLineHeight, type TextLine } from "../shared/text-layout";
+import { SquareMarkdownBody } from "./markdown";
+import { squarePalette, withAlpha } from "./palette";
+import { LineMeasurement, webTextLines } from "./text-layout";
 
-/**
- * A matte slate slip in the timeline's shared 4px-corner family: square seal ■,
- * thin quote guide under the header.
- * Header (both states): ■ origin · authors … refs · how many.
- * Collapsed: two preview lines. Expanded: the whole scene, at full width.
- * Each structured message keeps its own author, reference and body.
- */
+const COLLAPSED_HEIGHT = 4.5 * 20;
+const EXPANDED_HEIGHT = 260;
+/** CSS gradient on web; React Native's own backgroundImage on native. */
+const gradient = (image: string) => Platform.OS === "web"
+  ? { backgroundImage: image } as object : { experimental_backgroundImage: image };
+
 export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<SquareMessageData>) {
   const [expanded, setExpanded] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [content, setContent] = useState({ width: 0, height: 0 });
+  const [cut, setCut] = useState<number>();
+  const [scrollY, setScrollY] = useState(0);
+  const root = useRef<View>(null);
+  const scroll = useRef<ScrollView>(null);
+  const lines = useRef(new Map<string, TextLine[]>());
+  const frame = useRef<number | undefined>(undefined);
   const palette = useMemo(() => squarePalette(theme), [theme]);
-  const items = "items" in item.data ? item.data.items : undefined;
-  const text = "text" in item.data ? item.data.text : undefined;
-  const presentations = items?.filter(entry => "origin" in entry);
-  const latest = items?.at(-1);
-  // Keep the source's own line breaks: collapsed and expanded text must wrap alike.
-  const preview = latest && "text" in latest ? outputPreview(latest.text, COLLAPSED_PREVIEW_MAX_CHARS)
-    : latest?.preview ?? text;
-  const authors = [...new Set(presentations?.flatMap(entry => entry.author === undefined ? [] : [entry.author]))];
-  const chorus = authors.length > 1;
-  const origins = [...new Set(presentations?.map(entry => entry.origin))];
-  const originName = origins.join(", ") || "Notification";
-  const badge = presentations?.at(-1)?.badge;
-  // Exact references never imply intervening messages; each origin keeps its own references.
-  const trailing = [presentations?.flatMap(entry => entry.ref === undefined ? []
-    : [origins.length > 1 ? `${entry.origin} ${entry.ref}` : entry.ref]).join(", "),
-    presentations && presentations.length > 1 ? String(presentations.length) : undefined].filter(Boolean).join(" · ");
-  const { accent, border, foreground, foregroundMuted: muted, surface1 } = palette.theme.colors;
-  // On web the header brightens its details under the cursor; touch keeps them quiet.
-  const detail = layout.platform === "web" && hovered ? foreground : muted;
-  const row = { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 };
-  const guide = { marginLeft: 2.5, paddingLeft: palette.quote.paddingLeft, borderLeftWidth: palette.quote.borderLeftWidth, borderLeftColor: palette.quote.borderLeftColor };
+  const entries = useMemo(() => "items" in item.data ? item.data.items : [{ text: item.data.text }], [item.data]);
+  const presentations = entries.filter(entry => "origin" in entry);
+  const originName = [...new Set(presentations.map(entry => entry.origin))].join(", ") || "Notification";
+  const refs = cardReferences(presentations);
+  const remeasure = useCallback(() => {
+    if (frame.current !== undefined) cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(() => {
+      const measuredLines = Platform.OS === "web" && root.current ? webTextLines(root.current) : [...lines.current.values()].flat();
+      setCut(midLineHeight(measuredLines, COLLAPSED_HEIGHT));
+    });
+  }, []);
+  const report = useCallback((id: string, measured: TextLine[]) => {
+    if (measured.length) lines.current.set(id, measured);
+    else lines.current.delete(id);
+    remeasure();
+  }, [remeasure]);
+  useEffect(() => () => { if (frame.current !== undefined) cancelAnimationFrame(frame.current); }, []);
+  const geometry = `${content.width}:${content.height}`;
+  useEffect(remeasure, [geometry, entries, remeasure]);
+  const measurement = useMemo(() => ({ root, geometry, report }), [geometry, report]);
+  const overflows = content.height > COLLAPSED_HEIGHT;
+  const open = overflows && expanded;
+  // Before the first measurement, cap instead of forcing a height so short cards never flash taller.
+  const height = overflows ? (open ? Math.min(content.height, EXPANDED_HEIGHT) : cut ?? COLLAPSED_HEIGHT)
+    : content.height || undefined;
+  const fade = overflows && (!open || scrollY + (height ?? 0) < content.height - 1);
+  const { accent, border, foregroundMuted: muted, surface1 } = palette.theme.colors;
+  const detail = layout.platform === "web" && hovered ? muted : palette.faint;
+  const toggle = () => {
+    scroll.current?.scrollTo({ y: 0, animated: false });
+    setScrollY(0);
+    setExpanded(value => !value);
+  };
 
-  return (
-    <View style={[
-      { backgroundColor: surface1, borderWidth: palette.card.borderWidth, borderColor: border, borderRadius: palette.card.borderRadius, paddingHorizontal: 10, paddingVertical: 7 },
-      layout.platform === "web" && { boxShadow: palette.card.boxShadow },
-    ]}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${expanded ? "收起" : "展开"} ${originName}: ${authors.join(", ") || "Notification"}`}
-        aria-expanded={expanded}
-        onPress={() => setExpanded(value => !value)}
-        onHoverIn={() => setHovered(true)}
-        onHoverOut={() => setHovered(false)}
-        style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
-      >
-        <View style={row}>
-          <View style={{ width: 6, height: 6, borderRadius: palette.seal.borderRadius, backgroundColor: accent }} />
-          <Text numberOfLines={1} style={{ color: foreground, fontSize: 11.5, lineHeight: 17, fontWeight: "600", flex: 1 }}>
-            {originName}
-            {(authors.length > 0 || badge) && (
-              <Text style={{ color: muted, fontWeight: "400", fontSize: 10.5 }}> · {[authors.join(", "), badge].filter(Boolean).join(" · ")}</Text>
-            )}
-          </Text>
-          {trailing !== "" && <Text numberOfLines={1} style={{ color: detail, fontSize: 9.5, fontFamily: MONO, fontVariant: ["tabular-nums"], flexShrink: 1 }}>{trailing}</Text>}
-          <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={10} color={detail} />
-        </View>
-        {!expanded && preview !== undefined && preview !== "" && (
-          <View style={{ ...guide, marginTop: 5 }}>
-            <SquareInline text={preview} theme={palette.theme} numberOfLines={2} lead={chorus && latest && "author" in latest ? latest.author : undefined} />
+  return <View style={{ backgroundColor: surface1, borderWidth: palette.card.borderWidth,
+    borderColor: border, borderRadius: palette.card.borderRadius, paddingVertical: 9, paddingHorizontal: 12 }}>
+    <Pressable disabled={!overflows} onPress={toggle}
+      accessibilityRole={overflows ? "button" : undefined}
+      accessibilityLabel={overflows ? `${open ? "Collapse" : "Expand"} ${originName}` : originName}
+      accessibilityState={overflows ? { expanded: open } : undefined}
+      onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
+      style={{ flexDirection: "row", alignItems: "center", gap: 7, height: 16 }}>
+      <View style={{ width: 5, height: 5, backgroundColor: accent }} />
+      <Text numberOfLines={1} style={{ color: muted, fontSize: 11, fontWeight: "500", flexShrink: 1 }}>{originName}</Text>
+      {entries.length > 1 && <Text style={{ color: detail, fontSize: 11 }}>{entries.length} messages</Text>}
+      <View style={{ flex: 1 }} />
+      {!!refs && <Text numberOfLines={1} style={{ color: detail, fontSize: 11, fontVariant: ["tabular-nums"], flexShrink: 1 }}>{refs}</Text>}
+      {overflows && <Icon name={open ? "ChevronUp" : "ChevronDown"} size={10} color={detail} />}
+    </Pressable>
+    <View style={{ marginTop: 8, marginLeft: 2, height, maxHeight: height ?? COLLAPSED_HEIGHT, overflow: "hidden" }}>
+      <ScrollView ref={scroll} style={height === undefined ? undefined : { height }} scrollEnabled={open} nestedScrollEnabled
+        showsVerticalScrollIndicator={false} scrollEventThrottle={16}
+        onScroll={event => setScrollY(event.nativeEvent.contentOffset.y)}>
+        <LineMeasurement.Provider value={measurement}>
+          <View ref={root} collapsable={false} onLayout={event => {
+            const { width, height } = event.nativeEvent.layout;
+            setContent(previous => previous.width === width && previous.height === height ? previous : { width, height });
+          }}>
+            {entries.map((entry, index) => {
+              const structured = "origin" in entry;
+              const reach = structured ? reachLabel(entry.reach) : undefined;
+              return <View key={index} style={{ borderLeftWidth: 1,
+                borderLeftColor: reach ? palette.directGuide : palette.quote.borderLeftColor,
+                paddingLeft: palette.quote.paddingLeft, marginTop: index > 0 ? 8 : 0 }}>
+                <SquareMarkdownBody text={structured ? entry.body : entry.text} palette={palette}
+                  author={structured ? entry.author : undefined} reach={reach}
+                  time={structured ? timeLabel(entry.at) : undefined} />
+              </View>;
+            })}
           </View>
-        )}
-      </Pressable>
-      {expanded && (
-        <ScrollView style={{ maxHeight: layout.compact ? 280 : 400, marginTop: 5 }} nestedScrollEnabled>
-          <View style={{ ...guide, gap: 7 }}>
-            {items === undefined ? <SquareMarkdownBody text={text ?? ""} theme={palette.theme} /> : items.map((entry, index) => (
-              <View key={index} style={index > 0 ? { paddingTop: 7, borderTopWidth: palette.card.borderWidth, borderTopColor: border } : undefined}>
-                {"text" in entry
-                  ? <SquareMarkdownBody text={entry.text} theme={palette.theme} />
-                  : <SquareMarkdownBody text={entry.body} theme={palette.theme} lead={chorus ? entry.author : undefined} />}
-              </View>
-            ))}
-          </View>
-        </ScrollView>
-      )}
+        </LineMeasurement.Provider>
+      </ScrollView>
+      {fade && <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, bottom: 0,
+        height: open ? 26 : 22, ...gradient(`linear-gradient(${withAlpha(surface1, 0)}, ${surface1})`) }} />}
     </View>
-  );
+  </View>;
 }
