@@ -5,7 +5,7 @@ import { z } from 'zod/v4';
 import { DeliveryLedger, deliveryLedgerLocation, type DeliveryTransport, type TransportOutcome } from './delivery-ledger.js';
 import { retainDeliveryLedger } from './delivery-lifetime.js';
 import { harnessOwner } from './owner.js';
-import { attachDeliverySessionRoutes, detachDeliverySession } from './session-lifecycle.js';
+import { attachDeliverySession, detachDeliverySession } from './session-lifecycle.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from './claude-mcp-context.js';
 import { renderDeliveryReminder } from './delivery-frame.js';
 
@@ -52,10 +52,8 @@ export async function runClaudeMod(
     let receiver = receivers.get(key);
     if ((!receiver || receiver.mode === 'ended') && (mode === 'busy' || mode === 'idle')) {
       const owner = ownerFor(agentId);
-      const attached = await attachDeliverySessionRoutes(owner, env, [{ kind: routeKind, address: { sessionId, ...(agentId === undefined ? {} : { agentId }) } }], signal);
+      const attached = await attachDeliverySession(owner, env, [{ kind: routeKind, address: { sessionId, ...(agentId === undefined ? {} : { agentId }) } }], signal);
       if (!attached) return false;
-      const routes = attached.routes.filter(route => !['claude-async-hook', 'claude-native'].includes(route.kind));
-      if (!await ledger.updateRoutes({ owner, generation: attached.generation, routes }, signal)) return false;
       receiver = { agentId, owner, generation: attached.generation, mode, attempted: new Set() };
       receivers.set(key, receiver);
     }

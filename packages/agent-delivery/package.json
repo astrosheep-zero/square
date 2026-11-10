@@ -1,7 +1,7 @@
 {
   "name": "@astrosheep/agent-delivery",
   "version": "0.1.2",
-  "description": "Text delivery to Codex, OpenCode, Claude, Pi and Paseo agents, independent of Square.",
+  "description": "Text delivery to Codex, OpenCode, Pi and Paseo agents, independent of Square.",
   "type": "module",
   "license": "MIT",
   "engines": { "node": "^22.16.0 || >=24.0.0" },
@@ -14,7 +14,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node --input-type=module -e \"import fs from 'node:fs'; fs.rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "test": "npm run build && node --import ./test/sandbox-env.js --test test/*.test.js",
     "prepack": "npm run build"
   },

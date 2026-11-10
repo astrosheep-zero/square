@@ -50,7 +50,6 @@ export async function connectPi(options: PiConnectOptions): Promise<PiTarget> {
   let endpoint: LocalEndpoint
   try { endpoint = parseLocalEndpoint(options.endpoint) } catch { throw new ConnectionError('invalid_arguments') }
   if (process.platform !== 'darwin') throw new ConnectionError('unsupported_platform')
-  if (endpoint.kind !== 'unix') throw new ConnectionError('invalid_arguments')
   const answer = await request(endpoint, { protocol: VERSION, harness: 'pi', op: 'hello', sessionId: options.sessionId },
     options.timeoutMs, options.signal)
   if (answer.code !== undefined) throw new ConnectionError(answer.code === 'transport' ? 'service_unavailable' : answer.code)

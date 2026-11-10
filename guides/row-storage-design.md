@@ -283,7 +283,7 @@ CREATE TABLE routes (
   position INTEGER PRIMARY KEY CHECK (position >= 0),
   participant_key_json TEXT COLLATE BINARY NOT NULL,
   session_json TEXT COLLATE BINARY NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('opencode-server','codex-queue','claude-native','paseo')),
+  kind TEXT NOT NULL CHECK (kind IN ('opencode-server','codex-queue','paseo')),
   updated_at REAL NOT NULL,
   payload_json TEXT NOT NULL CHECK (json_valid(payload_json))
 );

@@ -4,7 +4,7 @@ import { createDefaultDeliveryTransports } from './wake-transports.js';
 export { createDefaultDeliveryTransports } from './wake-transports.js';
 
 const DEFAULT_DELIVERY_WAIT_MS = 5000;
-const NATIVE_RECEIVER_ROUTES = new Set(['codex-queue', 'claude-mod', 'claude-native', 'pi-native']);
+const NATIVE_RECEIVER_ROUTES = new Set(['codex-queue', 'claude-mod', 'pi-native']);
 
 /** Best-effort dispatch for currently eligible cards, including cards restored by release. */
 export async function dispatchEligibleCards(ledger: DeliveryLedger, owner: Owner, options: {

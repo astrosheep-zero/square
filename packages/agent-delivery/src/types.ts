@@ -3,34 +3,23 @@ import type { CodexBoundaryStore } from './codex-boundary.js'
 declare const targetBrand: unique symbol
 
 export interface OpenCodeTarget { readonly harness: 'opencode'; readonly sessionId: string; readonly [targetBrand]: true }
-export interface ClaudeTarget { readonly harness: 'claude'; readonly sessionId: string; readonly [targetBrand]: true }
 export interface PiTarget { readonly harness: 'pi'; readonly sessionId: string; readonly [targetBrand]: true }
 export interface PaseoTarget { readonly harness: 'paseo'; readonly agentId: string; readonly [targetBrand]: true }
 export interface CodexTarget { readonly harness: 'codex'; readonly sessionId: string; readonly [targetBrand]: true }
-export type Target = OpenCodeTarget | ClaudeTarget | PiTarget | PaseoTarget | CodexTarget
+export type Target = OpenCodeTarget | PiTarget | PaseoTarget | CodexTarget
 export type Delivery = 'steer' | 'queue'
 
 export interface OpenCodeSendTextOptions { readonly delivery?: Delivery; readonly inputId?: string; readonly timeoutMs?: number; readonly signal?: AbortSignal }
-export interface ClaudeSendTextOptions { readonly delivery?: 'steer'; readonly inputId?: never; readonly timeoutMs?: number; readonly signal?: AbortSignal }
 export interface PiSendTextOptions { readonly delivery?: Delivery; readonly inputId?: never; readonly timeoutMs?: number; readonly signal?: AbortSignal }
 export interface PaseoSendTextOptions { readonly delivery?: 'steer'; readonly inputId?: string; readonly timeoutMs?: number; readonly signal?: AbortSignal; readonly beforeSend?: () => Promise<boolean> }
 export interface CodexSendTextOptions { readonly delivery?: Delivery; readonly inputId?: never; readonly timeoutMs?: number; readonly signal?: AbortSignal }
-export type SendTextOptions = OpenCodeSendTextOptions | ClaudeSendTextOptions | PiSendTextOptions | PaseoSendTextOptions | CodexSendTextOptions
+export type SendTextOptions = OpenCodeSendTextOptions | PiSendTextOptions | PaseoSendTextOptions | CodexSendTextOptions
 
 export interface OpenCodeConnectOptions {
   readonly harness: 'opencode'
   readonly sessionId: string
   readonly endpoint?: { readonly url: string; readonly auth?: { readonly type: 'basic'; readonly username: string; readonly password: string } }
   readonly registrationFile?: string
-  readonly timeoutMs?: number
-  readonly signal?: AbortSignal
-}
-export interface ClaudeConnectOptions {
-  readonly harness: 'claude'
-  readonly sessionId: string
-  readonly endpoint: string
-  readonly token?: string
-  readonly claudeHome?: string
   readonly timeoutMs?: number
   readonly signal?: AbortSignal
 }
@@ -87,11 +76,6 @@ export type OpenCodeDeliveryResult =
   | (OpenCodeAttempt & { readonly state: 'unknown'; readonly code: 'timeout' | 'aborted' | 'transport' | 'invalid_response' })
   | (OpenCodeAttempt & { readonly state: 'rejected'; readonly code: 'http_rejection'; readonly status: number })
   | (OpenCodeAttempt & { readonly state: 'unavailable'; readonly code: 'aborted' | 'timeout' })
-interface ClaudeAttempt { readonly harness: 'claude'; readonly sessionId: string }
-export type ClaudeDeliveryResult =
-  | (ClaudeAttempt & { readonly state: 'written'; readonly messageId: string })
-  | (ClaudeAttempt & { readonly state: 'unknown'; readonly code: 'timeout' | 'aborted' | 'transport' })
-  | (ClaudeAttempt & { readonly state: 'unavailable'; readonly code: 'aborted' | 'timeout' | 'endpoint_unavailable' | 'authentication_failed' })
 interface PiAttempt { readonly harness: 'pi'; readonly sessionId: string; readonly inputId: string }
 export type PiDeliveryResult =
   | (PiAttempt & { readonly state: 'observed'; readonly evidence: 'message_end'; readonly delivery: Delivery })
@@ -110,4 +94,4 @@ export type CodexDeliveryResult =
   | (CodexAttempt & { readonly state: 'unknown'; readonly code: 'timeout' | 'aborted' | 'transport' | 'invalid_response' })
   | (CodexAttempt & { readonly state: 'unavailable'; readonly code: 'timeout' | 'aborted' | 'transport' | 'authentication_failed' })
   | (CodexAttempt & { readonly state: 'rejected'; readonly code: 'not_found' | 'refused' | 'unsupported_version' })
-export type DeliveryResult = OpenCodeDeliveryResult | ClaudeDeliveryResult | PiDeliveryResult | PaseoDeliveryResult | CodexDeliveryResult
+export type DeliveryResult = OpenCodeDeliveryResult | PiDeliveryResult | PaseoDeliveryResult | CodexDeliveryResult

@@ -3,8 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import os from 'node:os';
-import net from 'node:net';
-import { once } from 'node:events';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -77,9 +75,6 @@ test('generated release artifacts expose the current identity and supported host
   } } });
   assert.equal(fs.existsSync(path.join(root, 'dist', 'claude-mod.js')), true);
 
-  const leaf = path.join(root, 'dist', 'packages', 'agent-delivery', 'src', 'claude-native.js');
-  assert.equal(fs.existsSync(leaf), true);
-  assert.doesNotMatch(fs.readFileSync(leaf, 'utf8'), /@opencode|square|\.square/);
   const entry = path.join(root, 'dist', 'packages', 'agent-delivery', 'src', 'index.js');
   assert.equal(fs.existsSync(entry), true);
   assert.match(fs.readFileSync(path.join(root, 'dist', 'wake-sink.js'), 'utf8'), /\.\/packages\/agent-delivery\/src\/index\.js/);
@@ -87,7 +82,7 @@ test('generated release artifacts expose the current identity and supported host
   assert.doesNotMatch(fs.readFileSync(path.join(root, 'dist', 'wake-sink.js'), 'utf8'), /spawnSync|SQUARE_PASEO_BIN/);
   assert.equal(packageJson.dependencies['@astrosheep/agent-delivery'], undefined);
   assert.equal(packageJson.dependencies['@opencode/client'], undefined);
-  const openCodeLeaf = path.join(path.dirname(leaf), 'opencode-native.js');
+  const openCodeLeaf = path.join(root, 'dist/packages/agent-delivery/src/opencode-native.js');
   assert.equal(fs.existsSync(openCodeLeaf), true);
   assert.match(fs.readFileSync(path.join(root, 'dist', 'plugins', 'opencode', 'index.js'), 'utf8'), /\.\.\/\.\.\/packages\/agent-delivery\/src\/opencode-native\.js/);
   assert.doesNotMatch(fs.readFileSync(openCodeLeaf, 'utf8'), /@opencode|square|\.square/);
@@ -112,14 +107,14 @@ test('generated release artifacts expose the current identity and supported host
 });
 
 // An actual root tarball, outside the checkout, must contain the same leaf that
-// its coordinator imports. This is socket/pack evidence, not live scheduling.
+// its coordinator imports. This is transport/pack evidence, not live scheduling.
 test('packed root ships its plugin entries and SDK-free shared transports', async (t) => {
   const run = promisify(execFile);
-  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'square-claude-pack-'));
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pack-'));
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
   const { stdout } = await run('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', fixture], { cwd: root, timeout: 60000 });
   const [packed] = JSON.parse(stdout);
-  const leafPath = 'dist/packages/agent-delivery/src/claude-native.js';
+  const leafPath = 'dist/packages/agent-delivery/src/opencode-native.js';
   const entryPath = 'dist/packages/agent-delivery/src/index.js';
   assert.ok(packed.files.some((entry) => entry.path === leafPath));
   assert.ok(packed.files.some((entry) => entry.path === leafPath.replace(/\.js$/, '.d.ts')));
@@ -157,14 +152,6 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
   assert.equal(fs.readFileSync(path.join(shipped, 'dist/claude-mod.js'), 'utf8'), fs.readFileSync(path.join(root, 'dist/claude-mod.js'), 'utf8'));
   assert.equal(fs.readFileSync(path.join(shipped, 'plugins/claude/hooks/register.js'), 'utf8'), fs.readFileSync(path.join(root, 'plugins/claude/hooks/register.js'), 'utf8'));
   assert.equal(fs.readFileSync(path.join(shipped, leafPath), 'utf8'), fs.readFileSync(path.join(root, leafPath), 'utf8'));
-  const endpoint = path.join(fixture, 'in.sock');
-  const server = net.createServer((socket) => {
-    let bytes = '';
-    socket.on('data', (part) => { bytes += part.toString('utf8'); if (bytes.endsWith('\n')) server.emit('frame', JSON.parse(bytes)); });
-  });
-  server.listen(endpoint);
-  await once(server, 'listening');
-  t.after(() => new Promise((resolve) => server.close(resolve)));
   // Neither the packed public entry nor the internal OpenCode leaf may initialize the
   // OpenCode SDK; this guard fails the child process if either does.
   fs.writeFileSync(path.join(fixture, 'no-sdk.mjs'), `export async function resolve(specifier,context,next) {
@@ -189,18 +176,6 @@ try {
   const ledger = JSON.parse((await run(process.execPath, ['--import', './register.mjs', 'ledger.mjs'], { cwd: fixture, timeout: 5000 })).stdout);
   assert.equal(ledger.sent.status, 'posted');
   assert.equal(ledger.pending[0].text, 'packed card');
-  const received = once(server, 'frame');
-  fs.writeFileSync(path.join(fixture, 'consumer.mjs'), `import {connect} from './package/${entryPath}';
-const agent = await connect({harness:'claude',sessionId:'root-pack-target',endpoint:${JSON.stringify(endpoint)},timeoutMs:1000});
-console.log(JSON.stringify(await agent.steer('packed root 字')));`);
-  const sent = await run(process.execPath, ['--import', './register.mjs', path.join(fixture, 'consumer.mjs')], { cwd: fixture, timeout: 5000 });
-  const receipt = JSON.parse(sent.stdout);
-  assert.equal(receipt.proof, 'written');
-  const [frame] = await received;
-  assert.equal(frame.msg_id, receipt.id);
-  assert.equal(frame.session_id, 'root-pack-target');
-  assert.deepEqual(frame.message, { role: 'user', content: 'packed root 字' });
-  assert.equal(frame.priority, 'next');
   const nativePath = 'dist/packages/agent-delivery/src/opencode-native.js';
   assert.ok(packed.files.some((entry) => entry.path === nativePath));
   assert.ok(packed.files.some((entry) => entry.path === 'dist/plugins/opencode-shared/delivery.js'));

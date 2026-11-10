@@ -66,14 +66,6 @@ export async function endClaudeMcpCall(toolUseId: string, token: string, env: No
   });
 }
 
-export async function endClaudeMcpCallForSession(toolUseId: string, sessionId: string, env: NodeJS.ProcessEnv = process.env, agentId?: string, signal?: AbortSignal): Promise<void> {
-  if (!text.safeParse(toolUseId).success || !text.safeParse(sessionId).success) throw unavailable();
-  await mutate(env, async root => {
-    const file = callFile(root, toolUseId);
-    const stored = await readRecord(file);
-    if (stored?.toolUseId === toolUseId && stored.sessionId === sessionId && stored.agentId === agentId) await fs.unlink(file);
-  }, signal);
-}
 export async function readClaudeMcpCall(toolUseId: unknown, env: NodeJS.ProcessEnv = process.env): Promise<ClaudeMcpCall> {
   if (!text.safeParse(toolUseId).success) throw unavailable();
   const stored = await readRecord(callFile(storeRoot(env), toolUseId as string));

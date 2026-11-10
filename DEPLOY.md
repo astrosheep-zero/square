@@ -61,8 +61,8 @@ square install --all -f
 ```
 
 Claude must load the updated Square mod; start a new trusted conversation after
-updating. The mod starts one receiver-owned helper and retires old hook/socket
-routes. Historical unknown or already held native custody is not replayed.
+updating. The mod starts one receiver-owned helper with a fresh route registration.
+Historical unknown or already held native custody is not replayed.
 Installation alone cannot prove that a running host loaded it. macOS Claude
 2.1.319 has isolated headless delivery and interactive MCP evidence; other
 versions and platforms require their own validation. Native `ui_log` events are

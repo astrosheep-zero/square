@@ -26,6 +26,7 @@ async function fixture(t, options = {}) {
   const hooks = new Map(), children = [], effects = [], logs = [], requests = [];
   let sessionId = 'native-session';
   const owner = agent => harnessOwner({ channel: 'claude-code', session: sessionId, ...(agent ? { agent } : {}) });
+  if (options.routes) await ledger.attach({ owner: owner(), expectedGeneration: null, routes: options.routes });
   const event = (name, input, next = async () => ({})) => hooks.get(name)($, input, next);
   const $ = {
     session: {
@@ -82,7 +83,8 @@ async function fixture(t, options = {}) {
 }
 
 test('busy mod appends and logs each card once; exact native acceptance alone settles presentation', async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, { routes: [{ kind: 'http', address: { url: 'http://127.0.0.1:1' } }] });
+  assert.deepEqual((await f.ledger.session(f.owner())).routes.map(route => route.kind), ['claude-mod']);
   await f.event('turn.start', { turnId: 'main' });
   await f.post('one', 'full card one');
   await until(async () => (await f.ledger.receipts(f.owner())).length === 1);

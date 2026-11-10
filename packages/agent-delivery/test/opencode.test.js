@@ -54,7 +54,7 @@ test('official managed discovery authenticates and matches registration', async 
 test('preconditions reject before HTTP: arguments, platform, version, auth, session', async (t) => {
   const f = await fixture(t)
   for (const extra of [{ timeoutMs: 0 }, { timeoutMs: NaN }, { timeoutMs: 2_147_483_648 }, { signal: {} },
-    { sessionId: '' }, { harness: 'claude' }, { registrationFile: '/unused' },
+    { sessionId: '' }, { harness: 'pi' }, { registrationFile: '/unused' },
     { endpoint: { url: `${f.endpoint.url}?password=${secret}` } },
     { endpoint: { url: `http://user:${secret}@localhost` } },
     { endpoint: { url: 'ftp://127.0.0.1' } }]) {

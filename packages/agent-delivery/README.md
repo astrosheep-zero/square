@@ -10,11 +10,10 @@ an explicit remote endpoint is supplied. Both use `connect()` and capability met
 | Codex app-server | busy only | yes | — | `admitted` — native RPC admission | Unix socket: macOS/Linux; WebSocket: any |
 | Codex CLI | — | yes | — | `admitted` — CLI queue succeeded | installed Codex CLI |
 | OpenCode | yes | yes | yes (`id`) | `admitted` — durable inbox admission | any |
-| Claude | yes | — | — | `written` — local socket bytes | darwin, linux, win32 |
 | Pi | yes | yes | — | `observed` — correlated `message_end` | darwin |
 | Paseo | yes | — | yes (`id`) | `admitted` — daemon admitted the message | darwin, linux, win32 |
 
-A capability is a method: `'queue' in agent` is `false` for Claude and Paseo;
+A capability is a method: `'queue' in agent` is `false` for Paseo;
 `'steer' in agent` is `false` for Codex CLI.
 Receipts do not prove model consumption, completion or human display, and an
 unconfirmed attempt may still arrive. See [VALIDATION.md](VALIDATION.md) for
@@ -73,14 +72,6 @@ const opencode = await connect({
 const receipt = await opencode.steer('Exact plain text', { id: 'msg_stable_id' })
 await opencode.queue('Next fresh input', { id: 'msg_second' })
 
-// Claude: an explicit session id and native inbox endpoint.
-const claude = await connect({
-  harness: 'claude',
-  sessionId: 'receiver-current-session-id',
-  endpoint: '/absolute/path/from/receiver/native.sock',
-})
-await claude.steer('Plain text for the next boundary.')
-
 // Pi: an explicit session id and extension socket.
 const pi = await connect({ harness: 'pi', sessionId: 'actual-existing-id', endpoint: '/private/delivery/p.sock' })
 await pi.steer('/literal text\n  unchanged 🦈')
@@ -98,9 +89,8 @@ const steered = await paseo.steer('Exact plain text', { id: 'msg_stable_id' })
 ```
 
 Every successful send resolves `{ id, proof }`. `id` is the caller id or the
-generated `msg_<uuid>` (OpenCode), the frame `msg_id` (Claude), the attempt id
-(Pi), the generated native correlation UUID (Codex app-server), a local attempt
-UUID (Codex CLI), or the caller id or the generated UUID (Paseo). Agents are frozen plain
+generated `msg_<uuid>` (OpenCode), the attempt id (Pi), the generated native
+correlation UUID (Codex app-server), a local attempt UUID (Codex CLI), or the caller id or the generated UUID (Paseo). Agents are frozen plain
 objects; `steer`/`queue` take `{ timeoutMs, signal }`, and OpenCode and Paseo
 additionally take a caller `id`.
 
@@ -202,19 +192,6 @@ Default discovery uses the official SDK against
 `session.prompt({sessionID, text, delivery, id, resume: true})` once. Steer enters
 at a step boundary; queue waits for a fresh-input boundary. A reused caller `id`
 returns the first native admission, so reuse it only for the same logical input.
-
-### Claude
-
-`endpoint` is a Unix socket path or, on Windows, a named pipe (`\\.\pipe\name`;
-case-insensitive, `\\?\pipe\LOCAL\name` accepted). The write is one NDJSON user
-frame, preceded by an auth frame when a token resolves:
-
-1. an explicit `token`
-2. `CLAUDE_CODE_MESSAGING_TOKEN` when `CLAUDE_CODE_MESSAGING_SOCKET` names the same endpoint
-3. the newest readable peer key for that endpoint under `<claudeHome>/sessions` (`claudeHome`, `CLAUDE_CONFIG_DIR`, then `~/.claude`)
-
-Windows requires a token and fails with `authentication_failed` before any I/O;
-on macOS and Linux a tokenless write is unchanged.
 
 ### Pi
 
