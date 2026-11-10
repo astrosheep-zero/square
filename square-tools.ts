@@ -128,6 +128,7 @@ interface DiscoveryToolDefinition {
 type ToolDefinition = SingleSquareToolDefinition | DiscoveryToolDefinition;
 
 const location = z.string().describe('Path to the .square file, relative to the working directory.');
+const expressLocation = location.optional().describe('Path to the .square file, relative to the working directory. Not needed with draft.');
 const participant = z.string().optional().describe('Your name in the square. Leave it out if you hold exactly one name here.');
 const activityId = z.string().regex(/^act\/(0|[1-9][0-9]*)$/) as z.ZodType<ActivityId>;
 const stringArray = z.array(z.string());
@@ -141,7 +142,7 @@ function tool<S extends z.ZodRawShape>(name: string, description: string, shape:
   run: (square: Square, args: z.output<z.ZodObject<S>>, control: OperationControl, identity: ToolIdentity, now?: () => number) => Outcome,
   render: ToolRender,
 ): SingleSquareToolDefinition {
-  const inputSchema = z.object({ ...shape, location }).strict();
+  const inputSchema = z.object({ ...shape, location: name === 'express' ? expressLocation : location }).strict();
   return { name, description, inputSchema,
     run: async (square, args, control, identity, now) => {
       const { location: _location, ...operationArgs } = inputSchema.parse(args) as JsonObject;
@@ -201,15 +202,19 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     rendering((result: JoinPresentation) => renderJoinResult(result, undefined, 'tool'))),
   tool('express', 'Speak or act in the square. Plain words, half-formed ideas and *actions* all belong here. Mention or reply to someone to be heard by them; ring the bell to be heard by everyone. Said to no one in particular, your words reach those who listen to you.', {
     as: participant,
-    body: z.string().describe('What you say or do. Markdown works; *asterisks* mark an action.'),
+    body: z.string().optional().describe('What you say or do. Markdown works; *asterisks* mark an action. Not needed with draft.'),
+    draft: z.string().optional().describe('Token from a failed express; pass it alone to retry.'),
     mentions: stringArray.optional().describe('Who you are speaking to. An @name in the body that matches someone here counts too.'),
-    reach: z.enum(['bell']).optional().describe('"bell" calls everyone in the square. Cannot be used with mentions.'),
+    bell: z.boolean().optional().describe('Call everyone in the square. Not with mentions.'),
     reply: activityId.optional().describe('The activity you are answering, like act/12. Its author hears you if still here.'),
     noMention: z.boolean().optional().describe('Leave @names in the body as plain text. Mentions and reply still reach people.'),
     force: z.boolean().optional().describe('Speak now, even if something reached you that you have not perceived yet.'),
     noWait: z.boolean().optional().describe('If you are speaking too fast, return at once instead of waiting.'),
-  }, async (square, { body, as, ...options }, control, identity) =>
-    (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, observe: true }, control),
+  }, async (square, { body, draft, bell, as, ...options }, control, identity) => {
+    if (draft !== undefined) throw new SquareError('invalid_args', 'Unknown or expired express draft.');
+    if (body === undefined) throw new SquareError('invalid_args', 'Express needs a body or a draft token.');
+    return (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, ...(bell ? { reach: 'bell' } : {}), observe: true }, control);
+  },
     rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result, undefined, 'tool'))),
   tool('perceive', 'Take in what reached you since you last looked: mentions, replies, bells, and words from those you listen to. What you perceive no longer waits for you; history lets you look back.', {
     as: participant,
@@ -219,10 +224,13 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     mention: z.boolean().optional().describe('Only what was addressed to you, and bells.'),
     limit: z.number().int().min(1).max(PERCEIVE_MAX_LIMIT).optional().describe('At most this many at once (default 10). The rest keeps waiting.'),
     takeover: z.boolean().optional().describe('Take over from another active idle perceive for this participant.'),
-  }, async (square, { as, idle, ...options }, control, identity) => (await selectOwnSeat(square, identity.owner, as)).perceive({ ...options, ...(idle === undefined ? {} : { idle: parseDurationMs(idle, 'idle') }), observe: true }, control),
-    rendering((result: PerceiveResult, args) => {
+  }, async (square, { as, idle, ...args }, control, identity) => {
+    const options: PerceiveOptions = { ...args, ...(idle === undefined ? {} : { idle: parseDurationMs(idle, 'idle') }) };
+    return { ...(await (await selectOwnSeat(square, identity.owner, as)).perceive({ ...options, observe: true }, control)), options };
+  },
+    rendering((result: PerceiveResult & { options: PerceiveOptions }) => {
       // The CLI always spells the default cap in its continuation, so the tool does too.
-      const options = { ...args, ...(args.idle === undefined ? {} : { idle: parseDurationMs(args.idle as string, 'idle') }) } as PerceiveOptions;
+      const options = result.options;
       const renderOptions = options.id === undefined ? { ...options, limit: options.limit ?? PERCEIVE_DEFAULT_LIMIT } : options;
       return renderPerceiveOutcome(result.observation?.location ?? '', result, renderOptions, undefined, 'tool').stdout;
     })),

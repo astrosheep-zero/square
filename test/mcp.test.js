@@ -93,7 +93,7 @@ test('MCP tools validate JSON arguments and return only CLI text', async () => {
     ]);
     for (const tool of tools) {
       assert.equal(tool.outputSchema, undefined);
-      assert.equal(tool.inputSchema.required?.includes('location') ?? false, tool.name !== 'list');
+      assert.equal(tool.inputSchema.required?.includes('location') ?? false, !['list', 'express'].includes(tool.name));
       assert.equal('location' in tool.inputSchema.properties, tool.name !== 'list');
     }
     for (const name of ['join', 'perceive', 'history', 'listen', 'unlisten', 'ignore', 'done', 'status']) {
@@ -106,7 +106,7 @@ test('MCP tools validate JSON arguments and return only CLI text', async () => {
     for (const [name, field] of [['perceive', 'limit'], ['history', 'limit'], ['history', 'context']]) {
       const result = await client.callTool({ name, arguments: { location: squarePath, [field]: 101 } });
       assert.equal(result.isError, true);
-      assert.match(result.content[0].text, /"maximum": 100/);
+      assert.match(result.content[0].text, new RegExp(`<=100 at ${field}`));
     }
     const invalid = await client.callTool({ name: 'express', arguments: { location: squarePath, body: 7 } });
     assert.equal(invalid.isError, true);
@@ -230,7 +230,7 @@ test('one MCP server accepts per-call participants without a configured default'
     }
     const missing = await client.callTool({ name: 'join', arguments: { location: squarePath } });
     assert.equal(missing.isError, true);
-    assert.match(missing.content[0].text, /"path":\s*\[\s*"as"/);
+    assert.match(missing.content[0].text, /expected string.*at as/);
     for (const as of ['alice', 'bob']) {
       const joined = await client.callTool({ name: 'join', arguments: { location: squarePath, as } });
       assert.equal(joined.isError, undefined);
@@ -405,7 +405,7 @@ test('MCP shares location and noMention parameters with native tools', async (t)
   try {
     await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'rei' } });
     await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'bob' } });
-    const bare = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: 'literal @bob', noMention: true, force: true } });
+    const bare = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: 'literal @bob', noMention: true, bell: false, force: true } });
     assert.match(bare.content[0].text, /your words land/);
     const other = await Square.build({ path: path.join(cwd, 'other.square'), markdown: 'Other square' });
     await other.close();
@@ -419,13 +419,14 @@ test('MCP shares location and noMention parameters with native tools', async (t)
       const directed = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@Eve', noMention: true, mentions: ['bob'], reply: bareActivity.id, force: true } });
       assert.match(directed.content[0].text, /you walk over to @bob/);
       assert.doesNotMatch(directed.content[0].text, /isn't standing here/);
-      const bell = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@bob @Eve', reach: 'bell', force: true } });
+      const bell = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@bob @Eve', bell: true, force: true } });
       assert.match(bell.content[0].text, /you ring the bell/);
       assert.doesNotMatch(bell.content[0].text, /isn't standing here/);
       const original = await client.callTool({ name: 'history', arguments: { location: squarePath } });
       assert.match(original.content[0].text, /@bob @Eve/);
       const activities = (await square.history()).activities;
       assert.deepEqual(bareActivity.mentions, []);
+      assert.equal(bareActivity.reach, undefined);
       const landed = activities.find(a => a.body === '@Eve');
       assert.deepEqual(landed.mentions, ['bob']);
       assert.equal(landed.reply, bareActivity.id);

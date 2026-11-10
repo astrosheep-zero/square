@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import Ajv from 'ajv';
 import squarePiExtension from '../plugins/pi/square-pi.js';
 import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
@@ -54,7 +55,7 @@ test('Pi registers the shared contract as namespaced codemode tools', () => {
     assert.equal(tool.description, shared.description);
     assert.equal(tool.parameters.type, 'object');
     assert.equal(tool.parameters.additionalProperties, false);
-    assert.equal(tool.parameters.required?.includes('location') ?? false, shared.name !== 'list');
+    assert.equal(tool.parameters.required?.includes('location') ?? false, !['list', 'express'].includes(shared.name));
     assert.equal('location' in tool.parameters.properties, shared.name !== 'list');
     assert.equal('session' in tool.parameters.properties, false);
     assert.equal(tool.outputSchema, undefined);
@@ -121,9 +122,9 @@ test('Pi calls use live context, preserve environment, and return human text and
   const unmatched = await call('express', { as: 'rei', body: '@bob @Eve @eve', force: true });
   assert.match(unmatched.content[0].text, /you walk over to @bob/);
   assert.match(unmatched.content[0].text, /@Eve isn't standing here/);
-  const conflict = await call('express', { as: 'rei', body: '@bob', reach: 'bell', mentions: ['bob'], force: true });
+  const conflict = await call('express', { as: 'rei', body: '@bob', bell: true, mentions: ['bob'], force: true });
   assert.equal(conflict.isError, true);
-  assert.ok(conflict.content[0].text.length > 0);
+  assert.match(conflict.content[0].text, /a bell cannot be combined with a mention/);
   assert.deepEqual({ ...process.env }, before);
 });
 
@@ -151,7 +152,8 @@ test('Pi list uses live owner and cwd, while single-square calls require locatio
 });
 
 test('Pi retains a blocked express in memory and retries only by draft token', async (t) => {
-  const { cwd, squarePath, context, call } = await fixture(t);
+  const { cwd, squarePath, tools, context, call } = await fixture(t);
+  const validate = new Ajv({ strict: false }).compile(tools.get('square_express').parameters);
   await call('join', { as: 'rei' });
   await call('join', { as: 'bob' });
   await call('express', { as: 'bob', body: 'question for rei', mentions: ['rei'] });
@@ -164,6 +166,7 @@ test('Pi retains a blocked express in memory and retries only by draft token', a
   assert.match(refused.content[0].text, /your words stay unsent/);
   const token = refused.content[0].text.match(/draft kept in memory: (dr_\S+)/)?.[1];
   assert.ok(token, refused.content[0].text);
+  assert.equal(validate({ draft: token }), true, JSON.stringify(validate.errors));
   assert.equal(fs.existsSync(path.join(cwd, 'drafts')), false);
   const foreign = await call('express', { draft: token }, context('another-session'));
   assert.equal(foreign.isError, true);
