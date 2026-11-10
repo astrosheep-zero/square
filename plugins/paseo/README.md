@@ -28,20 +28,22 @@ plain-text detail are projected into a card. Real tools, other custom messages,
 and unrecognized rows remain unchanged.
 
 The header and messages use `metadata.details.items` directly, without parsing
-notification envelopes for attribution. Messages remain oldest first in both states,
-with an inline author, direct reach label, timestamp and individual guide. Contiguous
+notification envelopes for attribution. Messages remain oldest first in both states.
+Both states keep the same Markdown, inline authors, reply and bell labels, timestamps and individual guides; a mention is marked by its guide colour alone. Contiguous
 activity references from one origin form a range; gaps stay explicit. Body text
 containing Square tags is ordinary content.
 
-Both states share the same Markdown and one 32,000 UTF-16-unit display budget,
-including omission lines. Long bodies retain their beginning and end without splitting
-surrogate pairs. The collapsed window shows up to 4 body lines and ends after the last
-whole measured text line. Expansion moves only the bottom edge, up to 260px, then
-scrolls internally. Short content has no chevron or expansion action. Plain or malformed details use bounded `detail.text`
+Both states use one 32,000 UTF-16-unit source display budget, including omission lines.
+Long bodies retain their beginning and end without splitting surrogate pairs.
+Collapsed cards clip the Markdown at four 20px lines; the edge may cut through a line.
+Expansion raises the limit to 260px and enables internal scrolling without replacing the content.
+Click anywhere on the card to expand or collapse it, including short cards. A header chevron appears only
+when the reported content height exceeds the collapsed limit.
+No custom line measurement is needed. Plain or malformed details use bounded `detail.text`
 with a neutral heading. Rendering never fetches producer storage or marks activity seen.
 Live events and fetched history use the same transformer, and model input is unchanged.
 
-The slate palette follows the host theme. The header toggles overflowing content and
+The slate palette follows the host theme. The whole card toggles the height limit and
 exposes its expansion state to assistive technology. Removing the plugin restores
 Paseo's ordinary custom-message row.
 

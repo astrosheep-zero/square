@@ -81,9 +81,9 @@ export function squarePalette(theme: PluginTheme): SquarePalette {
     body: mix(palette.foreground, palette.surface1, 0.9),
     faint: mix(palette.foregroundMuted, palette.surface1, 0.7),
     name: mix(palette.accent, palette.foreground, 0.8),
-    warm: theme.colors.statusWarning,
-    directGuide: withAlpha(theme.colors.statusWarning, 0.6),
+    warm: theme.colors.statusDanger,
+    directGuide: withAlpha(theme.colors.statusDanger, 0.9),
     inlineCode: withAlpha(palette.accent, 0.1),
-    quote: { borderLeftWidth: 1, borderLeftColor: withAlpha(palette.accent, 0.28), paddingLeft: 10 },
+    quote: { borderLeftWidth: 1, borderLeftColor: withAlpha(theme.colors.statusWarning, 0.45), paddingLeft: 10 },
   };
 }
