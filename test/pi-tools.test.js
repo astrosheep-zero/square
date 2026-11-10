@@ -100,12 +100,12 @@ test('Pi calls use live context, preserve environment, and return human text and
     assert.ok(invalid.content[0].text.length > 0);
   }
   await call('join', { as: 'bob' });
-  await call('listen', { as: 'bob', target: 'rei' });
+  await call('attention', { as: 'bob', action: 'listen', target: 'rei' });
   assert.match((await call('status', { as: 'BOB' })).content[0].text, /you listen to\s+· @rei/);
   const ambiguous = await call('status');
   assert.equal(ambiguous.isError, undefined);
   assert.doesNotMatch(ambiguous.content[0].text, /you listen to/);
-  assert.match((await call('unlisten', { as: 'bob', target: 'rei' })).content[0].text, /stops listening to @rei/);
+  assert.match((await call('attention', { as: 'bob', action: 'unlisten', target: 'rei' })).content[0].text, /stops listening to @rei/);
   assert.match((await call('status', { as: 'bob' })).content[0].text, /not turned toward anyone/);
   const bare = await call('express', { as: 'rei', body: 'literal @bob', noMention: true, force: true });
   assert.match(bare.content[0].text, /your words land.*act\/\d+/);

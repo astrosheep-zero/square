@@ -69,10 +69,11 @@ export function unreadActivitySummaries(facts: SquareRead, name: string, now: nu
   }
   const selected = facts.activities([...summaries.values()].map((item) => item.lastIndex));
   const byIndex = new Map(selected.map((item) => [item.index, item]));
-  return [...summaries].map(([name, summary]) => ({
-    name, count: summary.count, latestActivityAgeMs: Math.max(0, now - summary.latestAt),
-    preview: byIndex.get(summary.lastIndex) as Extract<StoredAct, { kind: 'say' }>,
-  })).sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
+  return [...summaries].map(([name, summary]) => {
+    const latest = byIndex.get(summary.lastIndex) as Extract<StoredAct, { kind: 'say' }>;
+    return { name, count: summary.count, latestActivityAgeMs: Math.max(0, now - summary.latestAt),
+      preview: { ...(latest.body === undefined ? {} : { body: latest.body }), structured: latest.metadata !== undefined } };
+  }).sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
 }
 
 export function decideAct(facts: SquareRead, input: { name: string; body?: string; force: boolean; now: number; metadata?: ActivityMetadata; mentions?: readonly string[]; reach?: Reach; reply?: number; noMention?: boolean }): ActDecision {

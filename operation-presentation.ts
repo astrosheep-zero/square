@@ -3,7 +3,7 @@ import { sameName } from './model.js';
 import { formatActivityId } from './square-core.js';
 import type {
   PerceiveOptions, PerceiveResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
-  JoinResult, LifecycleResult, ListenerChangeResult, OperationFailureDetail,
+  JoinResult, LifecycleResult, ListenerChangeResult, OperationFailureDetail, SquareErrorFacts,
   StatusResult, DiscoveryResult,
 } from './square-facade.js';
 import {
@@ -11,9 +11,9 @@ import {
   quoteShell, renderAmbientEvent, renderAmbientEventFacts,
   renderEventCli, renderGrepActivitiesView, renderPresenceAnchor,
   renderRoomChangeText, renderWatchAlreadyActive, renderWatchReplaced, renderWatchStatus,
-  takeoverRecoveryLines, withPathOutput, truncateChars,
+  renderUnreadSummary, takeoverRecoveryLines, withPathOutput, truncateChars,
 } from './presentation.js';
-import { formatRelativeTime, formatTimestamp } from './time.js';
+import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import { style } from './tty-style.js';
 
 function listDisplay(value: string): string {
@@ -347,22 +347,59 @@ export function renderLifecycleResult(squarePath: string, data: LifecycleResult)
 export interface FailureReport {
   readonly code: string;
   readonly message: string;
-  readonly facts?: {
-    readonly reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'not_addressed' | 'invalid_reply' | 'invalid_done_body' | 'needs_seat';
-    readonly activityId?: string;
-    readonly activityExists?: boolean;
-  };
+  readonly facts?: SquareErrorFacts;
   readonly operation?: OperationFailureDetail;
 }
 
+interface FailureOptions {
+  readonly squarePath?: string;
+  readonly name?: string;
+  readonly owner?: string;
+  readonly surface?: PresentationSurface;
+  readonly reply?: string;
+  /** CLI only: the saved draft and the full command that resends it. */
+  readonly draftPath?: string;
+  readonly retry?: string;
+}
+
+/** Express gates are physics, not mistakes: one scene for every surface, then that surface's next action. */
+export function isExpressGate(code: string): boolean {
+  return code === 'behind' || code === 'capped' || code === 'throttled' || code === 'bell_quota';
+}
+
+function expressGateLines(failure: FailureReport, options: FailureOptions): string[] | undefined {
+  if (!isExpressGate(failure.code)) return undefined;
+  const { squarePath, name, owner } = options;
+  const facts = failure.facts;
+  const tool = options.surface === 'tool';
+  const scene = failure.code === 'behind'
+    ? ['✕ your words stay unsent — someone spoke while you were away', ...renderUnreadSummary(facts?.activitySummaries ?? [])]
+    : failure.code === 'capped'
+      ? [`✕ you’ve reached your speaking cap${facts?.spoken !== undefined && facts.hardCap !== undefined ? ` — ${facts.spoken}/${facts.hardCap} spoken` : ''}`]
+      : failure.code === 'throttled'
+        ? ['✕ the square is packed — shoulder to shoulder', `  · a lull opens in ${formatDuration(facts?.retryAfterMs ?? 1)}`]
+        : ['✕ the bell stays quiet for now', `  · you can ring it again in ${formatDuration(facts?.retryAfterMs ?? 1)}`];
+  const lines = [...scene, ...(options.draftPath === undefined ? [] : [style('dim', `· draft kept: ${options.draftPath}`)])];
+  if (squarePath === undefined || name === undefined) return lines;
+  const action = (verb: 'perceive' | 'done') => tool
+    ? formatToolAction(verb, { location: displayPath(squarePath), as: name })
+    : `${participantCommandPrefix(squarePath, name, owner)} ${verb}`;
+  if (failure.code === 'behind') lines.push(...(tool ? ['Take it in, then express again:', action('perceive')] : [action('perceive'), '  · take it in, then retry:']));
+  if (failure.code === 'capped') lines.push('  · your words stay unsent; done only steps out', action('done'));
+  if (failure.code === 'bell_quota' && !tool) lines.push('  · retry when the bell is ready:');
+  if (failure.code !== 'capped' && options.retry !== undefined) lines.push(options.retry);
+  return lines;
+}
+
 /** Refusal lines with surface-specific recovery actions. */
-export function renderFailureLines(failure: FailureReport, options: { squarePath?: string; name?: string; owner?: string; surface?: PresentationSurface; reply?: string } = {}): string[] {
+export function renderFailureLines(failure: FailureReport, options: FailureOptions = {}): string[] {
   const { squarePath, name, owner } = options;
   const facts = failure.facts;
   const reason = facts?.reason;
+  const gate = expressGateLines(failure, options);
+  if (gate !== undefined) return gate;
   const marked = reason === 'never_joined' || reason === 'not_standing';
   const lines = marked ? failure.message.split('\n').map((line) => `✕ ${line}`) : [failure.message];
-  if (failure.code === 'behind' && options.surface === 'tool') lines[0] = `✕ your words stay unsent — ${failure.message}`;
   if (reason === 'bell_mention_conflict' || reason === 'invalid_reply') {
     lines[0] = reason === 'bell_mention_conflict' ? '✕ a bell cannot be combined with a mention'
       : `Invalid ${options.surface === 'tool' ? 'reply' : '--reply'}: ${facts?.activityExists === false ? `${facts.activityId ?? options.reply ?? 'that activity'} is not in this square's history` : 'expected an activity id like act/12'}`;

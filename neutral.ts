@@ -21,6 +21,14 @@ export type InternalSquareErrorCode = SquareErrorCode
   | 'conflict'
   | 'pending_peer';
 
+/** One speaker's unperceived activity, previewed by its latest body. */
+export interface UnreadActivitySummary {
+  readonly name: string;
+  readonly count: number;
+  readonly latestActivityAgeMs: number;
+  readonly preview: { readonly body?: string; readonly structured: boolean };
+}
+
 export interface SquareErrorFacts {
   /** Express admission rejected before any activity was committed. */
   activityUnsent?: true;
@@ -32,8 +40,12 @@ export interface SquareErrorFacts {
   targets?: readonly string[];
   /** Whether the artifact holds that activity at all; an unknown id needs an ordinary page. */
   activityExists?: boolean;
-  pending?: number;
+  /** Who spoke while an express was away; the refusal rests on exactly these. */
+  activitySummaries?: readonly UnreadActivitySummary[];
   retryAfterMs?: number;
+  /** A capped speaker's spoken count against the square's cap. */
+  spoken?: number;
+  hardCap?: number;
 }
 
 export interface PerceiveWaitStart {

@@ -132,16 +132,16 @@ test('mutating tools print the same result as the CLI', async (t) => {
     }, ['--as', 'rei', 'perceive'], 'perceive', { as: 'rei' });
   });
   await t.test('listen', async (t) => {
-    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'listen', 'bob'], 'listen', { as: 'rei', target: 'bob' });
+    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'listen', 'bob'], 'attention', { as: 'rei', action: 'listen', target: 'bob' });
   });
   await t.test('ignore', async (t) => {
-    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'ignore', 'bob'], 'ignore', { as: 'rei', target: 'bob' });
+    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'ignore', 'bob'], 'attention', { as: 'rei', action: 'ignore', target: 'bob' });
   });
   await t.test('unlisten', async (t) => {
     await assertTextParity(t, async (square, body) => {
       await joinReiAndBob(square, body);
       await (await square.participant('rei', { owner: body })).listen('bob');
-    }, ['--as', 'rei', 'unlisten', 'bob'], 'unlisten', { as: 'rei', target: 'bob' });
+    }, ['--as', 'rei', 'unlisten', 'bob'], 'attention', { as: 'rei', action: 'unlisten', target: 'bob' });
   });
   await t.test('done', async (t) => {
     await assertTextParity(t, async (square, body) => { await square.join('rei', { owner: body }); },
@@ -207,7 +207,17 @@ test('shared express refusals retain surface-specific headlines and recovery', (
   assert.deepEqual(renderFailureLines(reply, { squarePath, reply: 'act/8' }), [
     "Invalid --reply: act/8 is not in this square's history", `square --location '${squarePath}' history --limit 10`,
   ]);
-  assert.equal(renderFailureLines({ code: 'behind', message: 'someone spoke' }, { surface: 'tool' })[0], '✕ your words stay unsent — someone spoke');
+  const behind = { code: 'behind', message: 'Alice has pending activity', facts: { activitySummaries: [
+    { name: 'Bob', count: 2, latestActivityAgeMs: 5000, preview: { body: 'are you there?', structured: false } },
+  ] } };
+  assert.deepEqual(renderFailureLines(behind, { squarePath, name: 'Alice', surface: 'tool' }), [
+    '✕ your words stay unsent — someone spoke while you were away',
+    '  · @Bob spoke — 5s ago · "are you there?"',
+    'Take it in, then express again:', formatToolAction('perceive', { location: squarePath, as: 'Alice' }),
+  ]);
+  assert.deepEqual(renderFailureLines({ code: 'capped', message: 'Alice reached the activity cap', facts: { spoken: 3, hardCap: 3 } }, { squarePath, name: 'Alice', surface: 'tool' }), [
+    '✕ you’ve reached your speaking cap — 3/3 spoken', '  · your words stay unsent; done only steps out', formatToolAction('done', { location: squarePath, as: 'Alice' }),
+  ]);
 });
 
 test('MCP history paging and expansions produce tool actions', async t => {

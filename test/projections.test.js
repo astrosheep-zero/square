@@ -55,7 +55,7 @@ test('recovery observes caller gates and bounded unread previews without selecti
     assert.deepEqual(recovered, {
       participant: 'Bob', standingCount: 2,
       ownActivityCount: 1, hardCap: 5,
-      activitySummaries: [{ name: 'Alice', count: 8, latestActivityAgeMs: 99_960, preview: acts[10] }],
+      activitySummaries: [{ name: 'Alice', count: 8, latestActivityAgeMs: 99_960, preview: { body: '10', structured: false } }],
     });
     assert.deepEqual(reads.batches, [[10]], 'preview follows greatest index, age follows greatest timestamp');
     assert.deepEqual(reads.ordinals, []);
@@ -77,8 +77,8 @@ test('unread summaries retain sender spelling, exclude seen rows beyond a hole, 
   try {
     const recovered = (await square.artifact.read(facts => recoveryObservation(facts, 'Bob', 100_000))).value;
     assert.deepEqual(recovered.activitySummaries.map(({ name, count, latestActivityAgeMs, preview }) =>
-      [name, count, latestActivityAgeMs, preview.index]), [
-      ['Alice', 100, 99_100, 102], ['alice', 1, 99_995, 104],
+      [name, count, latestActivityAgeMs, preview.body]), [
+      ['Alice', 100, 99_100, 'Alice 102'], ['alice', 1, 99_995, 'different spelling'],
     ]);
     assert.deepEqual(reads.batches, [[102, 104]]);
     assert.ok(reads.directed >= 3, 'the directed suffix spans pages after the cursor query');

@@ -7,7 +7,7 @@ import type {
   LifecycleResult, ListenerChangeResult, OperationControl, OperationFailureDetail, StatusResult, DiscoveryOptions, DiscoveryResult,
 } from './square-facade.js';
 import {
-  renderPerceiveOutcome, renderExpression, renderFailureLines, renderHistoryResult, renderJoinResult,
+  renderPerceiveOutcome, renderExpression, renderFailureLines, renderHistoryResult, renderJoinResult, type ListenerVerb,
   renderLifecycleResult, renderListenerChange, renderStatusResult, renderSquareList,
   type FailureReport, type JoinPresentation,
 } from './operation-presentation.js';
@@ -181,14 +181,11 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     return { ...(await square.history({ ...query, observe: true }, control)), query };
   },
     rendering((result: HistoryResult & { query: HistoryQuery }, args) => renderHistoryResult(result.observation?.location ?? '', result, { query: result.query, full: args.full === true, surface: 'tool' }))),
-  ...([
-    ['listen', 'Hear everything they say from now on, even to others.'],
-    ['unlisten', 'Stop listening to them; an ignore stays.'],
-    ['ignore', 'Hear nothing from them from now on but bells; listening again ends an ignore.'],
-  ] as const).map(([verb, description]) => tool(verb, description, { as: participant, target },
-    async (square, { as, target }, control, identity) =>
-      (await selectOwnSeat(square, identity.owner, as))[verb](target, { observe: true }, control),
-    rendering((result: ListenerChangeResult) => renderListenerChange(result.observation?.location ?? '', verb, result)))),
+  tool('attention', 'Turn toward someone or away from them, from now on. Listen: hear everything they say, even to others. Unlisten: stop listening without clearing an ignore; mentions and replies still reach you unless ignored. Ignore: hear nothing from them but bells. What was already said stays as it was.', {
+    as: participant, action: z.enum(['listen', 'unlisten', 'ignore']).describe('"listen", "unlisten" or "ignore". Listening again ends an ignore.'), target,
+  }, async (square, { as, action, target }, control, identity) =>
+    (await selectOwnSeat(square, identity.owner, as))[action](target, { observe: true }, control),
+  rendering((result: ListenerChangeResult, args) => renderListenerChange(result.observation?.location ?? '', args.action as ListenerVerb, result))),
   tool('done', 'Step out of the square. Everyone sees you leave, and you stop listening to anyone. Leaving carries no words, so say goodbye with express first. Stay instead if someone may still need you; you can join again later.', { as: participant },
     async (square, { as }, control, identity) => (await selectOwnSeat(square, identity.owner, as)).done(undefined, { observe: true }, control),
     rendering((result: LifecycleResult) => renderLifecycleResult(result.observation?.location ?? '', result))),

@@ -32,29 +32,13 @@ interface ParticipantOutputOptions {
   participantCount?: number;
 }
 
-interface ActivityLimitOptions extends ParticipantOutputOptions {
-  count?: number;
-  hardCap?: number;
-  draftPath?: string;
-}
 
-interface ActivityBlockedOptions extends ParticipantOutputOptions {
-  retryCommand: string;
-  activitySummaries: readonly UnreadActivitySummary[];
-  draftPath?: string;
-}
 
 interface ExpressWaitingOptions {
   reason: 'throttled';
   delayMs?: number;
 }
 
-interface ExpressNoWaitOptions extends ParticipantOutputOptions {
-  reason: 'throttled';
-  retryCommand: string;
-  delayMs?: number;
-  draftPath?: string;
-}
 
 interface WatchStatusOptions extends ParticipantOutputOptions {
   status: WatchStatus;
@@ -310,18 +294,14 @@ function draftSavedLines(draftPath: string | undefined): string[] {
   return draftPath === undefined ? [] : [style('dim', `· draft kept: ${draftPath}`)];
 }
 
-function withDraftInput(command: string, draftPath: string | undefined): string {
-  return draftPath === undefined ? command : `${command} < ${quoteShell(draftPath)}`;
-}
-
-function renderUnreadSummary(activitySummaries: readonly UnreadActivitySummary[]): string[] {
+export function renderUnreadSummary(activitySummaries: readonly UnreadActivitySummary[]): string[] {
   const visibleSummaries = activitySummaries.slice(0, MAX_IDENTITY_SET_SIZE);
   const remainingSummaries = activitySummaries.length - visibleSummaries.length;
   return [
     ...visibleSummaries.map((item) => {
       const compact = (item.preview.body ?? '').replace(/\s+/g, ' ').trim();
       const bodyPreview = compact === ''
-        ? { text: item.preview.metadata === undefined ? '(empty)' : '(structured activity)', remaining: 0 }
+        ? { text: item.preview.structured ? '(structured activity)' : '(empty)', remaining: 0 }
         : truncateChars(compact, UNREAD_PREVIEW_CHARS);
       const bodyText = bodyPreview.remaining === 0 ? bodyPreview.text : `${bodyPreview.text}${style('dim', `… (+${bodyPreview.remaining} chars)`)}`;
       return style('dim', `  · ${participantIdentity(item.name)} spoke — ${formatAge(item.latestActivityAgeMs)} ago · "${bodyText}"`);
@@ -330,21 +310,6 @@ function renderUnreadSummary(activitySummaries: readonly UnreadActivitySummary[]
   ];
 }
 
-export function renderActivityBlocked(opts: ActivityBlockedOptions): string {
-  const readNowCommand = `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} perceive`;
-  return withPathOutput(
-    opts.squarePath,
-    [
-      `${style('blocked', '✕')} your activity hasn't landed — someone spoke while you were away`,
-      ...renderUnreadSummary(opts.activitySummaries),
-      ...draftSavedLines(opts.draftPath),
-      `${readNowCommand}`,
-      '  · take it in, then retry:',
-      withDraftInput(opts.retryCommand, opts.draftPath),
-    ].join('\n'),
-    { participantCount: opts.participantCount }
-  );
-}
 
 /** An indeterminate or already-committed send only points to inspection, never resend. */
 export function renderActivityUncertain(opts: ParticipantOutputOptions & { draftPath: string; landedId?: string; detail?: string }): string {
@@ -367,16 +332,6 @@ export function renderExpressWaiting(opts: ExpressWaitingOptions): string {
   ].join('\n');
 }
 
-export function renderExpressNoWait(opts: ExpressNoWaitOptions): string {
-  const retryCommand = opts.retryCommand;
-  const lines = [
-    `${style('blocked', '✕')} the square is packed — shoulder to shoulder`,
-    `  · a lull opens in ${formatDuration(opts.delayMs)}`,
-    ...draftSavedLines(opts.draftPath),
-    `${withDraftInput(retryCommand, opts.draftPath)}`,
-  ];
-  return withPathOutput(opts.squarePath, lines.join('\n'), { participantCount: opts.participantCount });
-}
 
 export function renderPresenceAnchor(names: readonly string[]): string {
   const visibleNames = names.slice(0, MAX_IDENTITY_SET_SIZE);
@@ -445,17 +400,6 @@ export function renderGrepActivitiesView(
   return chunks.join('\n\n');
 }
 
-export function renderActivityLimit(opts: ActivityLimitOptions): string {
-  // The cap wording lives inside the count: the speaker is simply spent.
-  const spoken = opts.count !== undefined && opts.hardCap !== undefined ? ` — ${opts.count}/${opts.hardCap} spoken` : '';
-  const doneCommand = `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} done`;
-  return withPathOutput(opts.squarePath, [
-    `${style('blocked', '✕')} you’ve reached your speaking cap${spoken}`,
-    ...draftSavedLines(opts.draftPath),
-    '  · your draft stays unsent; done only steps out',
-    doneCommand,
-  ].join('\n'), { participantCount: opts.participantCount });
-}
 
 export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string {
   return [

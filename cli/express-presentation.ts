@@ -6,12 +6,10 @@ import { selectOwnSeat, type Square, formatActivityId, parseActivityId } from '.
 import type { Owner } from '../square-api.js';
 import type { ActivityId, OperationError, OperationControl, ExpressOptions } from '../square-facade.js';
 import {
-  formatRefusal, renderActivityBlocked, renderActivityLimit,
-  renderActivityUncertain, renderExpressNoWait, renderExpressWaiting,
+  formatRefusal, renderActivityUncertain, renderExpressWaiting,
   participantCommandPrefix, commandPrefix, quoteShell, withPathOutput,
 } from '../presentation.js';
-import { renderExpression, renderFailureLines } from '../operation-presentation.js';
-import { formatDuration } from '../time.js';
+import { isExpressGate, renderExpression, renderFailureLines } from '../operation-presentation.js';
 import { jsonResult } from './json.js';
 
 export { renderExpression } from '../operation-presentation.js';
@@ -107,32 +105,10 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
       exitCode(1);
       return;
     }
-    if (isSquareError(error)) {
-      if (error.code === 'behind' && fresh?.activitySummaries !== undefined) {
-        process.stdout.write(renderActivityBlocked({ ...output, retryCommand: retryInput,
-          activitySummaries: fresh.activitySummaries,
-        }));
-        exitCode(1); return;
-      }
-      if (error.code === 'capped') {
-        process.stdout.write(renderActivityLimit({ ...output, count: fresh?.ownActivityCount,
-          ...(fresh?.hardCap == null ? {} : { hardCap: fresh.hardCap }),
-        }));
-        exitCode(1); return;
-      }
-      if (error.code === 'throttled') {
-        process.stdout.write(renderExpressNoWait({ ...output, reason: error.code, retryCommand: retryInput,
-          delayMs: error.facts?.retryAfterMs ?? 1,
-        }));
-        exitCode(1); return;
-      }
-      if (error.code === 'bell_quota') {
-        process.stdout.write(withPathOutput(squarePath, [
-          '✕ the bell stays quiet for now', `  · you can ring it again in ${formatDuration(error.facts?.retryAfterMs ?? 1)}`,
-          `· draft kept: ${draftPath}`, '  · retry when the bell is ready:', retryInput,
-        ].join('\n'), output));
-        exitCode(1); return;
-      }
+    if (isSquareError(error) && isExpressGate(error.code)) {
+      process.stdout.write(withPathOutput(squarePath, renderFailureLines({ code: error.code, message: error.message, facts: error.facts },
+        { squarePath, name, owner: opts.recoveryOwner, draftPath, retry: retryInput }).join('\n'), output));
+      exitCode(1); return;
     }
     const facts = isSquareError(error) ? error.facts : undefined;
     const reason = facts?.reason;

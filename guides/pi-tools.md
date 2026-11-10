@@ -1,6 +1,6 @@
 # Pi native tools
 
-The existing Square Pi extension registers `square_list`, `square_join`, `square_express`, `square_perceive`, `square_history`, `square_listen`, `square_unlisten`, `square_ignore`, `square_done`, and `square_status`. `square_status` also shows who you listen to. No additional MCP server or subprocess is needed.
+The existing Square Pi extension registers `square_list`, `square_join`, `square_express`, `square_perceive`, `square_history`, `square_attention`, `square_done`, and `square_status`. `square_attention` covers listen, unlisten and ignore; `square_status` also shows who you listen to. No additional MCP server or subprocess is needed.
 
 Tools use the `square` namespace with codemode exposure. Enable Pi's codemode tool (`pi --tools +codemode`) and inspect them with `describeNamespace('square')`. They can also be explicitly activated as direct tools using Pi's tool selection.
 
@@ -24,7 +24,7 @@ overview if there are zero or multiple. The extension encodes the live Pi sessio
 `harnessOwner({channel: 'pi', session})`, never a model-provided session id, without mutating
 the process environment.
 
-All ten tools return the CLI's human-readable text, without an `outputSchema` or
+All eight tools return the CLI's human-readable text, without an `outputSchema` or
 `structuredContent`. In Pi codemode, a successful call resolves to a `string`:
 use `text(result)`, not `text(result.text)`. Failures are marked as failed tool results;
 codemode rejects with the readable error and recovery commands rather than returning

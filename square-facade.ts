@@ -2,13 +2,13 @@ import type { MetadataMatch } from './delivery-deferral.js';
 export type { MetadataMatch, MetadataScalar } from './delivery-deferral.js';
 import type { ActivityId, Perception, Reach } from './square-core.js';
 import type { Owner, HydratedAct, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
-import type { OperationControl } from './neutral.js';
+import type { OperationControl, UnreadActivitySummary } from './neutral.js';
 export interface ActivitySearch { readonly text: string; readonly mode: 'literal' | 'regex' }
 export interface AckResult { readonly consumed: number }
 import type { FutureAck } from './square-post.js';
 export type { NotificationId, SendInput, SendResult, FutureAck } from './square-post.js';
 export interface HeldSeat { readonly name: string; readonly generation: string }
-export type { PerceiveWaitStart, OperationProgress, OperationControl, OperationFailureDetail, OperationError } from './neutral.js';
+export type { PerceiveWaitStart, OperationProgress, OperationControl, OperationFailureDetail, OperationError, UnreadActivitySummary, SquareErrorFacts } from './neutral.js';
 
 export type { ActivityId, Perception, Reach } from './square-core.js';
 export type { Owner, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificationRoute } from './model.js';
@@ -241,12 +241,6 @@ export interface StreamOptions {
 }
 export type StreamRecord = Activity | PerceivedActivity;
 
-export interface UnreadActivitySummary {
-  readonly name: string;
-  readonly count: number;
-  readonly latestActivityAgeMs: number;
-  readonly preview: Extract<ArchiveRecord, { kind: 'say' }>;
-}
 export interface EntryPresentation {
   readonly joinedBefore: boolean;
   readonly scene: string;

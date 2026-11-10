@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import { perceiveHint, expressHint } from '../dist/hints.js';
+import { renderFailureLines } from '../dist/operation-presentation.js';
 import test from 'node:test';
 
 import {
-  renderActivityBlocked,
   renderAmbientEvent,
   renderDoctorUnfixable,
-  renderExpressNoWait,
   renderEventCli,
   renderPresenceAnchor,
   renderWatchAlreadyActive,
@@ -63,14 +62,10 @@ test('blocked activity output bounds unread participant summaries', () => {
     name: `Person${index}`,
     count: 1,
     latestActivityAgeMs: index,
-    preview: { kind: 'say', actor: `Person${index}`, body: `body ${index}`, mentions: [], index, at: 0 },
+    preview: { body: `body ${index}`, structured: false },
   }));
-  const output = renderActivityBlocked({
-    squarePath: '/tmp/square',
-    name: 'Alice',
-    retryCommand: 'square express -',
-    activitySummaries: summaries,
-  });
+  const output = renderFailureLines({ code: 'behind', message: 'Alice has pending activity', facts: { activitySummaries: summaries } },
+    { squarePath: '/tmp/square', name: 'Alice', retry: 'square express -' }).join('\n');
 
   assert.match(output, /@Person9 spoke/);
   assert.doesNotMatch(output, /@Person10 spoke|@Person11 spoke/);
@@ -102,7 +97,8 @@ test('the capped status counts what was spoken and the throttle names its lull',
     /^✕ you’ve reached your speaking cap — 3\/3 spoken$/m
   );
 
-  const throttled = renderExpressNoWait({ squarePath: '.square/PUBLIC.square', name: 'Alice', reason: 'throttled', delayMs: 60_000, retryCommand: 'square express -' });
+  const throttled = renderFailureLines({ code: 'throttled', message: 'Alice is throttled', facts: { retryAfterMs: 60_000 } },
+    { squarePath: '.square/PUBLIC.square', name: 'Alice', retry: 'square express -' }).join('\n');
   assert.match(throttled, /✕ the square is packed — shoulder to shoulder/);
   assert.match(throttled, /· a lull opens in 1m/);
 });
