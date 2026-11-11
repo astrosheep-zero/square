@@ -45,6 +45,12 @@ and `Participant.pending` reads addressed unconsumed says without consuming them
 Square operations. `OperationControl` can carry cancellation; a committed mutation is not undone by
 later cancellation.
 
+Explicit mentions and body `@name` candidates share soft recipient resolution: absent or unknown
+targets do not block `express`. The receipt lists them in `unmatchedMentions`; a departed reply author
+is reported in `replyAuthorNotHere`. These warnings are not stored on the activity. CLI and tools
+combine them into one deduplicated reach notice. Standing recipients still receive the activity;
+rejoining later never adds a recipient to its frozen audience.
+
 A live idle perceive owns matching activity notifications before producer export ownership is acquired.
 Matching uses its sender and directed-attention filters against the activity's landed delivery route;
 other activities and direct notices remain eligible. Release or expiry permits still-unconsumed activity

@@ -528,16 +528,15 @@ test('unknown participant errors end with the join recovery command', () => {
   assert.match(expressed.stderr, /--as 'Stranger' join/);
 });
 
-test('an unknown recipient errors with the roster command instead of a join', async () => {
+test('an unknown recipient returns a reach warning without refusing', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
   });
 
   const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']));
-  assert.equal(expressed.status, 2);
-  assert.match(expressed.stderr, /✕ @Eve is not standing in this square/);
-  assert.match(expressed.stderr, new RegExp(`square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' status`));
-  assert.doesNotMatch(expressed.stderr, /--as 'Eve' join/);
+  assert.equal(expressed.status, 0, expressed.stderr);
+  assert.match(expressed.stdout, /@Eve isn't standing here — activity landed without reaching them/);
+  assert.equal(expressed.stderr, '');
 });
 
 test('status offers the full history read only when the latest body is clipped', async () => {

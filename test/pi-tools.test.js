@@ -118,7 +118,7 @@ test('Pi calls use live context, preserve environment, and return human text and
   const history = await call('history');
   assert.match(history.content[0].text, /literal @bob/);
   assert.match(history.content[0].text, /hello/);
-  const unmatched = await call('express', { as: 'rei', body: '@bob @Eve @eve', force: true });
+  const unmatched = await call('express', { as: 'rei', body: '@bob @Eve @eve', mentions: ['bob', 'Eve'], force: true });
   assert.match(unmatched.content[0].text, /you walk over to @bob/);
   assert.match(unmatched.content[0].text, /@Eve isn't standing here/);
   const conflict = await call('express', { as: 'rei', body: '@bob', bell: true, mentions: ['bob'], force: true });

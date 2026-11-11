@@ -93,24 +93,20 @@ export function decideAct(facts: SquareRead, input: { name: string; body?: strin
   const joinedNames = roster.filter((participant) => participant.joined).map((participant) => participant.name);
   if (reach === 'bell' && input.mentions?.length) throw activityRefusal('invalid_args', 'A bell cannot be combined with a mention', { reason: 'bell_mention_conflict', targets: [...input.mentions] });
   const mentionNames: string[] = [];
-  const addMention = (resolved: string) => {
-    if (mentionNames.some((existing) => sameName(existing, resolved))) return;
-    if (mentionNames.length >= MAX_IDENTITY_SET_SIZE) throw activityRefusal('invalid_args', `An activity can mention at most ${MAX_IDENTITY_SET_SIZE} participants`);
-    mentionNames.push(resolved);
+  const unmatchedMentions: string[] = [];
+  const addMention = (requested: string, resolved: string | undefined) => {
+    const names = resolved === undefined ? unmatchedMentions : mentionNames;
+    const name = resolved ?? requested;
+    if (names.some((existing) => sameName(existing, name))) return;
+    if (resolved !== undefined && names.length >= MAX_IDENTITY_SET_SIZE) throw activityRefusal('invalid_args', `An activity can mention at most ${MAX_IDENTITY_SET_SIZE} participants`);
+    names.push(name);
   };
   for (const requested of input.mentions ?? []) {
     validateActivityName(requested);
-    const resolved = joinedNames.find((candidate) => sameName(candidate, requested));
-    if (resolved === undefined) throw activityRefusal('invalid_args', `${participantIdentity(requested)} is not standing in this square`, { reason: 'not_standing', targets: [requested] });
-    addMention(resolved);
+    addMention(requested, joinedNames.find((candidate) => sameName(candidate, requested)));
   }
   const bodyMentions = reach === 'bell' || input.noMention === true ? [] : scanMentionCandidates(body ?? '');
-  const unmatchedMentions: string[] = [];
-  for (const token of bodyMentions) {
-    const resolved = resolveMention(token, joinedNames);
-    if (resolved !== undefined) addMention(resolved);
-    else unmatchedMentions.push(token);
-  }
+  for (const token of bodyMentions) addMention(token, resolveMention(token, joinedNames));
   const header = facts.header();
   if (reply !== undefined && (!Number.isSafeInteger(reply) || reply < 0 || reply >= header.nextActIndex)) {
     const label = Number.isSafeInteger(reply) && reply >= 0 ? formatActivityId(reply) : String(reply);

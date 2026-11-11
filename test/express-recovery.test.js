@@ -42,7 +42,7 @@ async function says(file) {
   finally { await square.close(); }
 }
 
-test('a refused recipient is dropped from the printed retry instead of being suggested again', async () => {
+test('absent explicit recipients land once without a draft or retry', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
     await square.join('Bob', { owner: body, wakeAddress });
@@ -51,18 +51,14 @@ test('a refused recipient is dropped from the printed retry instead of being sug
   for (const target of ['Bobb', 'Ghost']) {
     const body = `first line for ${target}\r\nsecond line with 'quotes'\r\n`;
     const result = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', target, '--reply', 'act/0', '-']), { input: body });
-    assert.equal(result.status, 2, result.stderr);
-    const saved = recovery(result, body);
-    assert.equal(saved.commands.length, 1);
-    assert.doesNotMatch(saved.commands[0], /--no-mention/);
-    assert.doesNotMatch(saved.commands[0], /--mention/);
-    assert.doesNotMatch(saved.commands[0], /--force/);
-    assert.match(saved.output, /status/);
-    // The refused name came from a flag, so the body carries no @name to edit.
-    assert.match(saved.output, /retry without explicit recipients/);
-    assert.doesNotMatch(saved.output, /must be removed or wrapped in backticks/);
-    assert.doesNotMatch(saved.output, /keep your intended recipients/);
-    assert.equal((await says(file)).length, 0);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`@${target} isn't standing here — activity landed without reaching them`));
+    assert.doesNotMatch(result.stdout + result.stderr, /draft kept|retry/);
+    const landed = await says(file);
+    assert.equal(landed.length, target === 'Bobb' ? 1 : 2);
+    assert.equal(landed.at(-1).body, body.replace(/\r\n/g, '\n').trim());
+    assert.deepEqual(landed.at(-1).mentions, []);
+    assert.equal(landed.at(-1).reply, 'act/0');
   }
 });
 
@@ -210,7 +206,7 @@ test('only admission rejection proves a failed express unsent; post-commit failu
   t.after(() => artifact.close());
   const square = await resourceWithArtifact(t, artifact);
   const alice = (await square.join('Alice', { owner: ':' })).participant;
-  await assert.rejects(alice.express('bad target', { mentions: ['Nobody'] }), error => error.facts?.activityUnsent === true && error.operation.expressEffect === 'unsent');
+  await assert.rejects(alice.express('bad target', { mentions: ['not a name'] }), error => error.facts?.activityUnsent === true && error.operation.expressEffect === 'unsent');
   const transactAs = artifact.transactAs.bind(artifact);
   artifact.transactAs = async (authority, fn, signal) => {
     let landed = false;

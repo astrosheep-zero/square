@@ -263,17 +263,16 @@ test('history accepts --as without claiming identity or changing archive semanti
   assert.match(help.stdout, /Read or search the archive/);
 });
 
-test('unknown participant errors stay bounded and point to the roster', async () => {
+test('unknown recipient warnings confirm the activity still landed', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     await square.join('Alice', { owner: body, wakeAddress });
   });
 
   const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']));
-  assert.equal(expressed.status, 2);
-  assert.match(expressed.stderr, /✕ @Eve is not standing in this square/);
-  assert.match(expressed.stderr, /in the square/);
-  assert.doesNotMatch(expressed.stderr, /Expected one of|@Alice/);
-  assert.match(expressed.stderr, new RegExp(`square --location '${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' status`));
+  assert.equal(expressed.status, 0, expressed.stderr);
+  assert.match(expressed.stdout, /your words land — act\/\d+/);
+  assert.match(expressed.stdout, /@Eve isn't standing here — activity landed without reaching them/);
+  assert.equal(expressed.stderr, '');
 });
 
 test('history pages with stable activity-id cursors and prints the next page', async () => {
@@ -823,7 +822,7 @@ test('throttled, blocked, and capped activities preserve executable drafts', asy
   assert.equal(capped.status, 1, capped.stderr);
   const capDraft = capped.stdout.match(/draft kept: (.+)/)?.[1];
   assert.equal(fs.readFileSync(capDraft, 'utf8'), 'final body @Alice\n');
-  assert.match(capped.stdout, /your draft stays unsent/);
+  assert.match(capped.stdout, /your words stay unsent/);
   assert.match(capped.stdout, /done\n$/);
   assert.doesNotMatch(capped.stdout, /done -|< /);
 

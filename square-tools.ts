@@ -136,7 +136,7 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
   tool('express', 'Speak or act in the square. Plain words, half-formed ideas and *actions* all belong here. Mention or reply to someone to be heard by them; ring the bell to be heard by everyone. Said to no one in particular, your words reach those who listen to you.', {
     as: participant,
     body: z.string().describe('What you say or do. Markdown works; *asterisks* mark an action.'),
-    mentions: stringArray.optional().describe('Who you are speaking to. An @name in the body that matches someone here counts too.'),
+    mentions: stringArray.optional().describe('Who you are speaking to. An @name in the body that matches someone here counts too. Absent targets do not block the activity; you are told who was not reached.'),
     bell: z.boolean().optional().describe('Call everyone in the square. Not with mentions.'),
     reply: activityId.optional().describe('The activity you are answering, like act/12. Its author hears you if still here.'),
     noMention: z.boolean().optional().describe('Leave @names in the body as plain text. Mentions and reply still reach people.'),

@@ -109,12 +109,12 @@ export function renderExpression(squarePath: string, data: ExpressResult, owner?
     : `● ${activity.mentions.length > 0
       ? `you walk over to ${activity.mentions.map((target) => participantIdentity(target)).join(', ')}`
       : activity.metadata !== undefined && (activity.body ?? '').trim() === '' ? 'structured activity lands' : isGestureOnly(activity.body ?? '') ? 'your gesture lands' : 'your words land'} — ${activity.id}${style('dim', capCount)}`;
-  const replyNotice = data.replyAuthorNotHere === undefined ? ''
-    : `\n○ ${participantIdentity(data.replyAuthorNotHere)} isn't in the square right now — the reply landed without reaching them`;
-  const unmatchedNotice = data.unmatchedMentions?.length
-    ? `\n  · ${data.unmatchedMentions.map((token) => `@${token} isn't standing here`).join('; ')} — ${activity.mentions.length === 0 && activity.reply === undefined ? 'activity landed bare' : 'left as literal text'}` : '';
+  const notReached = [...(data.unmatchedMentions ?? []), ...(data.replyAuthorNotHere === undefined ? [] : [data.replyAuthorNotHere])]
+    .filter((name, index, names) => names.findIndex((other) => sameName(name, other)) === index);
+  const reachNotice = notReached.length
+    ? `\n  · ${notReached.map((name) => `${participantIdentity(name)} isn't standing here`).join('; ')} — activity landed without reaching them` : '';
   return withPathOutput(projection.location ?? squarePath,
-    confirmation + (data.hint ? `\n${style('dim', `· ${data.hint}`)}` : '') + replyNotice + unmatchedNotice + pending,
+    confirmation + (data.hint ? `\n${style('dim', `· ${data.hint}`)}` : '') + reachNotice + pending,
     { participantCount: projection.standingCount });
 }
 

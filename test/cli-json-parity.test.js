@@ -83,8 +83,8 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
   let sent;
   await t.test('express preserves SDK warnings, hint, metadata and reply', async () => {
     const metadata = { observation: { nested: true }, participant: { name: 'not a handle', express: 'literal' } };
-    sent = await f.parity('Alice', ['express', '--force', '--reply', 'act/1', '--metadata', JSON.stringify(metadata), 'Hello @Bob @Nobody'],
-      async square => (await square.participant('Alice', { owner: body })).express('Hello @Bob @Nobody', { force: true, reply: 'act/1', metadata }));
+    sent = await f.parity('Alice', ['express', '--force', '--mention', 'Nobody', '--reply', 'act/1', '--metadata', JSON.stringify(metadata), 'Hello @Bob @Nobody'],
+      async square => (await square.participant('Alice', { owner: body })).express('Hello @Bob @Nobody', { force: true, mentions: ['Nobody'], reply: 'act/1', metadata }));
     assert.deepEqual(sent.activity.metadata, metadata);
     assert.deepEqual(sent.unmatchedMentions, ['Nobody']);
     assert.equal(sent.activity.reply, 'act/1');

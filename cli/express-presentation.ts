@@ -120,10 +120,10 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
       process.stderr.write(formatRefusal(squarePath, lines, output));
       exitCode(2); return;
     }
-    const repair = reason === 'bell_mention_conflict' || (reason === 'not_standing' && detail?.subject === 'recipient');
+    const repair = reason === 'bell_mention_conflict';
     if (isSquareError(error)) {
       if (repair) {
-        lines.push(reason === 'bell_mention_conflict' ? '  · ring the bell without explicit mentions:' : '  · retry without explicit recipients:',
+        lines.push('  · ring the bell without explicit mentions:',
         `${activityRetryCommand(squarePath, name, { ...opts, mentions: [] })}${opts.bodyProvided === false ? '' : ` < ${quoteShell(draftPath)}`}`);
       } else if (error.code === 'invalid_args' || error.code === 'invalid_name') {
         if (opts.mentions?.length) lines.push(`${commandPrefix(squarePath)} status`);

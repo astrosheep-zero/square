@@ -100,7 +100,7 @@ test('body @names union with --mention and dedupe case-insensitively', async () 
   assert.deepEqual(decision.act.mentions, ['Cara', 'Bob']);
 });
 
-test('unknown and departed body @names stay literal while standing matches still receive', async () => {
+test('unknown and departed targets share soft resolution for explicit mentions and body @names', async () => {
   const state = makeState({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
@@ -110,12 +110,14 @@ test('unknown and departed body @names stay literal while standing matches still
     ],
   });
   const body = '@Bob @Eve @Cara listen up';
-  const decision = await decide(state, { name: 'Alice', body, force: true, now: 10 });
-  assert.equal(decision.type, 'sent');
-  assert.equal(decision.act.body, body);
-  assert.deepEqual(decision.act.mentions, ['Cara']);
-  assert.deepEqual(decision.unmatchedMentions, ['Bob', 'Eve']);
-  const literal = await decide(state, { name: 'Alice', body: '@Bob @Eve', force: true, now: 11 });
+  for (const mentions of [undefined, ['Bob', 'Eve', 'Cara', 'bob', 'eve']]) {
+    const decision = await decide(state, { name: 'Alice', body, force: true, now: 10, mentions });
+    assert.equal(decision.type, 'sent');
+    assert.equal(decision.act.body, body);
+    assert.deepEqual(decision.act.mentions, ['Cara']);
+    assert.deepEqual(decision.unmatchedMentions, ['Bob', 'Eve']);
+  }
+  const literal = await decide(state, { name: 'Alice', body: '@Bob @Eve', mentions: ['Bob', 'Eve'], noMention: true, force: true, now: 11 });
   assert.equal(literal.type, 'sent');
   assert.equal(literal.act.body, '@Bob @Eve');
   assert.deepEqual(literal.act.mentions, []);
@@ -190,6 +192,36 @@ test('express through the library stores derived mention metadata', async () => 
   }
 });
 
+test('departed mentions and replies land, reach standing targets, and never backfill on rejoin', async t => {
+  const square = Square.inMemory({ markdown: '' });
+  t.after(() => square.close());
+  const owner = 'test:departed-mentions';
+  const alice = (await square.join('Alice', { owner })).participant;
+  const bob = (await square.join('Bob', { owner })).participant;
+  const cara = (await square.join('Cara', { owner })).participant;
+  const question = await bob.express('question', { force: true });
+  await bob.done();
+
+  const sent = await alice.express('answer @Bob @Eve @Cara', {
+    mentions: ['Bob', 'Eve', 'Cara'], reply: question.activity.id, force: true,
+  });
+  assert.deepEqual(sent.activity.mentions, ['Cara']);
+  assert.deepEqual(sent.unmatchedMentions, ['Bob', 'Eve']);
+  assert.equal(sent.replyAuthorNotHere, 'Bob');
+  assert.equal(sent.activity.reply, question.activity.id);
+  assert.deepEqual((await cara.perceive()).activities.map(activity => activity.id), [sent.activity.id]);
+
+  const bare = await alice.express('all targets absent', { mentions: ['Bob', 'Eve'], noMention: true, force: true });
+  assert.deepEqual(bare.activity.mentions, []);
+  assert.deepEqual(bare.unmatchedMentions, ['Bob', 'Eve']);
+  assert.equal((await square.history()).activities.at(-1).id, bare.activity.id);
+
+  const returned = (await square.join('Bob', { owner })).participant;
+  const newcomer = (await square.join('Eve', { owner })).participant;
+  assert.deepEqual((await returned.perceive()).activities, []);
+  assert.deepEqual((await newcomer.perceive()).activities, []);
+});
+
 test('activityRetryCommand preserves the caller reach instead of forcing --no-mention', () => {
   assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { noMention: true }), / --no-mention /);
   assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { mentions: ['Cara'], noMention: true }), / --mention 'Cara' --no-mention /);
@@ -219,14 +251,14 @@ test('the CLI lands matched and unmatched body @names without rewriting the body
 
   const unknown = run(withName(file, 'Alice', ['express', 'hey @Eve']));
   assert.equal(unknown.status, 0, unknown.stderr);
-  assert.match(unknown.stdout, /@Eve isn't standing here — activity landed bare/);
+  assert.match(unknown.stdout, /@Eve isn't standing here — activity landed without reaching them/);
   acts = (await readSquareSnapshot(file)).state.acts;
   assert.equal(acts.at(-1).body, 'hey @Eve');
   assert.deepEqual(acts.at(-1).mentions, []);
 
   const mixed = run(withName(file, 'Alice', ['express', '-']), { input: 'hello @Eve and @Bob' });
   assert.equal(mixed.status, 0, mixed.stderr);
-  assert.match(mixed.stdout, /@Eve isn't standing here — left as literal text/);
+  assert.match(mixed.stdout, /@Eve isn't standing here — activity landed without reaching them/);
   assert.doesNotMatch(mixed.stdout, /landed bare/);
   acts = (await readSquareSnapshot(file)).state.acts;
   assert.equal(acts.at(-1).body, 'hello @Eve and @Bob');
@@ -244,7 +276,7 @@ test('the CLI lands matched and unmatched body @names without rewriting the body
 
   const replyUnknown = run(withName(file, 'Alice', ['express', '--reply', 'act/1', '@Eve']));
   assert.equal(replyUnknown.status, 0, replyUnknown.stderr);
-  assert.match(replyUnknown.stdout, /@Eve isn't standing here — left as literal text/);
+  assert.match(replyUnknown.stdout, /@Eve isn't standing here — activity landed without reaching them/);
   assert.doesNotMatch(replyUnknown.stdout, /landed bare/);
 
   const explicit = run(withName(file, 'Alice', ['express', '--no-mention', '--mention', 'Bob', '@Eve']));

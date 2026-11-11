@@ -35,7 +35,7 @@ test('a bell ignores body @names, including unmatched names, with redundant no-m
   assert.doesNotMatch(result.stdout + result.stderr, /isn't standing|conflict|draft kept/);
 });
 
-test('unmatched body @names land; explicit --mention still offers a runnable repair', shellReplay, async () => {
+test('unmatched body @names and explicit mentions land with the same reach warning', async () => {
   const file = await persistSquare(async ({ square, body }) => {
     await square.join('Alice', { owner: body });
     await square.join('Bob', { owner: body });
@@ -45,17 +45,12 @@ test('unmatched body @names land; explicit --mention still offers a runnable rep
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.doesNotMatch(result.stderr, /does not match|not standing|draft kept/);
 
-  // Explicit routing metadata still requires a standing recipient.
   const flag = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Ghost', 'hello there']));
-  assert.equal(flag.status, 2, flag.stdout + flag.stderr);
-  const flagOutput = flag.stdout + flag.stderr;
-  assert.match(flagOutput, /✕ @Ghost is not standing in this square/);
-  assert.match(flagOutput, /retry without explicit recipients/);
-  assert.doesNotMatch(flagOutput, /must be removed or wrapped in backticks/);
-  const flagRetries = printedCommands(flagOutput);
-  assert.equal(flagRetries.length, 1);
-  assert.doesNotMatch(flagRetries[0], /--no-mention/);
-  assert.equal(executePrinted(flagRetries[0]).status, 0);
+  assert.equal(flag.status, 0, flag.stdout + flag.stderr);
+  for (const [sent, target] of [[result, 'Nobody'], [flag, 'Ghost']]) {
+    assert.match(sent.stdout, new RegExp(`@${target} isn't standing here — activity landed without reaching them`));
+    assert.equal(printedCommands(sent.stdout + sent.stderr).length, 0);
+  }
 });
 
 test('perceive --id refuses an activity that is not addressed to the caller with ✕ and a runnable read', shellReplay, async () => {
@@ -117,7 +112,7 @@ test('a reply to an author who stepped out says the reply did not reach them', a
   const result = run(withName(file, 'Alice', ['express', '--force', '--reply', 'act/2', 'answer']));
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /● your words land — act\/4/);
-  assert.match(result.stdout, /○ @Bob isn't in the square right now — the reply landed without reaching them/);
+  assert.match(result.stdout, /@Bob isn't standing here — activity landed without reaching them/);
 });
 
 test('unread activity appended to a receipt is explicitly a nonconsuming preview', async () => {

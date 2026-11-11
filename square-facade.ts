@@ -50,7 +50,7 @@ export interface ExpressResult {
   readonly activity: Activity;
   /** The replied-to author was not standing when the reply landed. */
   readonly replyAuthorNotHere?: string;
-  /** Body @name tokens with no standing match at landing; never stored on the activity. */
+  /** Explicit mentions and body @name tokens with no standing match at landing; never stored on the activity. */
   readonly unmatchedMentions?: readonly string[];
   /** Occasional participant-facing nudge; not part of the activity. */
   readonly hint?: string;

@@ -114,24 +114,13 @@ test('joining contributes one canonical lifecycle activity for an unknown partic
 });
 
 test('unknown participant errors identify only the requested name', async () => {
-  const { cell, square } = memorySquare({ acts: [{ kind: 'join', actor: 'Alice', at: 1 }] });
-  const unknown = 'Eve';
-  const cases = [
-    () => cell.read((facts) => decideAct(facts, { name: 'Alice', body: 'hello', force: true, now: 2, mentions: [unknown] })),
-    () => cell.read((facts) => decidePerceive(facts, unknown, {}, 2)),
-  ];
-
-  const expectedReasons = ['not_standing', 'never_joined'];
-  for (const [index, attempt] of cases.entries()) {
-    await assert.rejects(attempt, (error) => {
-      assert.match(error.message, /^@Eve (?:has never stepped into this square|is not standing in this square)/);
-      assert.match(error.message, /@Eve/);
-      assert.doesNotMatch(error.message, /Expected one of|@Alice/);
-      // Recovery reads this fact; the wording above is free to change.
-      assert.equal(error.facts?.reason, expectedReasons[index]);
-      return true;
-    });
-  }
+  const { cell } = memorySquare({ acts: [{ kind: 'join', actor: 'Alice', at: 1 }] });
+  await assert.rejects(() => cell.read((facts) => decidePerceive(facts, 'Eve', {}, 2)), (error) => {
+    assert.match(error.message, /^@Eve has never stepped into this square/);
+    assert.doesNotMatch(error.message, /Expected one of|@Alice/);
+    assert.equal(error.facts?.reason, 'never_joined');
+    return true;
+  });
   await cell.close();
 });
 
