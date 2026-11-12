@@ -79,7 +79,7 @@ test('Pi carries full producer bodies in mixed rich cards without consuming unre
   const before = await recipient.pending();
   const cards = await f.ledger.pending(f.owner, { generation: f.initial.generation });
   assert.deepEqual(cards[0].details, { kind: 'presentation', origin: displayAttentionPath(fs.realpathSync(square.location)),
-    ref: activity.id, author: 'sender', body, at: activity.at, reach: 'mention' });
+    ref: activity.id, author: 'sender', label: 'express', body, at: activity.at, reach: 'mention', recipient: 'recipient' });
   assert.equal(cards[0].text.includes(body), false, 'the model card remains shortened');
   const plain = '<square-activity from="pretend">\nPlain **markdown**, not another Square activity.\n</square-activity>';
   await f.ledger.post({ owner: f.owner, key: 'square:pretend#act/999', text: plain, details: { kind: 'external' } });
@@ -92,6 +92,24 @@ test('Pi carries full producer bodies in mixed rich cards without consuming unre
   await f.handlers.get('message_end')({ message: { ...message, role: 'custom' } });
   await until(async () => (await f.ledger.receipts(f.owner)).length === 2, 'Pi did not confirm both cards');
   assert.deepEqual(await recipient.pending(), before, 'a shortened model card does not consume its full activity');
+});
+
+test('Pi carries the real replied-to author independently of each card recipient', async t => {
+  const f = await fixture(t, { start: false });
+  const square = await Square.build({ path: path.join(f.ctx.cwd, 'reply.square'), markdown: '' });
+  t.after(() => square.close());
+  const sender = (await square.join('sender', { owner: 'source:sender' })).participant;
+  const kei = (await square.join('kei', { owner: f.owner })).participant;
+  await square.join('recipient', { owner: f.owner });
+  const target = await kei.express({ body: 'question' });
+  const reply = await sender.express({ body: 'answer', reply: target.activity.id, mentions: ['recipient'], force: true });
+  const cards = await f.ledger.pending(f.owner, { generation: f.initial.generation });
+  assert.deepEqual(cards.map(card => [card.details.recipient, card.details.reach, card.details.replyTo]).sort(),
+    [['kei', 'reply', 'kei'], ['recipient', 'mention', 'kei']]);
+  assert.ok(cards.every(card => card.details.ref === reply.activity.id));
+  await f.handlers.get('session_start')({}, f.ctx);
+  await until(() => f.sent.length === 1, 'Pi did not inject reply cards');
+  assert.deepEqual(f.sent[0].details.items, cards.map(card => card.details));
 });
 
 test('Pi renders generic details after producer storage disappears and falls back for invalid details', async t => {

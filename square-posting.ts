@@ -95,11 +95,18 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
   // Delivery enrichment cannot turn a committed producer mutation into a retry of that mutation.
   let lifetime: ReturnType<typeof retainDeliveryLedger> | undefined;
   try {
-    const snapshot = (await artifact.read(facts => ({ pending: facts.pendingPosts(), posted: facts.postedPosts() }), signal)).value;
+    const snapshot = (await artifact.read(facts => ({
+      pending: facts.pendingPosts().map(post => {
+        const activity = post.kind === 'activity' ? facts.activity(post.index) : undefined;
+        const reply = activity?.kind === 'say' ? activity.reply : undefined;
+        return { post, replyTo: reply === undefined ? undefined : facts.activity(reply)?.actor };
+      }),
+      posted: facts.postedPosts(),
+    }), signal)).value;
     if (!snapshot.pending.length && !snapshot.posted.length) return;
     const ledger = await openLedger(ledgerLocation, signal);
     lifetime = retainDeliveryLedger(ledger);
-    for (const post of snapshot.pending) {
+    for (const { post, replyTo } of snapshot.pending) {
       const session = await ledger.session(post.owner, signal);
       if (session?.state !== 'attached') continue;
       const rendered = renderPost(location, post), token = randomUUID();
@@ -115,8 +122,9 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
         knownUnsent = false;
         const result = await ledger.post({ owner: post.owner, key: squarePostKey(location, post), text: rendered.text,
           ...(post.kind === 'activity' ? { details: { kind: 'presentation', origin: displayAttentionPath(location),
-            ref: formatActivityId(post.index), author: post.from, body: post.body ?? '',
-            at: post.at, reach: post.route! } satisfies CardPresentation } : {}),
+            ref: formatActivityId(post.index), author: post.from, label: 'express', body: post.body ?? '',
+            at: post.at, reach: post.route!, recipient: post.recipient,
+            ...(replyTo === undefined ? {} : { replyTo }) } satisfies CardPresentation } : {}),
         }, signal);
         posted = ['posted', 'duplicate', 'suppressed'].includes(result.status);
         knownUnsent = !posted;

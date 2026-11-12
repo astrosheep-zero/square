@@ -1,9 +1,13 @@
 import type { PluginTimelineTransformerContribution } from "@getpaseo/plugin/client";
 import { OUTPUT_DISPLAY_MAX_CHARS, outputPreview, squareCardDetailsSchema, type SquareMessageData } from "../shared/message.ts";
+import { parseSquareExpress } from "../shared/square-express.ts";
 
-// Recognition is metadata-based, not a guess from a tool name or body text.
-// The same projection applies to live events and fetched history.
+// Incoming notifications carry producer metadata; outgoing speech uses validated tool input.
 export const transformSquareMessage: PluginTimelineTransformerContribution<"tool_call">["transform"] = ({ item }) => {
+  const outgoing = parseSquareExpress(item);
+  if (outgoing) return {
+    items: [{ type: "plugin", kind: "square-message", version: 1, data: { outgoing } }],
+  };
   if (item.metadata?.synthetic !== true ||
       item.metadata.customType !== "square" ||
       item.detail.type !== "plain_text" ||

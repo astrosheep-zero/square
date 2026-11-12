@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { squarePalette } from "../client/palette.ts";
+import { squareCardChrome, squarePalette } from "../client/palette.ts";
 
 const lightTheme = { colors: {
   surface0: "#ffffff", surface1: "#f4f5f6", surface2: "#e9ebee", border: "#e0e2e5",
@@ -13,12 +13,25 @@ const darkTheme = { colors: {
   statusSuccess: "#7fb26a", statusWarning: "#e9b45a", statusDanger: "#ef7d6b",
 } };
 
-test("the card is a flat matte slip: hairline ring, no shadow, square seal", () => {
+test("the mineral slip keeps only plane-internal cut edges and a square seal", () => {
   for (const theme of [lightTheme, darkTheme]) {
     const palette = squarePalette(theme);
-    assert.equal(palette.card.boxShadow, "none", "the slip stays flat");
+    const layers = palette.card.boxShadow.replace(/rgba\([^)]*\)/g, "color").split(",").map(layer => layer.trim());
+    assert.ok(layers.every(layer => layer.startsWith("inset ")), "nothing lifts off the timeline plane");
     assert.equal(palette.seal.borderRadius, 0, "the ■ seal is a true square");
     assert.ok(palette.quote.borderLeftWidth <= 1 && palette.quote.paddingLeft < 15);
+  }
+});
+
+test("web grain has a native matte fallback with the same base and cut edges", () => {
+  for (const theme of [lightTheme, darkTheme]) {
+    const palette = squarePalette(theme);
+    const web = squareCardChrome(palette, "web") as Record<string, unknown>;
+    const ios = squareCardChrome(palette, "ios") as Record<string, unknown>;
+    assert.ok(String(web.backgroundImage).includes("url(data:image/png;base64,"));
+    assert.ok(!("backgroundImage" in ios) && !("experimental_backgroundImage" in ios));
+    assert.equal(ios.backgroundColor, web.backgroundColor);
+    assert.equal(ios.boxShadow, web.boxShadow);
   }
 });
 

@@ -1,5 +1,5 @@
 import { Box, Markdown, stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
-import { cardReferences, reachLabel, timeLabel } from '../../dist/card-format.js';
+import { activityLabel, reachLabel, shortOrigin, timeLabel } from '../../dist/card-format.js';
 import { z } from 'zod/v4';
 
 import { Square, discover } from '../../dist/square-api.js';
@@ -33,18 +33,15 @@ function markdownTheme(theme) {
   };
 }
 
-/** Keep references intact before spending the remaining columns on the origin. */
-function cardHeader(left, right, width) {
+/** Keep the right-hand tally or reference intact before truncating the left group. */
+function cardHeader(left, right, width, author = '') {
   if (!right) return truncateToWidth(left, width, '…');
   const rightWidth = visibleWidth(right);
-  if (rightWidth + 4 >= width) return truncateToWidth(right, width, '…');
-  const leftWidth = width - rightWidth - 2;
-  const label = truncateToWidth(left, leftWidth, '…');
+  if (rightWidth + 1 >= width) return truncateToWidth(right, width, '…');
+  const leftWidth = width - rightWidth - 1;
+  const label = truncateToWidth(visibleWidth(author) >= leftWidth ? author : left, leftWidth, '…');
   return `${label}${' '.repeat(width - visibleWidth(label) - rightWidth)}${right}`;
 }
-
-const escapeMarkdown = text => text.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, '\\$&');
-const shortOrigin = origin => origin.split(/[\\/]/).filter(Boolean).at(-1) || origin;
 
 /** A final fence also covers very narrow terminals and Markdown tables/code. */
 function bounded(component) {
@@ -65,57 +62,44 @@ export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
   const presentations = items.filter(isCardPresentation);
   const origins = [...new Set(presentations.map(item => item.origin))];
   const originName = origins.map(shortOrigin).join(', ') || 'Notification';
-  const refs = cardReferences(presentations, shortOrigin);
-  const count = items.length > 1 ? fg(theme, 'dim')(`  ${items.length} messages`) : '';
-  const left = `${fg(theme, 'accent')('■')} ${fg(theme, 'muted')(originName)}${count}`;
+  const tally = items.length < 2 ? '' : items.length <= 5 ? '▪'.repeat(items.length) : `▪ ${items.length}`;
+  const left = `${fg(theme, 'accent')('■')} ${fg(theme, 'muted')(originName)}`;
   const now = Date.now();
-  const bodyColor = fg(theme, 'customMessageText');
-  // Restore the body color after each styled attribution inside the Markdown source.
-  const bodyPrefix = bodyColor('\0').split('\0')[0];
   const messages = items.map(item => {
     const structured = isCardPresentation(item);
-    const label = structured ? reachLabel(item.reach) : undefined;
+    const direct = structured && reachLabel(item.reach) !== undefined;
+    const guide = fg(theme, 'warning')('│ ');
     const name = structured && item.author !== undefined
-      ? fg(theme, 'accent')(style(theme, 'bold')(escapeMarkdown(item.author))) : '';
-    const lead = [name, label ? fg(theme, 'warning')(label) : ''].filter(Boolean).join(`${bodyPrefix} `);
-    const body = structured ? item.body : item.text;
-    // Block Markdown keeps its own first row when there is no paragraph to run into.
-    const block = /^(?: {0,3})(?:`{3}|~{3}|#{1,6}\s|>|[-+*]\s|\d+[.)]\s|\|)/.test(body);
-    const source = lead ? `${lead}${bodyPrefix}${block ? '\n\n' : ' '}${body}` : body;
+      ? fg(theme, 'accent')(style(theme, 'bold')(item.author)) : '';
+    const label = structured ? activityLabel(item.reach, item.recipient, item.replyTo, item.label) : '';
+    const styledLabel = label ? fg(theme, 'warning')(label) : '';
+    const time = structured && item.at !== undefined ? fg(theme, 'dim')(`· ${timeLabel(item.at, now, true)}`) : '';
     return {
-      markdown: new Markdown(source, 0, 0, markdownTheme(theme), { color: bodyColor }),
-      guide: fg(theme, label ? 'warning' : 'borderMuted')('│ '),
-      time: structured && item.at !== undefined ? timeLabel(item.at, now, true) : '',
+      name,
+      byline: structured ? [name, styledLabel, time].filter(Boolean).join(' ') : undefined,
+      ref: structured && item.ref !== undefined ? fg(theme, 'dim')(item.ref) : '',
+      markdown: new Markdown(structured ? item.body : item.text, 0, 0, markdownTheme(theme), { color: fg(theme, 'customMessageText') }),
+      guide: direct ? guide : `\x1b[2m${guide}\x1b[22m`,
     };
   });
-  const timeWidth = Math.max(0, ...messages.map(item => visibleWidth(item.time)));
-  const gutter = timeWidth ? timeWidth + 2 : 0;
   const box = new Box(outputPad, 1, text => theme.bg?.('customMessageBg', text) ?? text);
   box.addChild({
     invalidate() { for (const item of messages) item.markdown.invalidate(); },
     render(width) {
-      const bodyWidth = Math.max(1, width - 2 - gutter);
+      const bodyWidth = Math.max(1, width - 2);
       const lines = messages.flatMap(item => {
         const body = item.markdown.render(bodyWidth);
-        // An empty activity can still carry attribution/time.
-        if (body.length === 0 && item.time) body.push('');
-        return body.map((words, index) => ({ guide: item.guide, words, time: index === 0 ? item.time : '' }));
+        return [
+          ...(item.byline === undefined ? [] : [cardHeader(item.byline, item.ref, bodyWidth, item.name)]),
+          ...body,
+        ].map(words => ({ guide: item.guide, words }));
       });
       const rows = expanded ? lines : lines.filter(line => stripTerminalSequences(line.words).trim() !== '');
-      const hidden = expanded ? 0 : Math.max(0, rows.length - 4);
-      const visible = (hidden ? rows.slice(0, 4) : rows).map((line, index) => {
-        let words = truncateToWidth(line.words, bodyWidth, '…');
-        if (hidden && index === 3) {
-          words = truncateToWidth(line.words, Math.max(0, bodyWidth - 1), '');
-          words = truncateToWidth(words, visibleWidth(stripTerminalSequences(words).trimEnd()), '') + fg(theme, 'dim')('…');
-        }
-        const time = line.time
-          ? ' '.repeat(Math.max(2, width - 2 - visibleWidth(words) - visibleWidth(line.time))) + fg(theme, 'dim')(line.time)
-          : '';
-        return truncateToWidth(line.guide + words + time, width, '…');
-      });
+      const hidden = expanded ? 0 : Math.max(0, rows.length - 6);
+      const visible = (hidden ? rows.slice(0, 6) : rows).map(line =>
+        truncateToWidth(line.guide + line.words, width, '…'));
       if (hidden) visible.push(truncateToWidth(fg(theme, 'dim')(`  +${hidden} ${hidden === 1 ? 'line' : 'lines'}`), width, '…'));
-      return [cardHeader(left, fg(theme, 'dim')(refs), width), ...visible];
+      return [cardHeader(left, fg(theme, 'dim')(tally), width), ...visible];
     },
   });
   return bounded(box);

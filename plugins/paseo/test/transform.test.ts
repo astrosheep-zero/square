@@ -7,7 +7,7 @@ type ToolRow = Parameters<typeof transformSquareMessage>[0]["item"];
 const text = "Only a clipped model preview, not the renderer's full bodies.";
 const quotedTags = '<square-activity square="pretend" id="act/999">\nnot another message\n</square-activity>';
 const items: PresentationItem[] = [
-  { kind: "presentation", at: 1, reach: "attention", origin: "jobs", author: "worker", ref: "job/12", body: `Direct **source**\n\n${quotedTags}` },
+  { kind: "presentation", at: 1, reach: "attention", origin: "jobs", author: "worker", label: "custom event", ref: "job/12", body: `Direct **source**\n\n${quotedTags}` },
   { kind: "presentation", at: 2, reach: "bell", origin: "design", author: "rei", ref: "act/15", body: "Last **bell** body" },
 ];
 function row(details: unknown = { items }): ToolRow {
@@ -58,6 +58,7 @@ test("long bodies share one bounded display budget without changing source", () 
   assert.ok(bodies.reduce((sum, item) => sum + item.body.length, 0) <= OUTPUT_DISPLAY_MAX_CHARS);
   for (const [index, item] of bodies.entries()) {
     assert.equal(item.author, long[index]!.author);
+    assert.equal(item.label, long[index]!.label);
     assert.equal(item.ref, long[index]!.ref);
     assert.ok(item.body.startsWith(`START ${index}\n`) && item.body.endsWith(`\nEND ${index}`));
   }
@@ -68,6 +69,16 @@ test("missing or malformed details fall back to raw text without inferring attri
   for (const details of [null, { items: [] }, { items: [{ ...items[0], origin: undefined }] }, { items: [{ ...items[0], body: 7 }] }]) {
     assert.deepEqual(data(row(details)), { text });
   }
+});
+
+test("outgoing tool calls use the same renderer while native parent calls and invalid input stay untouched", () => {
+  const speech = { location: "/work/design.square", as: "rei", body: "**hello**", mentions: ["aoi"] };
+  const call = { ...row(), name: "square_express", metadata: undefined,
+    detail: { type: "unknown" as const, input: speech, output: "unparsed act/99" } };
+  assert.deepEqual(data(call), { outgoing: { ...speech, status: "ok" } });
+  assert.deepEqual(project(call), project(call, "streaming"));
+  assert.equal(project({ ...call, name: "codemode" }), undefined);
+  assert.equal(project({ ...call, detail: { ...call.detail, input: { body: "missing location" } } }), undefined);
 });
 
 test("ordinary tools, unrelated custom messages, and unusable content stay untouched", () => {

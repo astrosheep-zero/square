@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isCardPresentation, type CardPresentation } from "./card-presentation.ts";
+import { squareOutgoingSchema } from "./square-express.ts";
 
 /** Aggregate client display budget, including omission lines; source history stays unchanged. */
 export const OUTPUT_DISPLAY_MAX_CHARS = 32_000;
@@ -19,6 +20,7 @@ export const squareCardDetailsSchema = z.object({
   items: z.array(z.union([presentationItemSchema, z.object({ text: z.string() })])).min(1),
 });
 export const squareMessageSchema = z.union([
+  z.object({ outgoing: squareOutgoingSchema }),
   squareCardDetailsSchema,
   z.object({ text: z.string() }),
 ]);
