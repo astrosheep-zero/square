@@ -346,7 +346,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
     }
     // ----- Upper Agora read capabilities -----
     const readMethods: SquareRead = {
-        pendingPosts: producer.pendingPosts, postsAt: producer.postsAt,
+        pendingPosts: producer.pendingPosts, postsAt: producer.postsAt, postDispositionsAt: producer.postDispositionsAt,
         withdrawnClaims: producer.withdrawnClaims, ownsPost: producer.ownsPost,
         seat: currentEndpoint,
         seatsForOwner: requested => immutable(all('SELECT participant_json FROM participant_seats WHERE owner_json=?', [encode(requested)]).map(row => currentEndpoint(decoded(row.participant_json, true))!)),

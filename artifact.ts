@@ -71,7 +71,7 @@ const readMethods: readonly (keyof SquareRead)[] = [
     'activity', 'activityHeads', 'activities', 'activityCount', 'contextIndexes', 'sayOrdinals', 'recentSayTimes',
     'audience', 'directed', 'directedAt', 'directedCount',
     'receipt', 'receiptFacts', 'lease', 'participantCounts', 'seat', 'seatsForOwner',
-    'pendingPosts', 'postsAt', 'withdrawnClaims', 'ownsPost',
+    'pendingPosts', 'postsAt', 'postDispositionsAt', 'withdrawnClaims', 'ownsPost',
 ];
 const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'putLease', 'removeLease', 'storeSeat', 'removeSeat', 'markSeen', 'setSeatAttachment', 'insertNotice', 'ackMatching', 'acquirePost', 'settlePost', 'foldReceipt'];
 /** Square social state and producer state share one synchronous artifact transaction. */

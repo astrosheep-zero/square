@@ -22,7 +22,7 @@ test('producer selection does not issue a query per historical recipient, and ex
   t.after(async () => { db.close(); await artifact.close(); await square.close(); await fs.rm(root, { recursive: true, force: true }); });
   const seat = (await artifact.read(facts => facts.seat('Alice'))).value;
   const add = count => artifact.transactAs({ kind: 'participant', seat }, facts => {
-    for (let i = 0; i < count; i++) facts.land({ kind: 'say', actor: 'Alice', at: i, body: 'pending body', mentions: ['Bob'] });
+    for (let i = 0; i < count; i++) facts.land({ kind: 'say', actor: 'Alice', at: i, body: 'pending body', metadata: { outcome: 'pending' }, mentions: ['Bob'] });
   });
   const measure = operation => {
     const prepare = db.prepare.bind(db);
@@ -48,7 +48,7 @@ test('producer selection does not issue a query per historical recipient, and ex
     .map(item => [item.index, item.consumed]), [[post.index, true]]);
 
   await artifact.transactAs({ kind: 'send', actor: 'notice' }, facts => {
-    for (let i = 0; i < 3; i++) facts.insertNotice({ from: 'notice', to: 'Bob', body: `notice-${i}` }, Date.now());
+    for (let i = 0; i < 3; i++) facts.insertNotice({ from: 'notice', to: 'Bob', body: `notice-${i}`, metadata: { outcome: 'notice' } }, Date.now());
   });
   const activities = [post, ...many.result.slice(1, 3)];
   const notices = driver.pendingPosts().filter(item => item.kind === 'notice');
@@ -65,8 +65,15 @@ test('producer selection does not issue a query per historical recipient, and ex
   const ids = selected.map(item => parseSquarePostKey(square.location, squarePostKey(square.location, item)));
   const ordinary = driver.postsAt(ids);
   assert.equal(ordinary.length, 6, 'ordinary exact reads retain consumed and truncated records');
+  assert.ok(ordinary.every(item => item.body && item.metadata && item.from && Number.isFinite(item.at)), 'full callers retain card content');
+  const disposition = ({ kind, index, recipient, owner, generation, consumed }) => ({ kind, index, recipient, owner, generation, consumed });
+  const expected = ordinary.map(disposition);
+  assert.deepEqual(driver.postDispositionsAt(ids), expected);
+  assert.deepEqual(driver.postDispositionsAt([]), []);
   assert.deepEqual(driver.postsAt(ids, 'receipt'), ordinary.filter(item => !item.consumed && item.full));
-  assert.deepEqual(driver.postsAt(ids.map(id => ({ ...id, generation: 'stale' })), 'receipt'), []);
+  const stale = ids.map(id => ({ ...id, generation: 'stale' }));
+  assert.deepEqual(driver.postsAt(stale, 'receipt'), []);
+  assert.deepEqual(driver.postDispositionsAt(stale), []);
   // Excluded content cannot even be decoded by receipt selection.
   for (const i of [0, 2]) {
     db.prepare("UPDATE activities SET payload_json='null' WHERE act_index=?").run(activities[i].index);
@@ -74,6 +81,11 @@ test('producer selection does not issue a query per historical recipient, and ex
   }
   assert.deepEqual(driver.postsAt(ids, 'receipt').map(item => [item.kind, item.index]),
     [['activity', activities[1].index], ['notice', notices[1].index]]);
+  for (const item of selected) {
+    if (item.kind === 'activity') db.prepare("UPDATE activities SET payload_json='null' WHERE act_index=?").run(item.index);
+    else db.prepare("UPDATE square_notices SET body_json='null',metadata_json='not-json' WHERE notice_index=?").run(item.index);
+  }
+  assert.deepEqual(driver.postDispositionsAt(ids), expected, 'withdrawal never decodes body or metadata, including live full cards');
 });
 
 for (const stage of ['before-post', 'after-post']) test(`producer recovery preserves ownership and idempotence at ${stage}`, { timeout: 10000 }, async t => {

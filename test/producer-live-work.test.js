@@ -11,6 +11,7 @@ import { nameKey } from '../dist/model.js';
 import { flushSquarePosts, reconcileSquareDelivery } from '../dist/square-posting.js';
 
 const DAY = 86_400_000;
+const disposition = ({ kind, index, recipient, owner, generation, consumed }) => ({ kind, index, recipient, owner, generation, consumed });
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-live-work-'));
   const ledgerLocation = path.join(root, 'delivery.sqlite');
@@ -81,6 +82,12 @@ test('withdrawal suppresses live cards and in-window claims before a captured ex
   await c.artifact.transactAs({ kind: 'producer' }, facts => facts.acquirePost({ ...claim, full: true }, 'in-flight', process.pid, Date.now()));
   await c.bob.ack({ from: 'notice', match: { fields: [{ path: ['outcome'], equals: 'withdraw' }] }, future: 'exact' });
   assert.ok((await c.cards()).some(card => card.key === liveKey), 'local ACK leaves ledger maintenance to a privileged operation');
+  const claims = (await c.artifact.read(facts => {
+    const ids = [parseSquarePostKey(c.location, claimKey)];
+    assert.deepEqual(facts.postDispositionsAt(ids), facts.postsAt(ids).map(disposition));
+    return facts.withdrawnClaims(Date.now());
+  })).value;
+  assert.deepEqual(claims, [{ ...disposition(claim), consumed: true }]);
   await c.reconcile();
   assert.deepEqual(await c.cards(), []);
   assert.deepEqual(new Set(c.suppressions()), new Set([liveKey, claimKey]));
@@ -98,7 +105,7 @@ test('withdrawal suppresses live cards and in-window claims before a captured ex
     const counts = { posts: 0, seat: 0, participant: 0 };
     const value = select(new Proxy(facts, {
       get(target, key) {
-        if (key === 'postsAt') return (...args) => { counts.posts += args[0].length; return target.postsAt(...args); };
+        if (key === 'postDispositionsAt') return (...args) => { counts.posts += args[0].length; return target.postDispositionsAt(...args); };
         if (key === 'seat' || key === 'participant') return (...args) => { counts[key]++; return target[key](...args); };
         return target[key];
       },
@@ -139,7 +146,7 @@ test('no-route and native-only owners export cards without entering producer pen
   const lookups = [], read = c.artifact.read.bind(c.artifact);
   t.mock.method(c.artifact, 'read', (select, signal) => read(facts => select(new Proxy(facts, {
     get(target, key) {
-      if (key === 'postsAt') return (...args) => { lookups.push(args[0].length); return target.postsAt(...args); };
+      if (key === 'postDispositionsAt') return (...args) => { lookups.push(args[0].length); return target.postDispositionsAt(...args); };
       return target[key];
     },
   })), signal));
@@ -220,7 +227,7 @@ test('perceive maintenance is driven by live ledger evidence, not consumed or un
   const liveBefore = await c.cards();
   const ackedKey = liveBefore.find(card => parseSquarePostKey(c.location, card.key).index === acked).key;
   const targetKey = liveBefore.find(card => parseSquarePostKey(c.location, card.key).index === target).key;
-  const receiptCalls = [], suppressCalls = [], lookedUp = [], pendingRows = [];
+  const receiptCalls = [], suppressCalls = [], lookedUp = [], dispositionLookups = [], pendingRows = [];
   const receipts = DeliveryLedger.prototype.receipts, suppress = DeliveryLedger.prototype.suppressExact;
   t.mock.method(DeliveryLedger.prototype, 'receipts', async function (owner, options, signal) {
     const result = await receipts.call(this, owner, options, signal);
@@ -235,6 +242,7 @@ test('perceive maintenance is driven by live ledger evidence, not consumed or un
   t.mock.method(c.artifact, 'read', (select, signal) => read(facts => select(new Proxy(facts, {
     get(target, key) {
       if (key === 'postsAt') return (...args) => { lookedUp.push(...args[0]); return target.postsAt(...args); };
+      if (key === 'postDispositionsAt') return (...args) => { dispositionLookups.push(...args[0]); return target.postDispositionsAt(...args); };
       if (key === 'pendingPosts') return () => { const rows = target.pendingPosts(); pendingRows.push(...rows); return rows; };
       return target[key];
     },
@@ -245,8 +253,9 @@ test('perceive maintenance is driven by live ledger evidence, not consumed or un
   const bobReceipts = receiptCalls.find(call => call.owner === c.session.owner).keys;
   assert.deepEqual(bobReceipts.filter(key => key.startsWith(`square:${c.location}#`)).map(key => parseSquarePostKey(c.location, key).index).sort((a, b) => a - b),
     [Number(full.id.slice(4)), Number(truncated.id.slice(4))]);
-  assert.ok(lookedUp.length > 0);
-  assert.ok(lookedUp.every(id => !history.includes(id.index)), 'gone old full cards, even unconsumed ones, are never looked up');
+  assert.ok(lookedUp.length > 0, 'receipt hydration remains covered');
+  assert.ok(dispositionLookups.length > 0, 'live withdrawal uses the narrow read');
+  assert.ok([...lookedUp, ...dispositionLookups].every(id => !history.includes(id.index)), 'gone old full cards, even unconsumed ones, are never looked up');
   assert.deepEqual(pendingRows, []);
   assert.deepEqual(new Set(suppressCalls), new Set([ackedKey, targetKey]));
   assert.ok((await read(facts => facts.receipt('Bob', Number(full.id.slice(4))))).value);

@@ -39,6 +39,8 @@ export interface SquarePost {
   readonly full?: boolean;
   readonly consumed?: boolean;
 }
+/** Identity and consumption facts only; withdrawal never needs card content. */
+export type SquarePostDisposition = Pick<SquarePost, 'kind' | 'index' | 'recipient' | 'owner' | 'generation' | 'consumed'>;
 export interface SquarePostIdentity {
   readonly kind: SquarePost['kind'];
   readonly index: number;
@@ -48,7 +50,8 @@ export interface SquarePostIdentity {
 export interface ProducerRead {
   pendingPosts(now?: number): readonly SquarePost[];
   postsAt(identities: readonly SquarePostIdentity[], selection?: 'receipt'): readonly SquarePost[];
-  withdrawnClaims(now: number): readonly SquarePost[];
+  postDispositionsAt(identities: readonly SquarePostIdentity[]): readonly SquarePostDisposition[];
+  withdrawnClaims(now: number): readonly SquarePostDisposition[];
   ownsPost(token: string, exportAt?: number): boolean;
 }
 export interface ProducerWrite {

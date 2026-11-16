@@ -93,7 +93,7 @@ async function suppressWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryL
   const posts = (await artifact.read(facts => {
     const seats = new Map(currentSeats(facts).map(seat => [nameKey(seat.participant), seat]));
     return [
-      ...facts.postsAt(live.map(card => card.id)).filter(post => {
+      ...facts.postDispositionsAt(live.map(card => card.id)).filter(post => {
         const seat = seats.get(nameKey(post.recipient));
         return identities.has(JSON.stringify([post.owner, squarePostKey(location, post)]))
           && (post.consumed || seat?.owner !== post.owner || seat.generation !== post.generation);

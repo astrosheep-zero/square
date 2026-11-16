@@ -3,7 +3,7 @@ import { matchesMetadata, validateMetadataMatch } from './delivery-deferral.js';
 import type { MetadataMatch } from './delivery-deferral.js';
 import { SquareError, sameName, validateName, validateActivityMetadata, type ActivityMetadata } from './model.js';
 import type { SeatRef } from './ports.js';
-import type { FutureAck, ProducerRead, ProducerWrite, SendInput, SendResult, SquarePost } from './square-post.js';
+import type { FutureAck, ProducerRead, ProducerWrite, SendInput, SendResult, SquarePost, SquarePostDisposition } from './square-post.js';
 import { decoded, encode, finite, integer, json, key, object, type Row } from './sqlite-values.js';
 
 /** Private Square producer bookkeeping, on the artifact's existing connection/transaction. */
@@ -78,7 +78,30 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
       ? run('INSERT INTO caught_activity(recipient_key_json,act_index,at) VALUES(?,?,?) ON CONFLICT DO NOTHING', [key(post.recipient), post.index, at])
       : run('UPDATE notice_audience SET consumed_at=? WHERE recipient_key_json=? AND notice_index=? AND consumed_at IS NULL', [at, key(post.recipient), post.index]);
   }
-  function selectPosts(mode: 'all' | 'pending' | 'withdrawn' | 'receipt' = 'all', exact?: readonly (Pick<SquarePost, 'kind' | 'index'> & { readonly recipient?: string; readonly generation?: string })[], now?: number): SquarePost[] {
+  const dispositions = {
+    content: false,
+    decode(row: Row, kind: SquarePost['kind']): SquarePostDisposition {
+      return { kind, index: integer(kind === 'activity' ? row.act_index : row.notice_index),
+        recipient: decoded(kind === 'activity' ? row.name_json : row.recipient_json, true),
+        owner: decoded(row.owner_json, true), generation: decoded(row.generation_json, true), consumed: row.consumed === 1 };
+    },
+  };
+  const fullPosts = {
+    content: true,
+    decode(row: Row, kind: SquarePost['kind']): SquarePost {
+      const identity = dispositions.decode(row, kind);
+      const full = row.full === null ? {} : { full: row.full === 1 };
+      if (kind === 'activity') {
+        const payload = object(json(row.payload_json));
+        return { ...identity, from: decoded(row.actor_json, true), at: finite(row.at),
+          ...(payload.body === undefined ? {} : { body: payload.body as string }),
+          ...(payload.metadata === undefined ? {} : { metadata: payload.metadata as ActivityMetadata }), route: row.reason as SquarePost['route'], ...full };
+      }
+      return { ...identity, from: decoded(row.sender_json, true), at: finite(row.at),
+        body: decoded(row.body_json), ...(row.metadata_json === null ? {} : { metadata: json(row.metadata_json) as ActivityMetadata }), ...full };
+    },
+  };
+  function selectPosts<T>(projection: { readonly content: boolean; decode(row: Row, kind: SquarePost['kind']): T }, mode: 'all' | 'pending' | 'withdrawn' | 'receipt' = 'all', exact?: readonly (Pick<SquarePost, 'kind' | 'index'> & { readonly recipient?: string; readonly generation?: string })[], now?: number): T[] {
     const disposition = (audience: string) => {
       const current = `EXISTS(SELECT 1 FROM participant_seats s JOIN participants p ON p.name_key_json=s.participant_key_json
         WHERE p.joined=1 AND s.participant_key_json=${audience}.recipient_key_json
@@ -98,7 +121,7 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
       AND (json_extract(q.value,'$[3]') IS NULL OR ${audience}.generation_json=json_extract(q.value,'$[3]'))`;
     const activity = exact !== undefined && !exact.some(id => id.kind === 'activity') ? [] : rows(`WITH read_through AS (
         SELECT actor_key_json,MAX(json_extract(payload_json,'$.through')) AS through FROM activities WHERE kind='read' GROUP BY actor_key_json
-      ) SELECT a.act_index,a.at,a.actor_json,a.payload_json,d.*,p.name_json,x.full,
+      ) SELECT a.act_index,d.owner_json,d.generation_json,p.name_json,${projection.content ? 'a.at,a.actor_json,a.payload_json,d.reason,x.full,' : ''}
         (c.act_index IS NOT NULL OR COALESCE(r.through>=a.act_index,0)) AS consumed
         FROM ${exact === undefined ? '' : 'json_each(?) q CROSS JOIN'} activities a JOIN landed_audience d ON d.act_index=a.act_index
         JOIN participants p ON p.name_key_json=d.recipient_key_json
@@ -108,29 +131,20 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
         WHERE a.kind='say' AND d.owner_json IS NOT NULL AND d.generation_json IS NOT NULL ${disposition('d')}
         ${exactWhere('activity', 'a.act_index', 'd')}
         ORDER BY a.act_index,d.recipient_order`, args)
-      .map((row): SquarePost => {
-        const payload = object(json(row.payload_json));
-        return { kind: 'activity', index: integer(row.act_index), recipient: decoded(row.name_json, true),
-          owner: decoded(row.owner_json, true), generation: decoded(row.generation_json, true), from: decoded(row.actor_json, true), at: finite(row.at),
-          ...(payload.body === undefined ? {} : { body: payload.body as string }),
-          ...(payload.metadata === undefined ? {} : { metadata: payload.metadata as ActivityMetadata }), route: row.reason as SquarePost['route'],
-          consumed: row.consumed === 1, ...(row.full === null ? {} : { full: row.full === 1 }) };
-      });
-    const notices = exact !== undefined && !exact.some(id => id.kind === 'notice') ? [] : rows(`SELECT n.*,a.*,x.full,(a.consumed_at IS NOT NULL) AS consumed
+      .map(row => projection.decode(row, 'activity'));
+    const notices = exact !== undefined && !exact.some(id => id.kind === 'notice') ? [] : rows(`SELECT a.notice_index,a.recipient_json,a.owner_json,a.generation_json,${projection.content ? 'n.at,n.sender_json,n.body_json,n.metadata_json,x.full,' : ''}(a.consumed_at IS NOT NULL) AS consumed
       FROM ${exact === undefined ? '' : 'json_each(?) q CROSS JOIN'} square_notices n JOIN notice_audience a USING(notice_index)
       LEFT JOIN square_posts x ON x.kind='notice' AND x.item_index=n.notice_index AND x.recipient_key_json=a.recipient_key_json
       WHERE 1=1 ${disposition('a')} ${exactWhere('notice', 'n.notice_index', 'a')}
       ORDER BY n.notice_index,a.recipient_key_json`, args)
-      .map((row): SquarePost => ({ kind: 'notice', index: integer(row.notice_index), recipient: decoded(row.recipient_json, true),
-        owner: decoded(row.owner_json, true), generation: decoded(row.generation_json, true), from: decoded(row.sender_json, true), at: finite(row.at),
-        body: decoded(row.body_json), ...(row.metadata_json === null ? {} : { metadata: json(row.metadata_json) as ActivityMetadata }),
-        consumed: row.consumed === 1, ...(row.full === null ? {} : { full: row.full === 1 }) }));
+      .map(row => projection.decode(row, 'notice'));
     return [...activity, ...notices];
   }
   const driver: ProducerRead & ProducerWrite & { consumeActivity(index: number, at: number): void } = {
-    pendingPosts: (now = Date.now()) => selectPosts('pending', undefined, now),
-    postsAt: (identities, selection) => selectPosts(selection ?? 'all', identities.map(id => ({ ...id, recipient: id.recipientKey }))),
-    withdrawnClaims: now => selectPosts('withdrawn', undefined, now),
+    pendingPosts: (now = Date.now()) => selectPosts(fullPosts, 'pending', undefined, now),
+    postsAt: (identities, selection) => selectPosts(fullPosts, selection ?? 'all', identities.map(id => ({ ...id, recipient: id.recipientKey }))),
+    postDispositionsAt: identities => selectPosts(dispositions, 'all', identities.map(id => ({ ...id, recipient: id.recipientKey }))),
+    withdrawnClaims: now => selectPosts(dispositions, 'withdrawn', undefined, now),
     ownsPost(token, exportAt = Date.now()) {
       const row = one('SELECT * FROM square_posts WHERE token=?', [token]);
       return !!row && row.posted !== 1 && withinExportWindow(finite(row.first_export_at), finite(exportAt))
@@ -168,7 +182,7 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
       run('INSERT INTO producer_consumption VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING',
         [key(seat.participant), encode(seat.owner), encode(seat.generation), key(input.from), match, finite(at)]);
       let count = 0;
-      for (const post of selectPosts()) {
+      for (const post of selectPosts(fullPosts)) {
         if (sameName(post.recipient, seat.participant) && post.owner === seat.owner && post.generation === seat.generation
           && sameName(post.from, input.from) && matchesMetadata(post.metadata, input.match) && !post.consumed) count += consume(post, at);
       }
@@ -176,7 +190,7 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
     },
     acquirePost(post, token, pid, now, exportAt = Date.now()) {
       // A scanned value is not custody. Re-read this source and policy under the World writer.
-      const current = selectPosts('all', [post])[0];
+      const current = selectPosts(fullPosts, 'all', [post])[0];
       if (!current || current.owner !== post.owner || current.generation !== post.generation || current.consumed) return false;
       const seat = one('SELECT * FROM participant_seats WHERE participant_key_json=?', [key(post.recipient)]);
       if (!seat || seat.owner_json !== encode(post.owner) || seat.generation_json !== encode(post.generation) || seat.attachment !== 'attached') return false;
@@ -200,12 +214,12 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
       return run('UPDATE square_posts SET token=NULL,owner_pid=NULL,posted=?,full=? WHERE token=?', [Number(disposition === 'posted'), Number(full), token]) > 0;
     },
     foldReceipt(post, at) {
-      const current = selectPosts('all', [post])[0];
+      const current = selectPosts(fullPosts, 'all', [post])[0];
       if (!current || current.owner !== post.owner || current.generation !== post.generation || current.full !== true || current.consumed) return false;
       return consume(current, finite(at)) > 0;
     },
     consumeActivity(index, at) {
-      for (const post of selectPosts('all', [{ kind: 'activity', index }])) if (consumed(post)) consume(post, at);
+      for (const post of selectPosts(fullPosts, 'all', [{ kind: 'activity', index }])) if (consumed(post)) consume(post, at);
     },
   };
   return Object.defineProperties(driver, { changed: { get: () => changed }, deliveryChanged: { get: () => changed } }) as ReturnType<typeof createProducerDriver>;
