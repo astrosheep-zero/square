@@ -5,7 +5,7 @@ import { retainDeliveryLedger } from './delivery-lifetime.js';
 import { projectNotification, displayAttentionPath } from './attention-presentation.js';
 import type { CardPresentation } from './card-presentation.js';
 import { coreDone } from './decisions.js';
-import { activityMetadataHasContent, type Seat } from './model.js';
+import { activityMetadataHasContent, nameKey, type Seat } from './model.js';
 import type { SquareArtifactPort, SquareRead } from './ports.js';
 import { formatActivityId } from './square-core.js';
 import { parseSquarePostKey, squarePostKey, type SquarePost } from './square-post.js';
@@ -70,7 +70,7 @@ export async function reconcileSquareDelivery(artifact: SquareArtifactPort, loca
       const receipts = (await ledger.receipts(owner, {}, signal))
         .flatMap(receipt => { const id = parseSquarePostKey(location, receipt.key); return id ? [{ ...receipt, id }] : []; });
       const at = new Map(receipts.map(receipt => [receipt.key, receipt.at]));
-      const posts = (await artifact.read(facts => facts.postsAt(receipts.map(receipt => receipt.id))
+      const posts = (await artifact.read(facts => facts.postsAt(receipts.map(receipt => receipt.id), 'receipt')
         .filter(post => post.owner === owner && post.full === true && !post.consumed && currentPost(facts, post)), signal)).value;
       for (const post of posts)
         await artifact.transactAs({ kind: 'producer' }, facts => currentPost(facts, post) && facts.foldReceipt(post, at.get(squarePostKey(location, post))!), signal);
@@ -90,11 +90,17 @@ async function suppressWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryL
   const live = (await ledger.cards({ keyPrefix: `square:${location}#` }, signal))
     .flatMap(card => { const id = parseSquarePostKey(location, card.key); return id ? [{ ...card, id }] : []; });
   const identities = new Set(live.map(card => JSON.stringify([card.owner, card.key])));
-  const posts = (await artifact.read(facts => [
-    ...facts.postsAt(live.map(card => card.id)).filter(post => identities.has(JSON.stringify([post.owner, squarePostKey(location, post)]))
-      && (post.consumed || !currentPost(facts, post))),
-    ...facts.withdrawnClaims(Date.now()),
-  ], signal)).value;
+  const posts = (await artifact.read(facts => {
+    const seats = new Map(currentSeats(facts).map(seat => [nameKey(seat.participant), seat]));
+    return [
+      ...facts.postsAt(live.map(card => card.id)).filter(post => {
+        const seat = seats.get(nameKey(post.recipient));
+        return identities.has(JSON.stringify([post.owner, squarePostKey(location, post)]))
+          && (post.consumed || seat?.owner !== post.owner || seat.generation !== post.generation);
+      }),
+      ...facts.withdrawnClaims(Date.now()),
+    ];
+  }, signal)).value;
   // Only existing cards or in-window claims can still require withdrawal; custody survives.
   const keysByOwner = new Map<string, Set<string>>();
   for (const post of posts) {

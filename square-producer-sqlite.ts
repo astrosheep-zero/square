@@ -78,7 +78,7 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
       ? run('INSERT INTO caught_activity(recipient_key_json,act_index,at) VALUES(?,?,?) ON CONFLICT DO NOTHING', [key(post.recipient), post.index, at])
       : run('UPDATE notice_audience SET consumed_at=? WHERE recipient_key_json=? AND notice_index=? AND consumed_at IS NULL', [at, key(post.recipient), post.index]);
   }
-  function selectPosts(mode: 'all' | 'pending' | 'withdrawn' = 'all', exact?: readonly (Pick<SquarePost, 'kind' | 'index'> & { readonly recipient?: string; readonly generation?: string })[], now?: number): SquarePost[] {
+  function selectPosts(mode: 'all' | 'pending' | 'withdrawn' | 'receipt' = 'all', exact?: readonly (Pick<SquarePost, 'kind' | 'index'> & { readonly recipient?: string; readonly generation?: string })[], now?: number): SquarePost[] {
     const disposition = (audience: string) => {
       const current = `EXISTS(SELECT 1 FROM participant_seats s JOIN participants p ON p.name_key_json=s.participant_key_json
         WHERE p.joined=1 AND s.participant_key_json=${audience}.recipient_key_json
@@ -86,7 +86,7 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
       return mode === 'pending' ? `AND COALESCE(x.posted,0)=0 AND consumed=0 AND ${current}
           AND (x.item_index IS NULL OR (x.first_export_at<=? AND x.first_export_at>? AND x.claim_at<=?))`
         : mode === 'withdrawn' ? `AND x.token IS NOT NULL AND x.posted=0 AND x.first_export_at<=? AND x.first_export_at>?
-          AND (consumed=1 OR NOT ${current})` : '';
+          AND (consumed=1 OR NOT ${current})` : mode === 'receipt' ? 'AND consumed=0 AND x.full=1' : '';
     };
     const args: SQLInputValue[] = mode === 'pending' ? [finite(now), finite(now) - EXPORT_IDENTITY_WINDOW_MS, finite(now)]
       : mode === 'withdrawn' ? [finite(now), finite(now) - EXPORT_IDENTITY_WINDOW_MS] : [];
@@ -129,7 +129,7 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
   }
   const driver: ProducerRead & ProducerWrite & { consumeActivity(index: number, at: number): void } = {
     pendingPosts: (now = Date.now()) => selectPosts('pending', undefined, now),
-    postsAt: identities => selectPosts('all', identities.map(id => ({ ...id, recipient: id.recipientKey }))),
+    postsAt: (identities, selection) => selectPosts(selection ?? 'all', identities.map(id => ({ ...id, recipient: id.recipientKey }))),
     withdrawnClaims: now => selectPosts('withdrawn', undefined, now),
     ownsPost(token, exportAt = Date.now()) {
       const row = one('SELECT * FROM square_posts WHERE token=?', [token]);

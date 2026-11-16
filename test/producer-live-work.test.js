@@ -87,6 +87,32 @@ test('withdrawal suppresses live cards and in-window claims before a captured ex
   assert.equal((await c.ledger.post({ owner: claim.owner, key: claimKey, text: claim.body })).status, 'suppressed');
   assert.equal((await c.artifact.read(facts => facts.withdrawnClaims(Date.now() + 30 * DAY))).value.length, 0);
 
+  // Many cards share one current seat; lookup work is bounded by membership, not card count.
+  await c.artifact.transactAs({ kind: 'send', actor: 'notice' }, facts => {
+    for (let i = 0; i < 32; i++) facts.insertNotice({ from: 'notice', to: 'Bob', body: `live-${i}` }, Date.now());
+  });
+  await c.flush();
+  const liveKeys = (await c.cards()).map(card => card.key);
+  const reads = [], read = c.artifact.read.bind(c.artifact);
+  t.mock.method(c.artifact, 'read', (select, signal) => read(facts => {
+    const counts = { posts: 0, seat: 0, participant: 0 };
+    const value = select(new Proxy(facts, {
+      get(target, key) {
+        if (key === 'postsAt') return (...args) => { counts.posts += args[0].length; return target.postsAt(...args); };
+        if (key === 'seat' || key === 'participant') return (...args) => { counts[key]++; return target[key](...args); };
+        return target[key];
+      },
+    }));
+    if (counts.posts >= liveKeys.length) {
+      const members = facts.roster().length;
+      assert.ok(counts.seat <= members && counts.participant <= members, 'withdrawal reads current membership, not each card seat');
+      reads.push(counts);
+    }
+    return value;
+  }, signal));
+  await c.reconcile();
+  assert.deepEqual((await c.cards()).map(card => card.key), liveKeys, 'canonical joined-seat identity keeps live cards');
+
   // Departure also fences an unconsumed claim, and a never-exported source stays out of a replacement seat.
   await c.insert({ body: 'old seat, captured' });
   const oldSeatClaim = (await c.artifact.read(facts => facts.pendingPosts()[0])).value;
@@ -94,8 +120,13 @@ test('withdrawal suppresses live cards and in-window claims before a captured ex
   await c.insert({ body: 'old seat, never exported' });
   await c.bob.done();
   assert.ok(c.suppressions().includes(c.key(oldSeatClaim)));
+  assert.ok(liveKeys.every(key => c.suppressions().includes(key)), 'departure sees fresh membership for every old-generation card');
+  assert.ok(reads.length >= 2, 'joined and departed callbacks independently read current membership');
   await c.square.join('Bob', { owner: c.session.owner });
   assert.deepEqual((await c.artifact.read(facts => facts.pendingPosts())).value, []);
+  await c.insert({ body: 'replacement seat' });
+  await c.flush();
+  assert.equal((await c.cards()).length, 1, 'a later transaction retains the replacement generation');
 });
 
 test('no-route and native-only owners export cards without entering producer pending or dispatch', async t => {
@@ -108,7 +139,7 @@ test('no-route and native-only owners export cards without entering producer pen
   const lookups = [], read = c.artifact.read.bind(c.artifact);
   t.mock.method(c.artifact, 'read', (select, signal) => read(facts => select(new Proxy(facts, {
     get(target, key) {
-      if (key === 'postsAt') return ids => { lookups.push(ids.length); return target.postsAt(ids); };
+      if (key === 'postsAt') return (...args) => { lookups.push(args[0].length); return target.postsAt(...args); };
       return target[key];
     },
   })), signal));
@@ -203,7 +234,7 @@ test('perceive maintenance is driven by live ledger evidence, not consumed or un
   const read = c.artifact.read.bind(c.artifact);
   t.mock.method(c.artifact, 'read', (select, signal) => read(facts => select(new Proxy(facts, {
     get(target, key) {
-      if (key === 'postsAt') return ids => { lookedUp.push(...ids); return target.postsAt(ids); };
+      if (key === 'postsAt') return (...args) => { lookedUp.push(...args[0]); return target.postsAt(...args); };
       if (key === 'pendingPosts') return () => { const rows = target.pendingPosts(); pendingRows.push(...rows); return rows; };
       return target[key];
     },

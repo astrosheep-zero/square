@@ -47,7 +47,7 @@ export interface SquarePostIdentity {
 }
 export interface ProducerRead {
   pendingPosts(now?: number): readonly SquarePost[];
-  postsAt(identities: readonly SquarePostIdentity[]): readonly SquarePost[];
+  postsAt(identities: readonly SquarePostIdentity[], selection?: 'receipt'): readonly SquarePost[];
   withdrawnClaims(now: number): readonly SquarePost[];
   ownsPost(token: string, exportAt?: number): boolean;
 }

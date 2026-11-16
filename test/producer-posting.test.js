@@ -46,6 +46,34 @@ test('producer selection does not issue a query per historical recipient, and ex
   assert.equal(driver.pendingPosts().length, 127);
   assert.deepEqual(driver.postsAt([parseSquarePostKey(square.location, squarePostKey(square.location, post))])
     .map(item => [item.index, item.consumed]), [[post.index, true]]);
+
+  await artifact.transactAs({ kind: 'send', actor: 'notice' }, facts => {
+    for (let i = 0; i < 3; i++) facts.insertNotice({ from: 'notice', to: 'Bob', body: `notice-${i}` }, Date.now());
+  });
+  const activities = [post, ...many.result.slice(1, 3)];
+  const notices = driver.pendingPosts().filter(item => item.kind === 'notice');
+  for (const group of [activities, notices]) {
+    for (const [i, item] of group.entries()) {
+      if (item === post) continue;
+      const token = `${item.kind}-${item.index}`, full = i !== 2;
+      assert.equal(driver.acquirePost({ ...item, full }, token, process.pid, Date.now()), 'initial');
+      driver.settlePost(token, full, 'posted');
+      if (i === 0) assert.equal(driver.foldReceipt(item, Date.now()), true);
+    }
+  }
+  const selected = [...activities, ...notices];
+  const ids = selected.map(item => parseSquarePostKey(square.location, squarePostKey(square.location, item)));
+  const ordinary = driver.postsAt(ids);
+  assert.equal(ordinary.length, 6, 'ordinary exact reads retain consumed and truncated records');
+  assert.deepEqual(driver.postsAt(ids, 'receipt'), ordinary.filter(item => !item.consumed && item.full));
+  assert.deepEqual(driver.postsAt(ids.map(id => ({ ...id, generation: 'stale' })), 'receipt'), []);
+  // Excluded content cannot even be decoded by receipt selection.
+  for (const i of [0, 2]) {
+    db.prepare("UPDATE activities SET payload_json='null' WHERE act_index=?").run(activities[i].index);
+    db.prepare("UPDATE square_notices SET body_json='null' WHERE notice_index=?").run(notices[i].index);
+  }
+  assert.deepEqual(driver.postsAt(ids, 'receipt').map(item => [item.kind, item.index]),
+    [['activity', activities[1].index], ['notice', notices[1].index]]);
 });
 
 for (const stage of ['before-post', 'after-post']) test(`producer recovery preserves ownership and idempotence at ${stage}`, { timeout: 10000 }, async t => {
