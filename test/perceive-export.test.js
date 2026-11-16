@@ -67,7 +67,6 @@ test('a live filtered perceive owns matching exports while excluded routes and n
   const waiting = await armPerceive(c, { from: ['Alice'], mention: true });
   const matched = (await c.alice.express({ body: 'owned by perceive', mentions: ['Bob'], force: true })).activity;
   assert.equal(hasCard(await c.cards(), matched.id), false);
-  assert.equal((await c.artifact.read(facts => facts.postedPosts().some(post => post.kind === 'activity' && post.index === Number(matched.id.slice(4))))).value, false, 'matching source has no export claim');
   const excluded = (await c.carol.express({ body: 'excluded sender', mentions: ['Bob'], force: true })).activity;
   const listener = (await c.alice.express({ body: 'listener route outside attention filter', force: true })).activity;
   await c.square.send({ from: 'Alice', to: 'Bob', body: 'raw direct notice', metadata: { kind: 'notice' } });

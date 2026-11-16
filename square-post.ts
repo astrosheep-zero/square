@@ -39,9 +39,16 @@ export interface SquarePost {
   readonly full?: boolean;
   readonly consumed?: boolean;
 }
+export interface SquarePostIdentity {
+  readonly kind: SquarePost['kind'];
+  readonly index: number;
+  readonly recipientKey: string;
+  readonly generation: string;
+}
 export interface ProducerRead {
-  pendingPosts(): readonly SquarePost[];
-  postedPosts(): readonly SquarePost[];
+  pendingPosts(now?: number): readonly SquarePost[];
+  postsAt(identities: readonly SquarePostIdentity[]): readonly SquarePost[];
+  withdrawnClaims(now: number): readonly SquarePost[];
   ownsPost(token: string, exportAt?: number): boolean;
 }
 export interface ProducerWrite {
@@ -53,4 +60,17 @@ export interface ProducerWrite {
 }
 export function squarePostKey(location: string, post: Pick<SquarePost, 'kind' | 'index' | 'recipient' | 'generation'>): string {
   return `square:${location}#${post.kind === 'activity' ? 'act' : 'notice'}/${post.index}/recipient/${encodeURIComponent(nameKey(post.recipient))}/join/${encodeURIComponent(post.generation)}`;
+}
+/** Only canonical keys from this square identify producer records. */
+export function parseSquarePostKey(location: string, key: string): SquarePostIdentity | undefined {
+  const prefix = `square:${location}#`;
+  if (!key.startsWith(prefix)) return undefined;
+  const match = /^(act|notice)\/(0|[1-9]\d*)\/recipient\/([^/]*)\/join\/([^/]*)$/.exec(key.slice(prefix.length));
+  if (!match) return undefined;
+  try {
+    const index = Number(match[2]), recipientKey = decodeURIComponent(match[3]!), generation = decodeURIComponent(match[4]!);
+    const kind = match[1] === 'act' ? 'activity' : 'notice';
+    if (!Number.isSafeInteger(index) || squarePostKey(location, { kind, index, recipient: recipientKey, generation }) !== key) return undefined;
+    return { kind, index, recipientKey, generation };
+  } catch { return undefined; }
 }

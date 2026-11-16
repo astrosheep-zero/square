@@ -212,6 +212,10 @@ export class LedgerStore {
   sessions(signal?: AbortSignal): Promise<readonly DeliverySession[]> {
     return this.transaction(false, () => (this.db.prepare('SELECT * FROM sessions ORDER BY owner').all() as Row[]).map(row => session(row)!), signal);
   }
+  cards(options: { readonly keyPrefix: string }, signal?: AbortSignal): Promise<readonly { readonly owner: string; readonly key: string }[]> {
+    return this.transaction(false, () => (this.db.prepare('SELECT owner,key FROM cards WHERE substr(key,1,length(?))=? ORDER BY seq')
+      .all(options.keyPrefix, options.keyPrefix) as Row[]).map(row => ({ owner: row.owner as string, key: row.key as string })), signal);
+  }
   pendingCards(owner: string, generation: string, signal?: AbortSignal): Promise<readonly DeliveryCard[]> {
     return this.transaction(false, now => this.attached(owner, generation)
       ? (this.db.prepare('SELECT * FROM cards WHERE owner=? ORDER BY seq').all(owner) as Row[]).filter(row => this.eligible(row, now)).map(card) : [], signal);

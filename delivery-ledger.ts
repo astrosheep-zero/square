@@ -189,6 +189,11 @@ export class DeliveryLedger {
   }
   session(owner: Owner, signal?: AbortSignal): Promise<DeliverySession | undefined> { validateOwner(owner); return this.store.session(owner, signal); }
   sessions(signal?: AbortSignal): Promise<readonly DeliverySession[]> { return this.store.sessions(signal); }
+  /** Existing outbox identities across owners; prefix matching is literal. */
+  cards(options: { readonly keyPrefix: string }, signal?: AbortSignal): Promise<readonly { readonly owner: Owner; readonly key: string }[]> {
+    if (typeof options.keyPrefix !== 'string') throw new TypeError('Expected a key prefix');
+    return this.store.cards(options, signal);
+  }
   pending(owner: Owner, options: { readonly generation: string }, signal?: AbortSignal): Promise<readonly DeliveryCard[]> {
     validateOwner(owner); nonempty(options.generation); return this.store.pendingCards(owner, options.generation, signal);
   }

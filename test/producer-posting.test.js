@@ -10,6 +10,7 @@ import { createProducerDriver } from '../dist/square-producer-sqlite.js';
 import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { parseSquarePostKey, squarePostKey } from '../dist/square-post.js';
 
 test('producer selection does not issue a query per historical recipient, and exact receipts stay scoped', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-post-selection-'));
@@ -43,7 +44,8 @@ test('producer selection does not issue a query per historical recipient, and ex
   assert.equal(driver.foldReceipt(post, Date.now()), true);
   assert.equal(driver.foldReceipt(post, Date.now()), false);
   assert.equal(driver.pendingPosts().length, 127);
-  assert.deepEqual(driver.postedPosts().map(item => [item.index, item.consumed]), [[post.index, true]]);
+  assert.deepEqual(driver.postsAt([parseSquarePostKey(square.location, squarePostKey(square.location, post))])
+    .map(item => [item.index, item.consumed]), [[post.index, true]]);
 });
 
 for (const stage of ['before-post', 'after-post']) test(`producer recovery preserves ownership and idempotence at ${stage}`, { timeout: 10000 }, async t => {
@@ -72,7 +74,8 @@ for (const stage of ['before-post', 'after-post']) test(`producer recovery prese
   await square.join('recipient', { owner });
   await square.join('recipient', { owner });
   assert.deepEqual((await ledger.pending(owner, { generation })).map(card => card.text), ['one durable card']);
-  const posted = (await artifact.read(facts => facts.postedPosts())).value;
+  const posted = (await artifact.read(facts => facts.postsAt([parseSquarePostKey(location, squarePostKey(location,
+    { kind: 'notice', index: 0, recipient: 'recipient', generation: facts.seat('recipient').generation }))]))).value;
   assert.equal(posted.length, 1);
   assert.equal(posted[0].full, true);
 });

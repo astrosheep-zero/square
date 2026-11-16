@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { DeliveryLedger, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
-import { dispatchPostedCard } from './notifications.js';
+import { dispatchPostedCard, isProducerDispatchRoute } from './notifications.js';
 import { retainDeliveryLedger } from './delivery-lifetime.js';
 import { projectNotification, displayAttentionPath } from './attention-presentation.js';
 import type { CardPresentation } from './card-presentation.js';
 import { coreDone } from './decisions.js';
 import { activityMetadataHasContent, type Seat } from './model.js';
-import type { SquareArtifactPort } from './ports.js';
+import type { SquareArtifactPort, SquareRead } from './ports.js';
 import { formatActivityId } from './square-core.js';
-import { squarePostKey, type SquarePost } from './square-post.js';
+import { parseSquarePostKey, squarePostKey, type SquarePost } from './square-post.js';
 
 const openLedger = (ledgerLocation?: string, signal?: AbortSignal) => DeliveryLedger.open({ location: ledgerLocation, signal });
 function renderPost(location: string, post: SquarePost): { text: string; full: boolean } {
@@ -46,13 +46,11 @@ export async function ensureInitialDeliverySession(owner: Seat['owner'], route?:
 }
 /** Called only by privileged mutations. Sandbox lease/ACK/selection never enters here. */
 export async function reconcileSquareDelivery(artifact: SquareArtifactPort, location: string, clock: () => number, signal?: AbortSignal, ledgerLocation?: string): Promise<void> {
-  const snapshot = (await artifact.read(facts => ({ seats: facts.roster().filter(person => person.joined)
-    .flatMap(person => { const seat = facts.seat(person.name); return seat ? [seat] : []; }), posts: facts.postedPosts() }), signal)).value;
-  if (!snapshot.seats.length && !snapshot.posts.length) return;
+  const seats = (await artifact.read(currentSeats, signal)).value;
   const ledger = await openLedger(ledgerLocation, signal);
   try {
-    const sessions = await deliverySessionsForSeats(ledger, snapshot.seats, signal);
-    for (const seat of snapshot.seats) {
+    const sessions = await deliverySessionsForSeats(ledger, seats, signal);
+    for (const seat of seats) {
       const session = sessions.get(seat.owner);
       if (!session) continue;
       if (session.state === 'deleted') {
@@ -67,33 +65,44 @@ export async function reconcileSquareDelivery(artifact: SquareArtifactPort, loca
       }
     }
     // A full receipt is monotonic external presentation evidence, never inferred from silence.
-    const receipts = new Map<string, ReadonlyMap<string, number>>();
-    for (const owner of new Set(snapshot.posts.map(post => post.owner))) {
-      const keys = snapshot.posts.filter(post => post.owner === owner).map(post => squarePostKey(location, post));
-      receipts.set(owner, new Map((await ledger.receipts(owner, { keys }, signal)).map(receipt => [receipt.key, receipt.at])));
-    }
-    for (const post of snapshot.posts) {
-      const cardKey = squarePostKey(location, post);
-      const receipt = receipts.get(post.owner)?.get(cardKey);
-      if (receipt !== undefined && post.full === true && !post.consumed)
-        await artifact.transactAs({ kind: 'producer' }, facts => facts.foldReceipt(post, receipt), signal);
+    for (const [owner, session] of sessions) {
+      if (session?.state !== 'attached') continue;
+      const receipts = (await ledger.receipts(owner, {}, signal))
+        .flatMap(receipt => { const id = parseSquarePostKey(location, receipt.key); return id ? [{ ...receipt, id }] : []; });
+      const at = new Map(receipts.map(receipt => [receipt.key, receipt.at]));
+      const posts = (await artifact.read(facts => facts.postsAt(receipts.map(receipt => receipt.id))
+        .filter(post => post.owner === owner && post.full === true && !post.consumed && currentPost(facts, post)), signal)).value;
+      for (const post of posts)
+        await artifact.transactAs({ kind: 'producer' }, facts => currentPost(facts, post) && facts.foldReceipt(post, at.get(squarePostKey(location, post))!), signal);
     }
     await suppressWithdrawn(artifact, ledger, location, signal);
   } finally { await ledger.close(); }
 }
+function currentSeats(facts: SquareRead): readonly Seat[] {
+  return facts.roster().filter(person => person.joined)
+    .flatMap(person => { const seat = facts.seat(person.name); return seat ? [seat] : []; });
+}
+function currentPost(facts: SquareRead, post: SquarePost): boolean {
+  const seat = facts.seat(post.recipient);
+  return !!facts.participant(post.recipient)?.joined && seat?.owner === post.owner && seat.generation === post.generation;
+}
 async function suppressWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryLedger, location: string, signal?: AbortSignal): Promise<void> {
-  const posts = (await artifact.read(facts => facts.postedPosts().filter(post => {
-    const seat = facts.seat(post.recipient);
-    return post.consumed || !seat || seat.owner !== post.owner || seat.generation !== post.generation;
-  }), signal)).value;
-  // Departure withdraws only the captured notification, never producer read history or held effects.
-  const keysByOwner = new Map<string, string[]>();
+  const live = (await ledger.cards({ keyPrefix: `square:${location}#` }, signal))
+    .flatMap(card => { const id = parseSquarePostKey(location, card.key); return id ? [{ ...card, id }] : []; });
+  const identities = new Set(live.map(card => JSON.stringify([card.owner, card.key])));
+  const posts = (await artifact.read(facts => [
+    ...facts.postsAt(live.map(card => card.id)).filter(post => identities.has(JSON.stringify([post.owner, squarePostKey(location, post)]))
+      && (post.consumed || !currentPost(facts, post))),
+    ...facts.withdrawnClaims(Date.now()),
+  ], signal)).value;
+  // Only existing cards or in-window claims can still require withdrawal; custody survives.
+  const keysByOwner = new Map<string, Set<string>>();
   for (const post of posts) {
-    const keys = keysByOwner.get(post.owner) ?? [];
-    keys.push(squarePostKey(location, post));
+    const keys = keysByOwner.get(post.owner) ?? new Set<string>();
+    keys.add(squarePostKey(location, post));
     keysByOwner.set(post.owner, keys);
   }
-  for (const [owner, keys] of keysByOwner) await ledger.suppressExact(owner, keys, signal);
+  for (const [owner, keys] of keysByOwner) await ledger.suppressExact(owner, [...keys], signal);
 }
 /** One export path for Square activities and Square-owned notices. No transaction spans I/O. */
 export async function flushSquarePosts(artifact: SquareArtifactPort, location: string, clock: () => number, signal?: AbortSignal, ledgerLocation?: string): Promise<void> {
@@ -102,18 +111,18 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
   let lifetime: ReturnType<typeof retainDeliveryLedger> | undefined;
   try {
     const snapshot = (await artifact.read(facts => ({
-      pending: facts.pendingPosts().map(post => {
+      pending: facts.pendingPosts(Date.now()).map(post => {
         const activity = post.kind === 'activity' ? facts.activity(post.index) : undefined;
         const reply = activity?.kind === 'say' ? activity.reply : undefined;
         return { post, replyTo: reply === undefined ? undefined : facts.activity(reply)?.actor };
       }),
-      posted: facts.postedPosts(),
+      seats: currentSeats(facts),
     }), signal)).value;
-    if (!snapshot.pending.length && !snapshot.posted.length) return;
     const ledger = await openLedger(ledgerLocation, signal);
     lifetime = retainDeliveryLedger(ledger);
+    const sessions = await deliverySessionsForSeats(ledger, snapshot.seats, signal);
     for (const { post, replyTo } of snapshot.pending) {
-      const session = await ledger.session(post.owner, signal);
+      const session = sessions.get(post.owner);
       if (session?.state !== 'attached') continue;
       const rendered = renderPost(location, post), token = randomUUID();
       const owned = (await artifact.transactAs({ kind: 'producer' }, facts =>
@@ -141,18 +150,13 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
       }
     }
     await suppressWithdrawn(artifact, ledger, location, signal);
-    const posts = (await artifact.read(facts => facts.postedPosts().filter(post => {
-      const seat = facts.seat(post.recipient);
-      return !post.consumed && seat?.owner === post.owner && seat.generation === post.generation;
-    }), signal)).value;
-    for (const owner of new Set(posts.map(post => post.owner))) {
-      const session = await ledger.session(owner, signal);
-      if (session?.state !== 'attached') continue;
-      const pendingKeys = new Set((await ledger.pending(owner, { generation: session.generation }, signal)).map(card => card.key));
-      for (const post of posts.filter(post => post.owner === owner)) {
-        const key = squarePostKey(location, post);
-        if (pendingKeys.has(key)) await dispatchPostedCard(ledger, post.owner, key, result => lifetime?.track(result), signal);
-      }
+    for (const [owner, session] of sessions) {
+      if (session?.state !== 'attached' || !session.routes.some(isProducerDispatchRoute)) continue;
+      const pending = (await ledger.pending(owner, { generation: session.generation }, signal))
+        .flatMap(card => { const id = parseSquarePostKey(location, card.key); return id ? [id] : []; });
+      const posts = (await artifact.read(facts => facts.postsAt(pending)
+        .filter(post => post.owner === owner && !post.consumed && currentPost(facts, post)), signal)).value;
+      for (const post of posts) await dispatchPostedCard(ledger, owner, squarePostKey(location, post), result => lifetime?.track(result), signal);
     }
   } catch {
     // Unsettled/uncertain producer work is retried with its stable key at the next mutation.

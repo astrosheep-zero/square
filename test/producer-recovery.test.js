@@ -186,7 +186,9 @@ test('an unsent recovery cannot erase an earlier uncertain insertion or resurrec
   await c.square.join('Bob', { owner: c.owner });
   assert.equal(calls, 1, 'earlier uncertainty still blocks automatic reinsertion');
   assert.deepEqual((await c.cards()).map(card => card.key), ['collect']);
-  assert.equal((await c.artifact.read(facts => facts.pendingPosts())).value.length, 1);
+  assert.equal((await c.artifact.read(facts => facts.pendingPosts())).value.length, 0, 'expired uncertainty is no longer exportable work');
+  assert.equal((await c.artifact.read(facts => facts.postsAt([{ kind: 'notice', index: 0, recipientKey: 'bob', generation: facts.seat('Bob').generation }]))).value.length, 1,
+    'expiry excludes work without erasing the producer record');
   count.mock.restore();
 });
 
@@ -195,7 +197,8 @@ test('notice results, producer storage and posted cards preserve mixed newline b
   const body = '`answer`\nfirst\r\nsecond\r\n\n---\nreport\r\n';
   const result = await c.square.send({ from: 'notice', to: 'Bob', body });
   assert.equal(result.body, body);
-  assert.equal((await c.artifact.read(facts => facts.postedPosts()[0])).value.body, body);
+  assert.equal((await c.artifact.read(facts => facts.postsAt([{ kind: 'notice', index: Number(result.id.slice(7)),
+    recipientKey: 'bob', generation: facts.seat('Bob').generation }])[0])).value.body, body);
   assert.equal((await c.cards())[0].text, body);
 });
 

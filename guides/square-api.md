@@ -61,11 +61,18 @@ After landing, Square renders and posts a card per audience member to the host d
 `square:<canonical-path>#act/N/recipient/<encodeURIComponent(nameKey(recipient))>/join/<encodeURIComponent(capturedJoinGeneration)>`.
 Notices use the analogous `notice/N` key. The recipient and participant join generation are frozen at
 landing; ledger attachment rotation does not change the key. Post, receipt lookup and suppression use
-the same captured coordinates. A later mutating operation retries unposted work idempotently. Directed
+the same captured coordinates. A later mutating operation retries unposted, unconsumed work for current
+joined seats idempotently, and retries dispatch of their existing pending ledger cards when their host
+has a producer-dispatchable route. No-route and native-receiver-only hosts still receive exported ledger
+cards; producer dispatch skips their pending enumeration. Directed
 activity cards bound the body to 200 characters and point to `square_perceive` when shortened. Square records which cards contain
 the full activity. Unread means after the read horizon, not perceived, and without a ledger receipt for
-a full card. Square folds retained receipts lazily during privileged producer operations; perceive permanently suppresses
-the corresponding ledger cards when possible. Ledger receipt evidence has finite retention: after proof
+a full card. Square folds retained receipts lazily during privileged producer operations: it reads the
+ledger's retained receipts for current attached seat owners, then looks up only the exact records named
+by this square's keys. Only full, unconsumed cards matching the current joined seat can fold. Perceive
+withdraws corresponding live ledger cards when possible. Withdrawal maintenance reads existing ledger identities under this square's
+key prefix and in-window export claims, not consumed history. Gone cards without such claims do not
+recreate expired ledger suppressions. Ledger receipt evidence has finite retention: after proof
 expires, locally unproved activity remains unread until explicit perceive or ACK. Missing evidence proves
 neither consumption nor non-delivery. A shortened card cannot consume the full activity. Handoff
 acceptance is not presentation; a boundary receipt is not proof of comprehension.
@@ -112,8 +119,10 @@ again; no TTL or first-admission cutoff is required. Producer bookkeeping record
 A claim is recoverable when its process dies or its 60-second ownership expires; settlement is fenced
 to the captured token. An abandoned uncertain export at or beyond the ledger's minimum 30-day identity
 retention window is not automatically reinserted. Clock or boundary uncertainty is treated conservatively.
-This limit is not a source TTL: it does not reject or expire never-exported sources, and perceive and ACK
-remain available. A crash between export and bookkeeping leaves honest uncertainty. A token-fenced
+Pending export selection excludes existing claims outside that original identity window or ahead of
+the actual host clock (including a future recovery claim), before acquiring export ownership. The Square's
+social clock is not used for this selection. This limit is not a source TTL: it does not reject or expire
+never-exported sources, and perceive and ACK remain available. A crash between export and bookkeeping leaves honest uncertainty. A token-fenced
 initial attempt proved not to have invoked insertion, or given a definite insertion refusal, releases
 its export bookkeeping while keeping the source pending. Recovering a prior uncertain attempt never
 erases its original export time merely because the current retry was unsent.
@@ -129,6 +138,11 @@ is gated by the ledger's current state. Local controls cannot grant delivery aut
 deleted session. Known stale, departed or replaced custody refuses.
 
 ## Storage and lifecycle
+
+Live-work bounds apply to decoded records, exact lookup inputs and downstream delivery calls, not constant
+SQLite cost. With the existing schema, pending selection still searches retained say/audience history,
+withdrawn-claim selection searches posting rows, and `read_through` aggregates retained read activities.
+Physical page reads can therefore grow with history; this change adds no index or persistence redesign.
 
 Format 12 is a breaking fresh-store format. Square owns its activities, audience, participants, read
 state and posting/full-card bookkeeping in the `.square` SQLite artifact. The per-user host delivery

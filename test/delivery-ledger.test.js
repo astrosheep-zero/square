@@ -47,6 +47,21 @@ async function interruptedHandoff(f, key) {
   return { result, ...completion, calls: () => calls };
 }
 
+test('card identity reads use a literal prefix across owners, including held and detached cards', async t => {
+  const f = await fixture(t);
+  const other = 'another:owner';
+  const session = await f.ledger.attach({ owner: other, expectedGeneration: null, routes: [] });
+  await f.post('producer:%_/held');
+  await f.dispatch('producer:%_/held', 'accepted');
+  await f.ledger.post({ owner: other, key: 'producer:%_/detached', text: 'not attached' });
+  await f.ledger.detach({ owner: other, generation: session.generation });
+  await f.post('producer:xx/not-a-literal-match');
+  assert.deepEqual(await f.ledger.cards({ keyPrefix: 'producer:%_/' }), [
+    { owner, key: 'producer:%_/held' }, { owner: other, key: 'producer:%_/detached' },
+  ]);
+  assert.deepEqual(await f.ledger.cards({ keyPrefix: 'absent:' }), []);
+});
+
 test('stable owner cards are idempotent, whole, and retained through detach and CAS reattach', async t => {
   const f = await fixture(t);
   assert.equal((await f.ledger.post({ owner: 'unknown', key: 'p:1', text: 'x' })).status, 'unknown-session');
