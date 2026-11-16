@@ -18,6 +18,11 @@ boundary, not model comprehension. An observer may not detect a later plugin rem
 Receipt retention is finite: once evidence expires, Square retains unproved local unread until perceive
 or ACK, rather than inventing consumption or reinserting an uncertain old card.
 
+The ledger caps retained cards at 200 per owner on post, withdrawing the oldest cards without custody.
+Dispatching, unknown and accepted-but-unpresented handoffs are exempt, so custody can keep the total
+above 200. Cancelled and temporarily suppressed cards count toward the cap. Withdrawal affects only
+notifications: producer content stays unread and remains available to pending, perceive and ACK.
+
 The ledger is an outbox. Accepted and unknown attempts drop card text and details in the same
 transaction, retaining only custody so an exact late observation can still write a receipt. A presented
 presentation attempt deletes its card and attempts once no attempt is dispatching; a permanent exact
@@ -29,19 +34,27 @@ bounded batches after 30 days. Deleted sessions lose cards, attempts and suppres
 longer than 30 days lose cards and attempts. Session rows remain:
 a deleted row is the authority for producer reconciliation and cannot be registered again.
 
-`ledger.cards({keyPrefix}, signal?)` reads existing card identities `{owner, key}` across owners in a
-read-only transaction. Prefix matching is literal; the result includes held cards, not only pending
+`ledger.cards({owner, keyPrefix}, signal?)` reads existing card identities `{owner, key}` for one owner
+through the owner/key unique range index. Prefix matching is literal; the result includes held cards, not only pending
 ones, and carries no producer-specific interpretation. Producer dispatch skips pending enumeration when
 a cached attached session has no producer-dispatchable route (no routes or only native receiver routes).
 This never blocks producer export, receipt folding or withdrawal; actual dispatch retains its per-card
 session and generation checks.
 
-Square folds receipts lazily by reading the ledger's retained receipts for current attached seat owners
-and looking up only this square's exact producer records. Only unconsumed full cards matching the current
-joined seat can fold; a shortened activity card points to `square_perceive` and cannot consume the full
-activity. Old unconsumed producer records without retained ledger evidence are not enumerated for folding.
-Perceive suppresses corresponding live ledger cards where possible. Withdrawal maintenance also tombstones
-in-window export claims that could still insert a card. Once neither a card nor such a claim remains,
+`ledger.receipts(owner, {afterSeq?, keys?, since?}, signal?)` returns `{seq, owner, key, at}` in sequence
+order. Receipt sequences are allocated in the ledger writer transaction, so sequence order follows
+commit order even when timestamps do not. Square reads after its artifact-owned watermark per current
+attached seat owner, then folds eligible receipts and advances that watermark in one artifact transaction.
+The watermark advances past unrelated producer receipts too; concurrent reconciliation cannot lower it.
+Only unconsumed full cards matching the current joined seat can fold; a shortened activity card points
+to `square_perceive` and cannot consume the full activity. Resetting a watermark to zero reproduces the
+retained full scan. Producers never delete ledger receipts.
+Perceive suppresses corresponding live ledger cards where possible. Withdrawal uses owner/key ranges
+for current seat owners and outstanding departure intents, plus in-window export claims that could still
+insert a card. Seat removal records its captured departure intent atomically. A late export settlement
+for that old seat refreshes the intent; cleanup clears only the captured token after successful
+suppression, preserving recovery across crashes and concurrent settlement. Completed departure intents
+do not accumulate as history. Once neither a card nor such a claim remains,
 later Square operations do not recreate expired suppressions. Pending export selection excludes expired
 or future-clock export identities using host time, without a TTL on never-exported sources or deletion
 of producer evidence. Cancellation suppresses outstanding work
@@ -50,10 +63,12 @@ recall an external send already past its final check. Producers can call
 `ledger.suppress({owner, key, scope: 'exact' | 'prefix', expiresAt?})` to suppress one key or a key
 prefix. Omit `expiresAt` for permanent suppression within ledger retention, or supply an expiry for
 temporary suppression. This does not consume Square activity; producer-owned exact ACK is described
-in [square-api.md](square-api.md). The ledger does not match producer metadata. Live-work bounds concern decoded records and downstream
-calls, not constant SQL cost: pending selection still searches retained say/audience history,
-withdrawn-claim selection searches posting rows, and `read_through` aggregates retained reads. No index
-or persistence redesign removes those physical scans here.
+in [square-api.md](square-api.md). The ledger does not match producer metadata. Ledger Format 4 and
+Square Format 13 require fresh stores; older formats are refused read-only, without migration or deletion.
+The default ledger filename remains `delivery.v3.sqlite`, so an old file at that path is also refused.
+Permanent suppression retention drains through a partial `created_at` index. Pending producer selection
+still searches retained say/audience history, withdrawn-claim selection searches posting rows, and
+`read_through` aggregates retained reads.
 
 Square posting, the Codex Stop watcher and OpenCode receivers use `DeliveryLedger.close()` to retire
 ordinary work immediately. The ledger alone retains its original connection while an already-invoked

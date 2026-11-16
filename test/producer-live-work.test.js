@@ -8,9 +8,162 @@ import { Square } from '../dist/square-api.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { squarePostKey, parseSquarePostKey } from '../dist/square-post.js';
 import { nameKey } from '../dist/model.js';
-import { flushSquarePosts, reconcileSquareDelivery } from '../dist/square-posting.js';
+import { flushSquarePosts, reconcileSquareDelivery, readSquareSessions, ensureInitialDeliverySession } from '../dist/square-posting.js';
+import { SqliteSquare } from '../dist/sqlite-square.js';
+
+test('receipt folds and owner watermarks commit atomically, replay safely and skip retained history', async t => {
+  const c = await fixture(t);
+  await c.insert({ body: 'first full receipt' });
+  await c.insert({ body: 'second full receipt' });
+  await c.flush();
+  const truncated = await c.alice.express('long '.repeat(100), { mentions: ['Bob'], force: true });
+  await c.ledger.post({ owner: c.session.owner, key: 'another-producer:key', text: 'foreign receipt' });
+  const claim = await c.ledger.claimPresentation(c.session.owner, { generation: c.session.generation, budgetChars: 100000 });
+  await claim.settle('presented');
+  const receipts = await c.ledger.receipts(c.session.owner);
+  const last = receipts.at(-1).seq;
+  const ids = receipts.flatMap(receipt => { const id = parseSquarePostKey(c.location, receipt.key); return id ? [id] : []; });
+  const snapshot = () => c.artifact.read(facts => ({
+    watermark: facts.receiptWatermark(c.session.owner),
+    other: facts.receiptWatermark(c.alice.seat.owner),
+    consumed: facts.postsAt(ids).map(post => !!post.consumed),
+  })).then(result => result.value);
+  const transact = c.artifact.transactAs.bind(c.artifact);
+  const failure = new Error('crash before artifact commit');
+  const intercept = t.mock.method(c.artifact, 'transactAs', (authority, change, signal) => transact(authority, facts => change(new Proxy(facts, {
+    get(target, key) {
+      if (key === 'advanceReceiptWatermark') return (...args) => { target.advanceReceiptWatermark(...args); throw failure; };
+      return target[key];
+    },
+  })), signal));
+  await assert.rejects(c.reconcile(), error => error === failure);
+  assert.deepEqual(await snapshot(), { watermark: 0, other: 0, consumed: [false, false, false] });
+  intercept.mock.restore();
+  await Promise.all([c.reconcile(), c.reconcile()]);
+  assert.deepEqual(await snapshot(), { watermark: last, other: 0, consumed: [false, true, true] });
+  await c.artifact.transactAs({ kind: 'producer' }, facts => facts.advanceReceiptWatermark(c.session.owner, last - 1));
+  assert.equal((await snapshot()).watermark, last, 'a stale reconciler cannot lower the watermark');
+  const readReceipts = DeliveryLedger.prototype.receipts;
+  const reads = [];
+  t.mock.method(DeliveryLedger.prototype, 'receipts', async function (owner, options, signal) {
+    const result = await readReceipts.call(this, owner, options, signal);
+    if (owner === c.session.owner) reads.push({ after: options.afterSeq, count: result.length });
+    return result;
+  });
+  await c.reconcile();
+  assert.deepEqual(reads, [{ after: last, count: 0 }], 'retained receipts are behind the cursor');
+  // Rebuilding the cursor reproduces a full scan without changing established consumption.
+  const db = new DatabaseSync(c.square.location);
+  try { db.prepare('DELETE FROM producer_receipt_watermarks WHERE owner_json=?').run(JSON.stringify(c.session.owner)); }
+  finally { db.close(); }
+  await c.reconcile();
+  assert.equal(reads.at(-1).after, 0);
+  assert.equal(reads.at(-1).count, receipts.length);
+  assert.deepEqual(await snapshot(), { watermark: last, other: 0, consumed: [false, true, true] });
+  assert.deepEqual((await c.bob.pending()).activities.map(activity => activity.id), [truncated.activity.id]);
+  await assert.rejects(c.artifact.transactAs({ kind: 'participant', seat: c.bob.seat }, facts => facts.advanceReceiptWatermark(c.session.owner, last + 1)), /authority/);
+});
+
+test('durable departure cleanup survives interrupted suppression and fences late exports without clearing a newer intent', async t => {
+  const c = await fixture(t);
+  await c.square.send({ from: 'notice', to: 'Bob', body: 'posted before departure' });
+  const oldKey = (await c.cards())[0].key;
+  await c.insert({ body: 'in-flight before departure' });
+  const captured = (await c.artifact.read(facts => facts.pendingPosts()[0])).value;
+  await c.artifact.transactAs({ kind: 'producer' }, facts => facts.acquirePost({ ...captured, full: true }, 'late-export', process.pid, Date.now()));
+  await c.artifact.transactAs({ kind: 'participant', seat: c.bob.seat }, facts => facts.land({ kind: 'done', actor: 'Bob', at: Date.now() }));
+  assert.deepEqual((await c.artifact.read(facts => facts.departedSeats())).value.map(seatIdentity), [
+    { participant: 'Bob', owner: c.session.owner, generation: c.bob.generation },
+  ]);
+  const peer = await Square.at({ path: c.square.location, ledgerLocation: c.ledgerLocation });
+  t.after(() => peer.close());
+  const suppress = DeliveryLedger.prototype.suppressExact;
+  const interruption = new Error('ledger suppression interrupted');
+  const reject = t.mock.method(DeliveryLedger.prototype, 'suppressExact', async () => { throw interruption; });
+  await assert.rejects(peer.join('Alice', { owner: c.alice.seat.owner }), error => error === interruption);
+  assert.equal((await c.artifact.read(facts => facts.departedSeats())).value.length, 1);
+  reject.mock.restore();
+  let newer;
+  t.mock.method(DeliveryLedger.prototype, 'suppressExact', async function (owner, keys, signal) {
+    await suppress.call(this, owner, keys, signal);
+    if (newer) return;
+    // A second departure commits after the cleanup snapshot; clearing the first must leave it intact.
+    await c.artifact.transactAs({ kind: 'join', participant: 'Bob', owner: c.session.owner }, facts => facts.land({ kind: 'join', actor: 'Bob', at: Date.now() }));
+    newer = (await c.artifact.read(facts => facts.seat('Bob'))).value;
+    await c.artifact.transactAs({ kind: 'participant', seat: newer }, facts => facts.land({ kind: 'done', actor: 'Bob', at: Date.now() }));
+  });
+  await reconcileSquareDelivery(peer.artifact, c.location, Date.now, undefined, c.ledgerLocation);
+  assert.deepEqual(await c.cards(), []);
+  assert.ok(c.suppressions().includes(oldKey));
+  assert.equal((await c.ledger.post({ owner: captured.owner, key: c.key(captured), text: captured.body })).status, 'suppressed');
+  assert.deepEqual((await c.artifact.read(facts => facts.departedSeats())).value.map(seatIdentity),
+    [{ participant: 'Bob', owner: newer.owner, generation: newer.generation }]);
+  await c.reconcile();
+  assert.deepEqual((await c.artifact.read(facts => facts.departedSeats())).value, []);
+});
+
+test('late export settlement refreshes departure cleanup after the ledger snapshot and before claim selection', async t => {
+  const c = await fixture(t);
+  await c.insert({ body: 'late insertion into old seat' });
+  const post = (await c.artifact.read(facts => facts.pendingPosts()[0])).value;
+  await c.artifact.transactAs({ kind: 'producer' }, facts => facts.acquirePost({ ...post, full: true }, 'late-race', process.pid, Date.now()));
+  await c.artifact.transactAs({ kind: 'participant', seat: c.bob.seat }, facts => facts.land({ kind: 'done', actor: 'Bob', at: Date.now() }));
+  const before = (await c.artifact.read(facts => facts.departedSeats())).value[0];
+  const cards = DeliveryLedger.prototype.cards;
+  let inserted = false;
+  t.mock.method(DeliveryLedger.prototype, 'cards', async function (options, signal) {
+    const snapshot = await cards.call(this, options, signal);
+    if (options.owner === post.owner && !inserted) {
+      inserted = true;
+      await c.ledger.post({ owner: post.owner, key: c.key(post), text: post.body });
+      await c.artifact.settleAs({ kind: 'producer' }, facts => facts.settlePost('late-race', true, 'uncertain'));
+    }
+    return snapshot;
+  });
+  await c.reconcile();
+  const refreshed = (await c.artifact.read(facts => facts.departedSeats())).value;
+  assert.equal(refreshed.length, 1);
+  assert.notEqual(refreshed[0].token, before.token, 'settlement survives a cleanup that captured the old intent');
+  assert.equal((await c.cards()).length, 1, 'the late insertion missed the first ledger snapshot');
+  await c.reconcile();
+  assert.deepEqual(await c.cards(), []);
+  assert.deepEqual((await c.artifact.read(facts => facts.departedSeats())).value, []);
+  assert.equal((await c.ledger.post({ owner: post.owner, key: c.key(post), text: post.body })).status, 'suppressed');
+});
+
+test('cap withdrawal leaves producer activity unread and available to pending and perceive', async t => {
+  const c = await fixture(t);
+  const activity = (await c.alice.express('oldest card remains unread', { mentions: ['Bob'], force: true })).activity;
+  for (let i = 0; i < 200; i++) await c.ledger.post({ owner: c.session.owner, key: `other:${i}`, text: 'newer notification' });
+  assert.deepEqual(await c.cards(), []);
+  assert.deepEqual((await c.bob.pending()).activities.map(item => item.id), [activity.id]);
+  assert.deepEqual((await c.bob.perceive({ id: activity.id })).activities.map(item => item.id), [activity.id]);
+});
+
+test('internal delivery entry points refuse omitted locations before accessing storage; public resources capture resolution once', async t => {
+  const c = await fixture(t);
+  const open = t.mock.method(DeliveryLedger, 'open', () => { throw new Error('must not open a ledger'); });
+  await assert.rejects(readSquareSessions([]), /resolved absolute/);
+  await assert.rejects(ensureInitialDeliverySession('owner'), /resolved absolute/);
+  await assert.rejects(reconcileSquareDelivery(undefined, c.location, Date.now), /resolved absolute/);
+  await assert.rejects(flushSquarePosts(undefined, c.location, Date.now), /resolved absolute/);
+  assert.throws(() => new SqliteSquare(c.location, c.artifact, Date.now, c.location), /resolved absolute/);
+  assert.equal(open.mock.callCount(), 0);
+  open.mock.restore();
+  const previous = process.env.SQUARE_DELIVERY;
+  try {
+    process.env.SQUARE_DELIVERY = c.ledgerLocation;
+    const resource = await Square.at({ path: c.square.location });
+    t.after(() => resource.close());
+    process.env.SQUARE_DELIVERY = path.join(path.dirname(c.ledgerLocation), 'later-env.sqlite');
+    await resource.send({ from: 'notice', to: 'Bob', body: 'captured ledger location' });
+    assert.ok((await c.cards()).length);
+    await assert.rejects(fs.access(process.env.SQUARE_DELIVERY), { code: 'ENOENT' });
+  } finally { process.env.SQUARE_DELIVERY = previous; }
+});
 
 const DAY = 86_400_000;
+const seatIdentity = ({ participant, owner, generation }) => ({ participant, owner, generation });
 const disposition = ({ kind, index, recipient, owner, generation, consumed }) => ({ kind, index, recipient, owner, generation, consumed });
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-live-work-'));
@@ -30,7 +183,7 @@ async function fixture(t) {
   };
   return { square, location, alice, bob, artifact, ledger, ledgerLocation, session, suppressions,
     key: post => squarePostKey(location, post),
-    cards: () => ledger.cards({ keyPrefix: `square:${location}#` }),
+    cards: async () => (await Promise.all([alice.seat.owner, bob.seat.owner].map(owner => ledger.cards({ owner, keyPrefix: `square:${location}#` })))).flat(),
     insert: input => artifact.transactAs({ kind: 'send', actor: 'notice' }, facts => facts.insertNotice({ from: 'notice', to: 'Bob', ...input }, Date.now())),
     reconcile: () => reconcileSquareDelivery(artifact, location, Date.now, undefined, ledgerLocation),
     flush: () => flushSquarePosts(artifact, location, Date.now, undefined, ledgerLocation),
@@ -238,15 +391,17 @@ test('perceive maintenance is driven by live ledger evidence, not consumed or un
     suppressCalls.push(...keys);
     return suppress.call(this, owner, keys, signal);
   });
-  const read = c.artifact.read.bind(c.artifact);
-  t.mock.method(c.artifact, 'read', (select, signal) => read(facts => select(new Proxy(facts, {
+  const read = c.artifact.read.bind(c.artifact), transact = c.artifact.transactAs.bind(c.artifact);
+  const observe = facts => new Proxy(facts, {
     get(target, key) {
       if (key === 'postsAt') return (...args) => { lookedUp.push(...args[0]); return target.postsAt(...args); };
       if (key === 'postDispositionsAt') return (...args) => { dispositionLookups.push(...args[0]); return target.postDispositionsAt(...args); };
       if (key === 'pendingPosts') return () => { const rows = target.pendingPosts(); pendingRows.push(...rows); return rows; };
       return target[key];
     },
-  })), signal));
+  });
+  t.mock.method(c.artifact, 'read', (select, signal) => read(facts => select(observe(facts)), signal));
+  t.mock.method(c.artifact, 'transactAs', (authority, change, signal) => transact(authority, facts => change(observe(facts)), signal));
   await c.bob.perceive({ id: `act/${target}` });
   assert.ok(receiptCalls.length > 0);
   assert.ok(receiptCalls.every(call => call.options?.keys === undefined), 'receipt reads never carry historical artifact key lists');

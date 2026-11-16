@@ -75,7 +75,7 @@ export function assertCurrentSeat(read: SquareRead, expected: SeatRef, allowDeta
 export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authority: ArtifactWriteAuthority): SquareWriteGate {
   if (!authority || typeof authority !== 'object') throw new SquareError('invalid_args', 'Artifact writes require an explicit authority.');
   const denied = () => { throw new SquareError('invalid_args', 'This authority cannot perform that write.'); };
-  const deniedWrites = { land: denied, putLease: denied, removeLease: denied, markSeen: denied, setSeatAttachment: denied, insertNotice: denied, ackMatching: denied, acquirePost: denied, settlePost: denied, foldReceipt: denied };
+  const deniedWrites = { land: denied, putLease: denied, removeLease: denied, markSeen: denied, setSeatAttachment: denied, insertNotice: denied, ackMatching: denied, acquirePost: denied, settlePost: denied, foldReceipt: denied, advanceReceiptWatermark: denied, clearDepartedSeat: denied };
   if (authority.kind === 'producer') {
     return { facts: Object.assign({}, read, deniedWrites, {
       acquirePost(post, token, pid, now, exportAt) {
@@ -86,8 +86,8 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
         }
         return writes.acquirePost(post, token, pid, now, exportAt);
       },
-      settlePost: writes.settlePost, foldReceipt: writes.foldReceipt, setSeatAttachment: writes.setSeatAttachment,
-    } satisfies Pick<SquareWrite, 'acquirePost' | 'settlePost' | 'foldReceipt' | 'setSeatAttachment'>), complete() {} };
+      settlePost: writes.settlePost, foldReceipt: writes.foldReceipt, advanceReceiptWatermark: writes.advanceReceiptWatermark, clearDepartedSeat: writes.clearDepartedSeat, setSeatAttachment: writes.setSeatAttachment,
+    } satisfies Pick<SquareWrite, 'acquirePost' | 'settlePost' | 'foldReceipt' | 'advanceReceiptWatermark' | 'clearDepartedSeat' | 'setSeatAttachment'>), complete() {} };
   }
   if (authority.kind === 'send') {
     validateName(authority.actor);

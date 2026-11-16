@@ -50,7 +50,7 @@ export interface DeliveryAttempt {
   readonly expiresAt: number;
   readonly settledAt?: number;
 }
-export interface DeliveryReceipt { readonly owner: Owner; readonly key: string; readonly at: number }
+export interface DeliveryReceipt { readonly seq: number; readonly owner: Owner; readonly key: string; readonly at: number }
 export type PostResult = { readonly status: 'posted' | 'duplicate' | 'conflict' | 'unknown-session' | 'deleted-session' | 'suppressed' };
 export type SuppressionResult = { readonly id: string; readonly status: 'suppressed' | 'in-custody' };
 export interface DeliveryHealth {
@@ -189,8 +189,9 @@ export class DeliveryLedger {
   }
   session(owner: Owner, signal?: AbortSignal): Promise<DeliverySession | undefined> { validateOwner(owner); return this.store.session(owner, signal); }
   sessions(signal?: AbortSignal): Promise<readonly DeliverySession[]> { return this.store.sessions(signal); }
-  /** Existing outbox identities across owners; prefix matching is literal. */
-  cards(options: { readonly keyPrefix: string }, signal?: AbortSignal): Promise<readonly { readonly owner: Owner; readonly key: string }[]> {
+  /** Owner-scoped outbox identities in key order; prefix matching is literal. */
+  cards(options: { readonly owner: Owner; readonly keyPrefix: string }, signal?: AbortSignal): Promise<readonly { readonly owner: Owner; readonly key: string }[]> {
+    validateOwner(options.owner);
     if (typeof options.keyPrefix !== 'string') throw new TypeError('Expected a key prefix');
     return this.store.cards(options, signal);
   }
@@ -226,8 +227,9 @@ export class DeliveryLedger {
   cancel(input: { readonly owner: Owner; readonly generation: string }, signal?: AbortSignal): Promise<boolean> {
     validateOwner(input.owner); nonempty(input.generation); return this.store.cancel(input, signal);
   }
-  receipts(owner: Owner, options: { readonly keys?: readonly string[]; readonly since?: number } = {}, signal?: AbortSignal): Promise<readonly DeliveryReceipt[]> {
+  receipts(owner: Owner, options: { readonly afterSeq?: number; readonly keys?: readonly string[]; readonly since?: number } = {}, signal?: AbortSignal): Promise<readonly DeliveryReceipt[]> {
     validateOwner(owner);
+    if (options.afterSeq !== undefined && (!Number.isSafeInteger(options.afterSeq) || options.afterSeq < 0)) throw new RangeError('Expected a nonnegative safe receipt sequence');
     if (options.keys) options.keys.forEach(nonempty);
     if (options.since !== undefined && !Number.isFinite(options.since)) throw new TypeError('Expected finite receipt time');
     return this.store.receipts(owner, options, signal);

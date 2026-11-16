@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { DeliveryLedger, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
 import { dispatchPostedCard, isProducerDispatchRoute } from './notifications.js';
 import { retainDeliveryLedger } from './delivery-lifetime.js';
@@ -10,7 +11,13 @@ import type { SquareArtifactPort, SquareRead } from './ports.js';
 import { formatActivityId } from './square-core.js';
 import { parseSquarePostKey, squarePostKey, type SquarePost } from './square-post.js';
 
-const openLedger = (ledgerLocation?: string, signal?: AbortSignal) => DeliveryLedger.open({ location: ledgerLocation, signal });
+function requireLedgerLocation(ledgerLocation: string): void {
+  if (typeof ledgerLocation !== 'string' || !path.isAbsolute(ledgerLocation)) throw new TypeError('Expected a resolved absolute delivery ledger location');
+}
+const openLedger = (ledgerLocation: string, signal?: AbortSignal) => {
+  requireLedgerLocation(ledgerLocation);
+  return DeliveryLedger.open({ location: ledgerLocation, signal });
+};
 function renderPost(location: string, post: SquarePost): { text: string; full: boolean } {
   if (post.kind === 'notice') return { text: post.body ?? '', full: true };
   const projected = projectNotification({ squarePath: location, actIndex: post.index, recipient: post.recipient,
@@ -24,14 +31,15 @@ export async function deliverySessionsForSeats(ledger: DeliveryLedger, seats: re
   return new Map(await Promise.all(owners.map(async owner => [owner, await ledger.session(owner, signal)] as const)));
 }
 /** Read-only host observations for status; callers fence them against the captured World seats. */
-export async function readSquareSessions(seats: readonly Seat[], signal?: AbortSignal, ledgerLocation?: string): Promise<ReadonlyMap<string, DeliverySession | undefined>> {
+export async function readSquareSessions(seats: readonly Seat[], signal: AbortSignal | undefined, ledgerLocation: string): Promise<ReadonlyMap<string, DeliverySession | undefined>> {
+  requireLedgerLocation(ledgerLocation);
   if (!seats.length) return new Map();
   const ledger = await openLedger(ledgerLocation, signal);
   try { return await deliverySessionsForSeats(ledger, seats, signal); }
   finally { await ledger.close(); }
 }
 /** A first producer join may register an absent owner, never resume or revive one. */
-export async function ensureInitialDeliverySession(owner: Seat['owner'], route?: DeliveryRoute, signal?: AbortSignal, ledgerLocation?: string): Promise<boolean> {
+export async function ensureInitialDeliverySession(owner: Seat['owner'], route: DeliveryRoute | undefined, signal: AbortSignal | undefined, ledgerLocation: string): Promise<boolean> {
   const ledger = await openLedger(ledgerLocation, signal);
   try {
     const current = await ledger.session(owner, signal);
@@ -45,7 +53,8 @@ export async function ensureInitialDeliverySession(owner: Seat['owner'], route?:
   } finally { await ledger.close(); }
 }
 /** Called only by privileged mutations. Sandbox lease/ACK/selection never enters here. */
-export async function reconcileSquareDelivery(artifact: SquareArtifactPort, location: string, clock: () => number, signal?: AbortSignal, ledgerLocation?: string): Promise<void> {
+export async function reconcileSquareDelivery(artifact: SquareArtifactPort, location: string, clock: () => number, signal: AbortSignal | undefined, ledgerLocation: string): Promise<void> {
+  requireLedgerLocation(ledgerLocation);
   const seats = (await artifact.read(currentSeats, signal)).value;
   const ledger = await openLedger(ledgerLocation, signal);
   try {
@@ -67,13 +76,22 @@ export async function reconcileSquareDelivery(artifact: SquareArtifactPort, loca
     // A full receipt is monotonic external presentation evidence, never inferred from silence.
     for (const [owner, session] of sessions) {
       if (session?.state !== 'attached') continue;
-      const receipts = (await ledger.receipts(owner, {}, signal))
-        .flatMap(receipt => { const id = parseSquarePostKey(location, receipt.key); return id ? [{ ...receipt, id }] : []; });
-      const at = new Map(receipts.map(receipt => [receipt.key, receipt.at]));
-      const posts = (await artifact.read(facts => facts.postsAt(receipts.map(receipt => receipt.id), 'receipt')
-        .filter(post => post.owner === owner && post.full === true && !post.consumed && currentPost(facts, post)), signal)).value;
-      for (const post of posts)
-        await artifact.transactAs({ kind: 'producer' }, facts => currentPost(facts, post) && facts.foldReceipt(post, at.get(squarePostKey(location, post))!), signal);
+      const watermark = (await artifact.read(facts => facts.receiptWatermark(owner), signal)).value;
+      const receipts = await ledger.receipts(owner, { afterSeq: watermark }, signal);
+      if (!receipts.length) continue;
+      const relevant = receipts.flatMap(receipt => {
+        const id = parseSquarePostKey(location, receipt.key);
+        return id ? [{ ...receipt, id }] : [];
+      });
+      const at = new Map(relevant.map(receipt => [receipt.key, receipt.at]));
+      await artifact.transactAs({ kind: 'producer' }, facts => {
+        const posts = facts.postsAt(relevant.map(receipt => receipt.id), 'receipt');
+        for (const post of posts) {
+          if (post.owner === owner && post.full === true && !post.consumed && currentPost(facts, post))
+            facts.foldReceipt(post, at.get(squarePostKey(location, post))!);
+        }
+        facts.advanceReceiptWatermark(owner, receipts[receipts.length - 1]!.seq);
+      }, signal);
     }
     await suppressWithdrawn(artifact, ledger, location, signal);
   } finally { await ledger.close(); }
@@ -87,7 +105,9 @@ function currentPost(facts: SquareRead, post: SquarePost): boolean {
   return !!facts.participant(post.recipient)?.joined && seat?.owner === post.owner && seat.generation === post.generation;
 }
 async function suppressWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryLedger, location: string, signal?: AbortSignal): Promise<void> {
-  const live = (await ledger.cards({ keyPrefix: `square:${location}#` }, signal))
+  const snapshot = (await artifact.read(facts => ({ seats: currentSeats(facts), departed: facts.departedSeats() }), signal)).value;
+  const owners = new Set([...snapshot.seats, ...snapshot.departed].map(seat => seat.owner));
+  const live = (await Promise.all([...owners].map(owner => ledger.cards({ owner, keyPrefix: `square:${location}#` }, signal)))).flat()
     .flatMap(card => { const id = parseSquarePostKey(location, card.key); return id ? [{ ...card, id }] : []; });
   const identities = new Set(live.map(card => JSON.stringify([card.owner, card.key])));
   const posts = (await artifact.read(facts => {
@@ -109,9 +129,13 @@ async function suppressWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryL
     keysByOwner.set(post.owner, keys);
   }
   for (const [owner, keys] of keysByOwner) await ledger.suppressExact(owner, [...keys], signal);
+  if (snapshot.departed.length) await artifact.transactAs({ kind: 'producer' }, facts => {
+    for (const seat of snapshot.departed) facts.clearDepartedSeat(seat);
+  }, signal);
 }
 /** One export path for Square activities and Square-owned notices. No transaction spans I/O. */
-export async function flushSquarePosts(artifact: SquareArtifactPort, location: string, clock: () => number, signal?: AbortSignal, ledgerLocation?: string): Promise<void> {
+export async function flushSquarePosts(artifact: SquareArtifactPort, location: string, clock: () => number, signal: AbortSignal | undefined, ledgerLocation: string): Promise<void> {
+  requireLedgerLocation(ledgerLocation);
   signal ??= AbortSignal.timeout(5000);
   // Delivery enrichment cannot turn a committed producer mutation into a retry of that mutation.
   let lifetime: ReturnType<typeof retainDeliveryLedger> | undefined;

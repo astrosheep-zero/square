@@ -27,8 +27,10 @@ not authorization credentials. Adapters resolve their own harness identity witho
 environment. Membership is explicit; `PUBLIC.square` is an ordinary filename. A participant handle
 captures owner and join generation; rejoin or takeover fences old handles. `done` ends membership;
 host attachment is separate, as described in [participant-ownership.md](participant-ownership.md).
-Each opened Square owns its artifact connection; `close()` releases it. File operations require an
-explicit `path`. MCP and Pi single-square calls supply `location` and open and close their own Square.
+Each opened Square owns its artifact connection; `close()` releases it. Delivery location resolves once
+at resource entry: explicit `ledgerLocation`, then `SQUARE_DELIVERY`, then the per-user default.
+Internal posting and session helpers require that resolved absolute path, including at runtime.
+File operations require an explicit `path`. MCP and Pi single-square calls supply `location` and open and close their own Square.
 
 `discover({cwd}, {owner?, depth?, limit?, after?})` finds nearby squares without selecting one. When
 `owner` is supplied, each item includes that owner's joined names and their pending directed activity
@@ -67,11 +69,17 @@ has a producer-dispatchable route. No-route and native-receiver-only hosts still
 cards; producer dispatch skips their pending enumeration. Directed
 activity cards bound the body to 200 characters and point to `square_perceive` when shortened. Square records which cards contain
 the full activity. Unread means after the read horizon, not perceived, and without a ledger receipt for
-a full card. Square folds retained receipts lazily during privileged producer operations: it reads the
-ledger's retained receipts for current attached seat owners, then looks up only the exact records named
-by this square's keys. Only full, unconsumed cards matching the current joined seat can fold. Perceive
-withdraws corresponding live ledger cards when possible. Withdrawal maintenance reads existing ledger identities under this square's
-key prefix and in-window export claims, not consumed history. Gone cards without such claims do not
+a full card. Square folds retained receipts lazily during privileged producer operations: it reads after
+each current attached owner's artifact watermark, then folds eligible exact records and advances that
+watermark in the same artifact transaction. Receipt sequences follow ledger commit order; watermark
+updates are monotonic, including receipts belonging to other producers. Only full, unconsumed cards
+matching the current joined seat can fold. The ledger caps retained notifications at 200 per owner,
+withdrawing oldest noncustody cards while preserving dispatching, unknown and unpresented accepted
+custody. Cap withdrawal leaves producer activity unread and available to pending and perceive.
+Perceive withdraws corresponding live ledger cards when possible. Withdrawal maintenance reads owner/key
+ranges for current owners and outstanding departure intents, plus in-window export claims. Seat removal
+records a departure intent atomically; stale exporter settlement refreshes its token, and cleanup clears
+only its captured version after suppression succeeds. Gone cards without such claims do not
 recreate expired ledger suppressions. Ledger receipt evidence has finite retention: after proof
 expires, locally unproved activity remains unread until explicit perceive or ACK. Missing evidence proves
 neither consumption nor non-delivery. A shortened card cannot consume the full activity. Handoff
@@ -139,15 +147,16 @@ deleted session. Known stale, departed or replaced custody refuses.
 
 ## Storage and lifecycle
 
-Live-work bounds apply to decoded records, exact lookup inputs and downstream delivery calls, not constant
-SQLite cost. With the existing schema, pending selection still searches retained say/audience history,
-withdrawn-claim selection searches posting rows, and `read_through` aggregates retained read activities.
-Physical page reads can therefore grow with history; this change adds no index or persistence redesign.
+Receipt folding reads only sequences after each owner watermark. Ledger card lookup uses owner/key
+ranges, and permanent suppression retention uses a `created_at` index. Producer pending selection still
+searches retained say/audience history, withdrawn-claim selection searches posting rows, and
+`read_through` aggregates retained read activities; these remaining physical reads can grow with history.
 
-Format 12 is a breaking fresh-store format. Square owns its activities, audience, participants, read
-state and posting/full-card bookkeeping in the `.square` SQLite artifact. The per-user host delivery
+Format 13 is a breaking fresh-store format. Square owns its activities, audience, participants, read
+state, posting/full-card bookkeeping, receipt watermarks and outstanding departure intents in the `.square` SQLite artifact. The per-user host delivery
 ledger owns producer-neutral cards, attachment, routes, attempts and receipts; there is no discovery
-index. Older artifacts are refused read-only: no migration, conversion or deletion. Host start/resume
+index. Ledger Format 4 also requires a fresh store. Older artifacts and ledgers are refused read-only:
+no migration, conversion or deletion. Host start/resume
 and end attach/detach the ledger session, not Square seats. Host-confirmed deletion is reconciled to a
 fenced `done` lazily by the next mutating operation, never by history, status or participants.
 

@@ -13,7 +13,7 @@ import { type Row, encode, key, invalidArtifact, requireFact, integer, finite, s
 export { invalidArtifact } from './sqlite-values.js';
 export { validateEndpointGeneration as endpointGeneration } from './message.js';
 export const APPLICATION_ID = 0x53515245;
-export const CURRENT_USER_VERSION = 12;
+export const CURRENT_USER_VERSION = 13;
 /** Explicit import/export DTOs, not a runtime transaction model. */
 export interface SquareRuntimeState {
     nextActIndex: number;
@@ -115,7 +115,7 @@ export function resetAgoraSqlite(db: DatabaseSync): void {
 function validateSquareFraming(db: DatabaseSync, location = ''): void {
     const identity = db.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get() as Row;
     requireFact(identity.application_id === APPLICATION_ID, 'unrelated SQLite database.');
-    requireFact(identity.user_version === CURRENT_USER_VERSION, 'unsupported SQLite format version; this build opens only fresh format-12 squares.');
+    requireFact(identity.user_version === CURRENT_USER_VERSION, 'unsupported SQLite format version; this build opens only fresh format-13 squares.');
     validateSchema(db, [STORAGE_META_SQL, producerSchemaSql, AGORA_SCHEMA_SQL].join('\n'), location);
 }
 /** Full Square framing and reset, including producer state. */
@@ -347,7 +347,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
     // ----- Upper Agora read capabilities -----
     const readMethods: SquareRead = {
         pendingPosts: producer.pendingPosts, postsAt: producer.postsAt, postDispositionsAt: producer.postDispositionsAt,
-        withdrawnClaims: producer.withdrawnClaims, ownsPost: producer.ownsPost,
+        withdrawnClaims: producer.withdrawnClaims, ownsPost: producer.ownsPost, receiptWatermark: producer.receiptWatermark, departedSeats: producer.departedSeats,
         seat: currentEndpoint,
         seatsForOwner: requested => immutable(all('SELECT participant_json FROM participant_seats WHERE owner_json=?', [encode(requested)]).map(row => currentEndpoint(decoded(row.participant_json, true))!)),
         header() { return readSquareHeader(db); },
@@ -442,6 +442,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
     const writes: LandingWriter = {
         insertNotice: producer.insertNotice, ackMatching: producer.ackMatching,
         acquirePost: producer.acquirePost, settlePost: producer.settlePost, foldReceipt: producer.foldReceipt,
+        advanceReceiptWatermark: producer.advanceReceiptWatermark, clearDepartedSeat: producer.clearDepartedSeat,
         setSeatAttachment(seat, attachment) {
             const count = run('UPDATE participant_seats SET attachment=? WHERE participant_key_json=? AND owner_json=? AND generation_json=? AND attachment<>?', [attachment, key(seat.participant), encode(seat.owner), encode(seat.generation), attachment]);
             changed ||= count > 0; return count > 0;
@@ -452,7 +453,10 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         },
         removeSeat(value) {
             const count = run('DELETE FROM participant_seats WHERE participant_key_json=? AND owner_json=? AND generation_json=?', [key(value.participant), encode(value.owner), encode(value.generation)]);
-            if (count) run('DELETE FROM catch_leases WHERE recipient_key_json=? AND generation_json=?', [key(value.participant), encode(value.generation)]);
+            if (count) {
+                producer.recordDeparture(value);
+                run('DELETE FROM catch_leases WHERE recipient_key_json=? AND generation_json=?', [key(value.participant), encode(value.generation)]);
+            }
             changed ||= count > 0; return count > 0;
         },
         applyLanding(effect) {

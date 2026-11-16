@@ -133,7 +133,7 @@ test('exact canonical receipts and immutable first timestamps preserve revision 
 
 test('unsupported identity/version and foreign schema refuse read-only without changing bytes; missing paths stay missing', async t => {
   const file = location(t), db = new DatabaseSync(file);
-  db.exec('PRAGMA application_id=1397838405; PRAGMA user_version=11; CREATE TABLE square_snapshot (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, state TEXT NOT NULL)');
+  db.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=${CURRENT_USER_VERSION - 1}; CREATE TABLE square_snapshot (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, state TEXT NOT NULL)`);
   db.close();
   const before = fs.readFileSync(file), port = createArtifactPort(file);
   t.after(() => port.close());

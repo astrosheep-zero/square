@@ -47,7 +47,10 @@ export interface SquarePostIdentity {
   readonly recipientKey: string;
   readonly generation: string;
 }
+export interface ProducerDeparture extends SeatRef { readonly token: string }
 export interface ProducerRead {
+  receiptWatermark(owner: Owner): number;
+  departedSeats(): readonly ProducerDeparture[];
   pendingPosts(now?: number): readonly SquarePost[];
   postsAt(identities: readonly SquarePostIdentity[], selection?: 'receipt'): readonly SquarePost[];
   postDispositionsAt(identities: readonly SquarePostIdentity[]): readonly SquarePostDisposition[];
@@ -55,6 +58,8 @@ export interface ProducerRead {
   ownsPost(token: string, exportAt?: number): boolean;
 }
 export interface ProducerWrite {
+  advanceReceiptWatermark(owner: Owner, seq: number): void;
+  clearDepartedSeat(seat: ProducerDeparture): void;
   insertNotice(input: SendInput, at: number): SendResult;
   ackMatching(seat: SeatRef, input: FutureAck, at: number): number;
   acquirePost(post: SquarePost, token: string, pid: number, now: number, exportAt?: number): false | 'initial' | 'recovered';

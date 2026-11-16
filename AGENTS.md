@@ -68,7 +68,7 @@ Implementation taste:
 - Cross-square discovery/inbox and path-based diagnose remain standalone exports, not extra methods on a synthetic resource.
 - Stable textual activity ids use `act/<index>`; square-core owns their formatting and parsing.
 - Keep one clear internal representation for the square's state and events.
-- The authoritative Format12 `.square` database owns square state, content and producer consumption facts. The per-user host delivery ledger owns neutral cards, session lifecycle, attempts and receipts; there is no discovery index. Older artifacts are refused read-only, with no migration or deletion.
+- The authoritative Format13 `.square` database owns square state, content and producer consumption facts. The per-user host delivery ledger owns neutral cards, session lifecycle, attempts and receipts; there is no discovery index. Older artifacts are refused read-only, with no migration or deletion.
 - Keep SQLite storage framing and the internal square model strictly layered. Only the artifact boundary performs artifact storage I/O.
 - The harness owns its native session identity in the environment. Square reads that identity and never invents, overwrites, or restores a second session variable; harness adapters pass their own session coordinate into each operation instead of rewriting the shared process environment, because several sessions may coexist.
 - Behavior operates on typed Square domain facts obtained through transaction-scoped reads and domain transitions. SQLite schema, SQL, and storage framing remain private to the artifact boundary. Partial fact reads must not masquerade as a complete SquareState.

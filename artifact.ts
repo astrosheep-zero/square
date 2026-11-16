@@ -71,9 +71,9 @@ const readMethods: readonly (keyof SquareRead)[] = [
     'activity', 'activityHeads', 'activities', 'activityCount', 'contextIndexes', 'sayOrdinals', 'recentSayTimes',
     'audience', 'directed', 'directedAt', 'directedCount',
     'receipt', 'receiptFacts', 'lease', 'participantCounts', 'seat', 'seatsForOwner',
-    'pendingPosts', 'postsAt', 'postDispositionsAt', 'withdrawnClaims', 'ownsPost',
+    'pendingPosts', 'postsAt', 'postDispositionsAt', 'withdrawnClaims', 'ownsPost', 'receiptWatermark', 'departedSeats',
 ];
-const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'putLease', 'removeLease', 'storeSeat', 'removeSeat', 'markSeen', 'setSeatAttachment', 'insertNotice', 'ackMatching', 'acquirePost', 'settlePost', 'foldReceipt'];
+const writeMethods: readonly (keyof LandingWriter)[] = ['applyLanding', 'putLease', 'removeLease', 'storeSeat', 'removeSeat', 'markSeen', 'setSeatAttachment', 'insertNotice', 'ackMatching', 'acquirePost', 'settlePost', 'foldReceipt', 'advanceReceiptWatermark', 'clearDepartedSeat'];
 /** Square social state and producer state share one synchronous artifact transaction. */
 export function createArtifactPort(location: string, initial?: SquareState, externalSignal?: AbortSignal): SquareArtifactPort {
     const store = createArtifactStore(location, format, initial === undefined ? undefined : db => initializeSqlite(db, initial, 0), externalSignal);

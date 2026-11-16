@@ -30,19 +30,25 @@ import { validateSchema } from './sqlite-framing.js';
 import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, SuppressionResult } from './delivery-ledger.js';
 
 type Row = Record<string, SQLInputValue>;
-const FORMAT = 3;
+const FORMAT = 4;
 const APPLICATION_ID = 0x444c4752;
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-const SCHEMA = `CREATE TABLE meta (format INTEGER NOT NULL, next_seq INTEGER NOT NULL);
+const LIVE_CARD_CAP = 200;
+const SCHEMA = `CREATE TABLE meta (format INTEGER NOT NULL, next_seq INTEGER NOT NULL, next_receipt_seq INTEGER NOT NULL);
 CREATE TABLE sessions (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, state TEXT NOT NULL, routes_json TEXT NOT NULL, at REAL NOT NULL);
 CREATE TABLE cards (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, text TEXT NOT NULL, details TEXT, posted_at REAL NOT NULL, UNIQUE(owner,key));
 CREATE INDEX cards_owner ON cards(owner,seq);
 CREATE TABLE suppressions (id TEXT PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('exact','prefix')), created_at REAL NOT NULL, expires_at REAL);
 CREATE INDEX suppressions_owner ON suppressions(owner);
+CREATE INDEX suppressions_exact_key ON suppressions(owner,key) WHERE scope='exact';
+CREATE INDEX suppressions_prefix_owner ON suppressions(owner) WHERE scope='prefix';
+CREATE INDEX suppressions_expiry ON suppressions(expires_at) WHERE expires_at IS NOT NULL;
 CREATE UNIQUE INDEX suppressions_permanent_exact ON suppressions(owner,key) WHERE scope='exact' AND expires_at IS NULL;
+CREATE INDEX suppressions_permanent_created ON suppressions(created_at) WHERE expires_at IS NULL;
 CREATE TABLE attempts (token TEXT PRIMARY KEY, seq INTEGER NOT NULL, generation TEXT NOT NULL, track TEXT NOT NULL, route_kind TEXT, outcome TEXT NOT NULL, correlation_json TEXT NOT NULL, started_at REAL NOT NULL, expires_at REAL NOT NULL, settled_at REAL);
 CREATE INDEX attempts_seq ON attempts(seq);
-CREATE TABLE receipts (owner TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL, PRIMARY KEY(owner,key));
+CREATE TABLE receipts (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL, UNIQUE(owner,key));
+CREATE INDEX receipts_owner_seq ON receipts(owner,seq);
 CREATE INDEX receipts_time ON receipts(at);
 CREATE TABLE cancellations (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, through_seq INTEGER NOT NULL);`;
 
@@ -51,7 +57,8 @@ function validate(db: DatabaseSync, location: string): void {
   if (header?.application_id !== APPLICATION_ID || header.user_version !== FORMAT) throw new Error('Unsupported delivery ledger format');
   validateSchema(db, SCHEMA, location);
   const meta = db.prepare('SELECT * FROM meta').all();
-  if (meta.length !== 1 || meta[0].format !== FORMAT || !Number.isSafeInteger(meta[0].next_seq) || Number(meta[0].next_seq) < 1)
+  if (meta.length !== 1 || meta[0].format !== FORMAT
+    || ![meta[0].next_seq, meta[0].next_receipt_seq].every(value => Number.isSafeInteger(value) && Number(value) >= 1))
     throw new Error('Invalid delivery ledger header');
 }
 function session(row: Row | undefined): DeliverySession | undefined {
@@ -69,6 +76,16 @@ function attempt(row: Row): DeliveryAttempt {
     ...(row.settled_at === null ? {} : { settledAt: row.settled_at as number }) };
 }
 function holds(row: DeliveryAttempt): boolean { return !['failed', 'released'].includes(row.outcome); }
+
+/** SQLite BINARY text order follows Unicode scalars, including supplementary characters. */
+function prefixUpperBound(prefix: string): string | undefined {
+  const points = Array.from(prefix);
+  while (points.length) {
+    const point = points.pop()!.codePointAt(0)!;
+    if (point < 0x10ffff) return points.join('') + String.fromCodePoint(point === 0xd7ff ? 0xe000 : point + 1);
+  }
+  return undefined;
+}
 
 /** All ledger file access and SQL are confined here. Transactions never span external effects. */
 export class LedgerStore {
@@ -91,7 +108,7 @@ export class LedgerStore {
         initial = await retrySqliteBusy(() => new DatabaseSync(temporary), signal);
         await inSqliteTransaction(initial, true, () => undefined, () => {
           initial!.exec(SCHEMA);
-          initial!.prepare('INSERT INTO meta VALUES(?,1)').run(FORMAT);
+          initial!.prepare('INSERT INTO meta VALUES(?,1,1)').run(FORMAT);
           initial!.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=${FORMAT}`);
         }, signal);
         initial.close(); initial = undefined;
@@ -206,15 +223,19 @@ export class LedgerStore {
       AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.seq=c.seq AND a.outcome IN ('dispatching','accepted','unknown'))
       ORDER BY c.seq LIMIT 100`).all(cutoff) as Row[];
     for (const row of stale) this.deleteCard(row.seq as number, now);
-    this.db.prepare('DELETE FROM receipts WHERE rowid IN (SELECT rowid FROM receipts WHERE at<? ORDER BY at LIMIT 100)').run(cutoff);
+    this.db.prepare('DELETE FROM receipts WHERE seq IN (SELECT seq FROM receipts WHERE at<? ORDER BY at LIMIT 100)').run(cutoff);
   }
   session(owner: string, signal?: AbortSignal): Promise<DeliverySession | undefined> { return this.transaction(false, () => this.getSession(owner), signal); }
   sessions(signal?: AbortSignal): Promise<readonly DeliverySession[]> {
     return this.transaction(false, () => (this.db.prepare('SELECT * FROM sessions ORDER BY owner').all() as Row[]).map(row => session(row)!), signal);
   }
-  cards(options: { readonly keyPrefix: string }, signal?: AbortSignal): Promise<readonly { readonly owner: string; readonly key: string }[]> {
-    return this.transaction(false, () => (this.db.prepare('SELECT owner,key FROM cards WHERE substr(key,1,length(?))=? ORDER BY seq')
-      .all(options.keyPrefix, options.keyPrefix) as Row[]).map(row => ({ owner: row.owner as string, key: row.key as string })), signal);
+  cards(options: { readonly owner: string; readonly keyPrefix: string }, signal?: AbortSignal): Promise<readonly { readonly owner: string; readonly key: string }[]> {
+    return this.transaction(false, () => {
+      const upper = prefixUpperBound(options.keyPrefix);
+      return (this.db.prepare(`SELECT owner,key FROM cards WHERE owner=? AND key>=?${upper === undefined ? '' : ' AND key<?'} ORDER BY key`)
+        .all(options.owner, options.keyPrefix, ...(upper === undefined ? [] : [upper])) as Row[])
+        .map(row => ({ owner: row.owner as string, key: row.key as string }));
+    }, signal);
   }
   pendingCards(owner: string, generation: string, signal?: AbortSignal): Promise<readonly DeliveryCard[]> {
     return this.transaction(false, now => this.attached(owner, generation)
@@ -267,8 +288,19 @@ export class LedgerStore {
       if (!Number.isSafeInteger(seq + 1)) throw new RangeError('Delivery sequence exhausted');
       this.db.prepare('UPDATE meta SET next_seq=?').run(seq + 1);
       this.db.prepare('INSERT INTO cards VALUES(?,?,?,?,?,?)').run(seq, input.owner, input.key, input.text, input.details, now);
-      return { status: suppressed ? 'suppressed' : 'posted' };
+      this.capCards(input.owner, now);
+      return { status: suppressed || this.isSuppressed(input.owner, input.key, now) ? 'suppressed' : 'posted' };
     }, signal);
+  }
+  private capCards(owner: string, now: number): void {
+    const retained = this.db.prepare('SELECT seq,key FROM cards WHERE owner=? ORDER BY seq').all(owner) as Row[];
+    let excess = retained.length - LIVE_CARD_CAP;
+    for (const row of retained) {
+      if (excess <= 0) break;
+      if (this.awaitingEffect(row.seq as number)) continue;
+      this.suppressCard({ owner, key: row.key as string, scope: 'exact' }, now);
+      excess--;
+    }
   }
   suppress(input: { owner: string; key: string; scope: 'exact' | 'prefix'; expiresAt?: number }, signal?: AbortSignal): Promise<SuppressionResult> {
     return this.transaction(true, now => this.suppressCard(input, now), signal);
@@ -308,8 +340,10 @@ export class LedgerStore {
     }, signal);
   }
   private isSuppressed(owner: string, key: string, now: number): boolean {
-    return !!this.db.prepare(`SELECT 1 FROM suppressions WHERE owner=? AND (expires_at IS NULL OR expires_at>?)
-      AND ((scope='exact' AND key=?) OR (scope='prefix' AND substr(?,1,length(key))=key)) LIMIT 1`).get(owner, now, key, key);
+    return !!this.db.prepare(`SELECT 1 FROM suppressions WHERE owner=? AND key=? AND scope='exact'
+      AND (expires_at IS NULL OR expires_at>?) LIMIT 1`).get(owner, key, now)
+      || !!this.db.prepare(`SELECT 1 FROM suppressions WHERE owner=? AND scope='prefix'
+        AND (expires_at IS NULL OR expires_at>?) AND substr(?,1,length(key))=key LIMIT 1`).get(owner, now, key);
   }
   private eligible(row: Row, now: number): boolean {
     if (this.isSuppressed(String(row.owner), String(row.key), now)) return false;
@@ -376,8 +410,15 @@ export class LedgerStore {
       return true;
     }, signal);
   }
-  private receipt(seq: number, now: number): void {
-    this.db.prepare('INSERT INTO receipts SELECT owner,key,? FROM cards WHERE seq=? ON CONFLICT(owner,key) DO NOTHING').run(now, seq);
+  private receipt(cardSeq: number, now: number): void {
+    const row = this.db.prepare('SELECT owner,key FROM cards WHERE seq=?').get(cardSeq);
+    if (!row || this.db.prepare('SELECT 1 FROM receipts WHERE owner=? AND key=?').get(row.owner, row.key)) return;
+    // The writer lock covers allocation through COMMIT, so cursors follow commit order,
+    // independently of card order, clock changes, retention and rolled-back attempts.
+    const seq = Number(this.db.prepare('SELECT next_receipt_seq FROM meta').get()!.next_receipt_seq);
+    if (!Number.isSafeInteger(seq + 1)) throw new RangeError('Receipt sequence exhausted');
+    this.db.prepare('UPDATE meta SET next_receipt_seq=?').run(seq + 1);
+    this.db.prepare('INSERT INTO receipts VALUES(?,?,?,?)').run(seq, row.owner, row.key, now);
   }
   private confirm(handoff: DeliveryAttempt, now: number): boolean {
     if (handoff.track !== 'handoff' || !['dispatching', 'accepted', 'unknown'].includes(handoff.outcome)) return false;
@@ -459,10 +500,11 @@ export class LedgerStore {
       return a ? this.confirm(a, now) : false;
     }, signal);
   }
-  receipts(owner: string, options: { keys?: readonly string[]; since?: number }, signal?: AbortSignal): Promise<readonly DeliveryReceipt[]> {
-    return this.transaction(false, () => (this.db.prepare('SELECT * FROM receipts WHERE owner=? AND at>=? ORDER BY at,key').all(owner, options.since ?? -Number.MAX_VALUE) as Row[])
+  receipts(owner: string, options: { afterSeq?: number; keys?: readonly string[]; since?: number }, signal?: AbortSignal): Promise<readonly DeliveryReceipt[]> {
+    return this.transaction(false, () => (this.db.prepare(`SELECT * FROM receipts WHERE owner=? AND seq>?${options.since === undefined ? '' : ' AND at>=?'} ORDER BY seq`)
+      .all(owner, options.afterSeq ?? 0, ...(options.since === undefined ? [] : [options.since])) as Row[])
       .filter(row => options.keys === undefined || options.keys.includes(row.key as string))
-      .map(row => ({ owner: row.owner as string, key: row.key as string, at: row.at as number })), signal);
+      .map(row => ({ seq: row.seq as number, owner: row.owner as string, key: row.key as string, at: row.at as number })), signal);
   }
   health(owner?: string, signal?: AbortSignal): Promise<DeliveryHealth> {
     return this.transaction(false, now => {

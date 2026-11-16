@@ -1,13 +1,21 @@
+import { randomUUID } from 'node:crypto';
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { matchesMetadata, validateMetadataMatch } from './delivery-deferral.js';
 import type { MetadataMatch } from './delivery-deferral.js';
 import { SquareError, sameName, validateName, validateActivityMetadata, type ActivityMetadata } from './model.js';
 import type { SeatRef } from './ports.js';
 import type { FutureAck, ProducerRead, ProducerWrite, SendInput, SendResult, SquarePost, SquarePostDisposition } from './square-post.js';
-import { decoded, encode, finite, integer, json, key, object, type Row } from './sqlite-values.js';
+import { decoded, encode, finite, integer, json, key, object, string, type Row } from './sqlite-values.js';
 
 /** Private Square producer bookkeeping, on the artifact's existing connection/transaction. */
-export const producerSchemaSql = `CREATE TABLE square_notices (
+export const producerSchemaSql = `CREATE TABLE producer_receipt_watermarks (
+  owner_json TEXT PRIMARY KEY NOT NULL, seq INTEGER NOT NULL CHECK (seq BETWEEN 0 AND 9007199254740991)
+) WITHOUT ROWID;
+CREATE TABLE producer_departures (
+  participant_key_json TEXT NOT NULL, participant_json TEXT NOT NULL, owner_json TEXT NOT NULL, generation_json TEXT NOT NULL, token TEXT NOT NULL,
+  PRIMARY KEY (owner_json,generation_json,participant_key_json)
+) WITHOUT ROWID;
+CREATE TABLE square_notices (
   notice_index INTEGER PRIMARY KEY CHECK (notice_index >= 0), at REAL NOT NULL,
   sender_json TEXT NOT NULL, body_json TEXT NOT NULL, metadata_json TEXT
 );
@@ -30,7 +38,7 @@ CREATE TABLE square_posts (
 ) WITHOUT ROWID;`;
 export function initializeProducerSqlite(db: DatabaseSync): void { db.exec(producerSchemaSql); }
 export function resetProducerSqlite(db: DatabaseSync): void {
-  for (const table of ['square_posts', 'producer_consumption', 'notice_audience', 'square_notices']) db.exec(`DROP TABLE ${table}`);
+  for (const table of ['producer_receipt_watermarks', 'producer_departures', 'square_posts', 'producer_consumption', 'notice_audience', 'square_notices']) db.exec(`DROP TABLE ${table}`);
 }
 function canonicalMatch(match: MetadataMatch): string {
   const fields = validateMetadataMatch(match).fields.map(field => ({ path: [...field.path], equals: field.equals }));
@@ -51,6 +59,7 @@ function processIsAlive(pid: number): boolean {
 }
 export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerWrite & {
   readonly changed: boolean; readonly deliveryChanged: boolean;
+  recordDeparture(seat: SeatRef): void;
   consumeActivity(index: number, at: number): void;
 } {
   let changed = false;
@@ -140,7 +149,26 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
       .map(row => projection.decode(row, 'notice'));
     return [...activity, ...notices];
   }
-  const driver: ProducerRead & ProducerWrite & { consumeActivity(index: number, at: number): void } = {
+  function recordDeparture(seat: SeatRef): void {
+    run(`INSERT INTO producer_departures VALUES(?,?,?,?,?) ON CONFLICT(owner_json,generation_json,participant_key_json)
+      DO UPDATE SET token=excluded.token`,
+      [key(seat.participant), encode(seat.participant), encode(seat.owner), encode(seat.generation), randomUUID()]);
+  }
+  const driver: ProducerRead & ProducerWrite & { recordDeparture(seat: SeatRef): void; consumeActivity(index: number, at: number): void } = {
+    recordDeparture,
+    departedSeats: () => rows('SELECT * FROM producer_departures').map(row => ({
+      participant: decoded(row.participant_json, true), owner: decoded(row.owner_json, true), generation: decoded(row.generation_json, true), token: string(row.token, true),
+    })),
+    clearDepartedSeat(seat) {
+      run('DELETE FROM producer_departures WHERE owner_json=? AND generation_json=? AND participant_key_json=? AND token=?',
+        [encode(seat.owner), encode(seat.generation), key(seat.participant), seat.token]);
+    },
+    receiptWatermark: owner => integer(one('SELECT seq FROM producer_receipt_watermarks WHERE owner_json=?', [encode(owner)])?.seq ?? 0),
+    advanceReceiptWatermark(owner, seq) {
+      integer(seq);
+      run(`INSERT INTO producer_receipt_watermarks VALUES(?,?) ON CONFLICT(owner_json)
+        DO UPDATE SET seq=excluded.seq WHERE excluded.seq>producer_receipt_watermarks.seq`, [encode(owner), seq]);
+    },
     pendingPosts: (now = Date.now()) => selectPosts(fullPosts, 'pending', undefined, now),
     postsAt: (identities, selection) => selectPosts(fullPosts, selection ?? 'all', identities.map(id => ({ ...id, recipient: id.recipientKey }))),
     postDispositionsAt: identities => selectPosts(dispositions, 'all', identities.map(id => ({ ...id, recipient: id.recipientKey }))),
@@ -209,9 +237,21 @@ export function createProducerDriver(db: DatabaseSync): ProducerRead & ProducerW
       return previous ? 'recovered' : 'initial';
     },
     settlePost(token, full, disposition) {
+      const claim = one('SELECT kind,item_index,recipient_key_json FROM square_posts WHERE token=?', [token]);
+      if (!claim) return false;
+      const audience = claim.kind === 'activity'
+        ? one(`SELECT p.name_json AS recipient_json,d.owner_json,d.generation_json FROM landed_audience d
+          JOIN participants p ON p.name_key_json=d.recipient_key_json WHERE d.act_index=? AND d.recipient_key_json=?`, [claim.item_index, claim.recipient_key_json])
+        : one('SELECT recipient_json,owner_json,generation_json FROM notice_audience WHERE notice_index=? AND recipient_key_json=?', [claim.item_index, claim.recipient_key_json]);
       // Only a proved-unsent initial claim may erase its export age; prior uncertainty survives.
-      if (disposition === 'never-exported') return run('DELETE FROM square_posts WHERE token=?', [token]) > 0;
-      return run('UPDATE square_posts SET token=NULL,owner_pid=NULL,posted=?,full=? WHERE token=?', [Number(disposition === 'posted'), Number(full), token]) > 0;
+      const count = disposition === 'never-exported'
+        ? run('DELETE FROM square_posts WHERE token=?', [token])
+        : run('UPDATE square_posts SET token=NULL,owner_pid=NULL,posted=?,full=? WHERE token=?', [Number(disposition === 'posted'), Number(full), token]);
+      if (audience && !one(`SELECT 1 FROM participant_seats s JOIN participants p ON p.name_key_json=s.participant_key_json
+        WHERE p.joined=1 AND s.participant_key_json=? AND s.owner_json=? AND s.generation_json=?`,
+        [claim.recipient_key_json, audience.owner_json, audience.generation_json]))
+        recordDeparture({ participant: decoded(audience.recipient_json, true), owner: decoded(audience.owner_json, true), generation: decoded(audience.generation_json, true) });
+      return count > 0;
     },
     foldReceipt(post, at) {
       const current = selectPosts(fullPosts, 'all', [post])[0];

@@ -3,6 +3,8 @@ import { assertCurrentSeat } from './square-domain.js';
 import { canonicalPath } from './canonical-path.js';
 import { squareLocation } from './square-location.js';
 import crypto from 'node:crypto';
+import path from 'node:path';
+import { deliveryLedgerLocation } from './delivery-ledger.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { InternalSquareError, SquareError, isSquareError, nameKey, validateName, type Owner, type Seat, type WatchOptions } from './model.js';
 import { checkControl, failure } from './operation-control.js';
@@ -44,26 +46,36 @@ function rejectUnsentActivity<T>(operation: () => T): T {
   catch (error) { if (isSquareError(error)) error.facts = { ...error.facts, activityUnsent: true }; throw error; }
 }
 
+/** Resolve once at the resource entry; internal operations never choose a ledger. */
+function resolveLedgerLocation(input: { readonly ledgerLocation?: string }): string {
+  const location = input.ledgerLocation ?? deliveryLedgerLocation();
+  if (typeof location !== 'string' || !path.isAbsolute(location)) throw new TypeError('Delivery location must be absolute');
+  return location;
+}
+
 /** One concrete local resource, including its entry-resolved dependencies and lifetime. */
 export class SqliteSquare {
   private constructor(
     readonly location: string,
     private readonly artifact: SquareArtifactPort,
     private readonly clock: () => number,
-    private readonly canonicalLocation = location,
-    private readonly ledgerLocation?: string,
-  ) {}
+    private readonly canonicalLocation: string,
+    private readonly ledgerLocation: string,
+  ) {
+    if (typeof ledgerLocation !== 'string' || !path.isAbsolute(ledgerLocation)) throw new TypeError('Expected a resolved absolute delivery ledger location');
+  }
   private reconcile(signal?: AbortSignal): Promise<void> { return reconcileSquareDelivery(this.artifact, this.canonicalLocation, this.clock, signal, this.ledgerLocation); }
   // Posting is retryable after commit; a delivery failure cannot make a landed write unsent.
   private async flush(signal?: AbortSignal): Promise<void> { await flushSquarePosts(this.artifact, this.canonicalLocation, this.clock, signal, this.ledgerLocation).catch(() => undefined); }
 
   static async at(input: SquareAtInput, control?: OperationControl): Promise<SqliteSquare> {
+    const ledgerLocation = resolveLedgerLocation(input);
     const location = squareLocation(input);
     const clock = input.clock ?? Date.now;
     const artifact = createArtifactPort(location, undefined, control?.signal);
     try {
       await artifact.read(facts => facts.header(), control?.signal);
-      return new SqliteSquare(location, artifact, clock, await canonicalPath(location), input.ledgerLocation);
+      return new SqliteSquare(location, artifact, clock, await canonicalPath(location), ledgerLocation);
     } catch (error) {
       await artifact.close();
       if (error instanceof InternalSquareError && error.code === 'not_found')
@@ -73,15 +85,18 @@ export class SqliteSquare {
   }
   static async build(input: SquareBuildInput, control?: OperationControl): Promise<SqliteSquare> {
     checkControl(control);
+    const ledgerLocation = resolveLedgerLocation(input);
     const location = squareLocation(input);
     await createSquare(location, { hardCap: input.hardCap, throttlePerMinute: input.throttlePerMinute,
       template: input.template, force: input.force ?? false }, input.markdown, control?.signal);
     // Publication already committed; cancellation cannot erase the completed build.
-    return SqliteSquare.at({ ...input, path: location });
+    return SqliteSquare.at({ ...input, path: location, ledgerLocation });
   }
   static inMemory(input: Omit<SquareBuildInput, 'path'>): SqliteSquare {
     const clock = input.clock ?? Date.now;
-    return new SqliteSquare(`memory://${crypto.randomUUID()}`, createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)), clock, undefined, input.ledgerLocation);
+    const location = `memory://${crypto.randomUUID()}`;
+    const ledgerLocation = resolveLedgerLocation(input);
+    return new SqliteSquare(location, createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)), clock, location, ledgerLocation);
   }
   /** Join establishes membership and local producer custody in one transaction. */
   private async joinSeat(name: string, options: JoinOptions, control?: OperationControl): Promise<{ readonly seat: Seat; readonly kind: JoinResult['kind']; readonly activity: Activity | null; readonly observation?: import('./square-facade.js').JoinObservation }> {

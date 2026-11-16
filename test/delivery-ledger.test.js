@@ -47,7 +47,7 @@ async function interruptedHandoff(f, key) {
   return { result, ...completion, calls: () => calls };
 }
 
-test('card identity reads use a literal prefix across owners, including held and detached cards', async t => {
+test('card identity reads use an indexed literal prefix within one owner, including held and detached cards', async t => {
   const f = await fixture(t);
   const other = 'another:owner';
   const session = await f.ledger.attach({ owner: other, expectedGeneration: null, routes: [] });
@@ -55,11 +55,158 @@ test('card identity reads use a literal prefix across owners, including held and
   await f.dispatch('producer:%_/held', 'accepted');
   await f.ledger.post({ owner: other, key: 'producer:%_/detached', text: 'not attached' });
   await f.ledger.detach({ owner: other, generation: session.generation });
-  await f.post('producer:xx/not-a-literal-match');
-  assert.deepEqual(await f.ledger.cards({ keyPrefix: 'producer:%_/' }), [
-    { owner, key: 'producer:%_/held' }, { owner: other, key: 'producer:%_/detached' },
-  ]);
-  assert.deepEqual(await f.ledger.cards({ keyPrefix: 'absent:' }), []);
+  for (const key of ['producer:xx/not-a-literal-match', '鱼/猫', '鱼0', '\u{10ffff}/猫']) await f.post(key);
+  assert.deepEqual(await f.ledger.cards({ owner, keyPrefix: 'producer:%_/' }), [{ owner, key: 'producer:%_/held' }]);
+  assert.deepEqual(await f.ledger.cards({ owner: other, keyPrefix: 'producer:%_/' }), [{ owner: other, key: 'producer:%_/detached' }]);
+  for (const keyPrefix of ['鱼/', '\u{10ffff}'])
+    assert.equal((await f.ledger.cards({ owner, keyPrefix })).length, 1);
+  assert.deepEqual(await f.ledger.cards({ owner, keyPrefix: 'absent:' }), []);
+  assert.equal((await f.ledger.cards({ owner, keyPrefix: '' })).length, 5);
+  assert.throws(() => f.ledger.cards({ keyPrefix: '' }), /owner/);
+});
+
+test('receipt cursors follow global commit order across owners and backward clocks', async t => {
+  let now = 200;
+  const f = await fixture(t, { clock: () => now });
+  const other = 'native:other';
+  const second = await DeliveryLedger.open({ location: f.location, clock: () => now });
+  t.after(() => second.close());
+  const session = await second.attach({ owner: other, expectedGeneration: null, routes: [] });
+  await f.post('old-card');
+  const first = await f.claim();
+  await second.post({ owner: other, key: 'new-card', text: 'second' });
+  const newer = await second.claimPresentation(other, { generation: session.generation, budgetChars: 100 });
+  await newer.settle('presented');
+  now = 100;
+  await first.settle('presented');
+  assert.deepEqual(await f.ledger.receipts(owner), [{ seq: 2, owner, key: 'old-card', at: 100 }]);
+  assert.deepEqual(await second.receipts(other), [{ seq: 1, owner: other, key: 'new-card', at: 200 }]);
+  assert.deepEqual(await f.ledger.receipts(owner, { afterSeq: 1, keys: ['old-card'], since: 100 }), await f.ledger.receipts(owner));
+  assert.deepEqual(await f.ledger.receipts(owner, { afterSeq: 2 }), []);
+  assert.deepEqual(await f.ledger.receipts(owner, { afterSeq: 1, since: 101 }), []);
+  assert.deepEqual(await f.ledger.receipts(owner, { keys: [] }), []);
+  for (const afterSeq of [-1, 0.5, Infinity, Number.MAX_SAFE_INTEGER + 1])
+    assert.throws(() => f.ledger.receipts(owner, { afterSeq }), RangeError);
+  now = 50;
+  await f.post('concurrent-a');
+  await second.post({ owner: other, key: 'concurrent-b', text: 'second' });
+  const a = await f.claim();
+  const b = await second.claimPresentation(other, { generation: session.generation, budgetChars: 100 });
+  const committed = [];
+  await Promise.all([[a, 'concurrent-a'], [b, 'concurrent-b']].map(async ([claim, key]) => {
+    assert.equal(await claim.settle('presented'), true); committed.push(key);
+  }));
+  const receipts = [...await f.ledger.receipts(owner, { afterSeq: 2 }), ...await second.receipts(other, { afterSeq: 2 })]
+    .sort((a, b) => a.seq - b.seq);
+  assert.deepEqual(receipts.map(receipt => receipt.seq), [3, 4]);
+  assert.deepEqual(receipts.map(receipt => receipt.key), committed);
+  const reopened = await DeliveryLedger.open({ location: f.location });
+  try { assert.deepEqual(await reopened.receipts(owner, { afterSeq: 2 }), await f.ledger.receipts(owner, { afterSeq: 2 })); }
+  finally { await reopened.close(); }
+});
+
+test('post caps retained cards per owner, withdrawing oldest noncustody even under cancellation or temporary holds', async t => {
+  const f = await fixture(t);
+  const other = 'native:other';
+  await f.ledger.attach({ owner: other, expectedGeneration: null, routes: [] });
+  await f.ledger.post({ owner: other, key: 'untouched', text: 'other owner' });
+  await f.post('cancelled');
+  await f.ledger.cancel({ owner, generation: f.session.generation });
+  const hold = await f.ledger.suppress({ owner, key: 'temporary', scope: 'exact', expiresAt: Date.now() + day });
+  await f.post('temporary');
+  await f.post('failed'); await f.dispatch('failed', 'failed');
+  await f.post('released'); await f.dispatch('released', 'not-capable');
+  for (let index = 0; index < 196; index++) await f.post('tail:' + index);
+  assert.equal((await f.ledger.cards({ owner, keyPrefix: '' })).length, 200);
+  assert.equal(f.read("SELECT COUNT(*) AS n FROM suppressions WHERE scope='exact' AND expires_at IS NULL")[0].n, 0);
+  for (let index = 196; index < 200; index++) await f.post('tail:' + index);
+  for (const key of ['cancelled', 'temporary', 'failed', 'released']) assert.equal((await f.post(key)).status, 'suppressed');
+  await f.ledger.releaseSuppression({ owner, id: hold.id });
+  assert.equal((await f.post('temporary')).status, 'suppressed');
+  assert.equal((await f.ledger.cards({ owner, keyPrefix: '' })).length, 200);
+  assert.deepEqual(await f.ledger.cards({ owner: other, keyPrefix: '' }), [{ owner: other, key: 'untouched' }]);
+  assert.deepEqual(await f.ledger.receipts(owner), []);
+  for (let index = 0; index < 3; index++) {
+    await f.ledger.cancel({ owner, generation: f.session.generation });
+    await f.post('after-cancel:' + index);
+    assert.equal((await f.ledger.cards({ owner, keyPrefix: '' })).length, 200);
+  }
+});
+
+test('post cap preserves all custody and late evidence through suppression, generation rotation and cancel', async t => {
+  const f = await fixture(t);
+  await f.post('presentation');
+  const presentation = await f.claim();
+  await f.post('accepted'); await f.dispatch('accepted');
+  await f.post('unknown'); await f.dispatch('unknown', 'unknown');
+  await f.post('dispatching');
+  const started = Promise.withResolvers(), finish = Promise.withResolvers();
+  const running = f.ledger.dispatchHandoff(owner, 'dispatching', { kind: push.kind, send() {
+    started.resolve(); return finish.promise;
+  } }, { generation: f.session.generation, timeoutMs: 60000 });
+  await started.promise;
+  try {
+    for (let index = 0; index < 196; index++) await f.post('protected:' + index);
+    const protectedBatch = await f.claim();
+    assert.equal(protectedBatch.cards.length, 196);
+    assert.equal((await f.ledger.suppress({ owner, key: 'presentation', scope: 'exact' })).status, 'in-custody');
+    assert.equal((await f.post('overflow')).status, 'suppressed');
+    assert.equal((await f.ledger.cards({ owner, keyPrefix: '' })).length, 200);
+    assert.equal((await f.post('overflow')).status, 'suppressed');
+    const next = await f.ledger.attach({ owner, expectedGeneration: f.session.generation, routes });
+    await f.ledger.cancel({ owner, generation: next.generation });
+    assert.equal(await presentation.current(), false);
+    assert.equal((await f.post('new-generation')).status, 'suppressed');
+    assert.equal((await f.dispatch('dispatching', 'accepted', { generation: next.generation })).outcome, 'not-invoked');
+    assert.equal(await presentation.settle('presented'), true);
+    finish.resolve('presented');
+    assert.equal((await running).persistence, 'recorded');
+    assert.deepEqual((await f.ledger.receipts(owner)).map(receipt => receipt.key), ['presentation', 'dispatching']);
+    assert.deepEqual(f.read("SELECT key FROM cards WHERE key IN ('accepted','unknown') ORDER BY key").map(row => row.key), ['accepted', 'unknown']);
+    assert.equal((await f.ledger.cards({ owner, keyPrefix: 'protected:' })).length, 196);
+  } finally { finish.resolve('accepted'); await running; }
+});
+
+test('receipt, suppression and card lookups use indexes; permanent retention drains oldest scopes in bounded batches', async t => {
+  let now = 1;
+  const f = await fixture(t, { clock: () => now });
+  await f.ledger.suppressExact(owner, Array.from({ length: 100 }, (_, index) => 'old:' + index));
+  await f.ledger.suppress({ owner, key: 'old-prefix/', scope: 'prefix' });
+  await f.ledger.suppress({ owner, key: 'temporary', scope: 'exact', expiresAt: 40 * day });
+  await f.post('card');
+  await (await f.claim()).settle('presented');
+  now += 31 * day;
+  const db = new DatabaseSync(':memory:');
+  const proto = Object.getPrototypeOf(db.prepare('SELECT 1'));
+  const captured = [];
+  const mocks = ['all', 'get', 'run'].map(method => {
+    const original = proto[method];
+    return mock.method(proto, method, function (...params) {
+      if (this.sourceSQL.startsWith('SELECT owner,key FROM cards WHERE owner=? AND key>=?')
+        || this.sourceSQL.startsWith('SELECT * FROM receipts WHERE owner=? AND seq>?')
+        || this.sourceSQL.startsWith('SELECT 1 FROM suppressions WHERE owner=? AND key=? AND scope=')
+        || this.sourceSQL.startsWith("SELECT 1 FROM suppressions WHERE owner=? AND scope='prefix'")
+        || this.sourceSQL.startsWith('DELETE FROM suppressions WHERE id IN')) captured.push({ sql: this.sourceSQL, params });
+      return Reflect.apply(original, this, params);
+    });
+  });
+  try {
+    await f.ledger.cards({ owner, keyPrefix: 'card' });
+    await f.ledger.receipts(owner, { afterSeq: 1 });
+    assert.equal((await f.post('young')).status, 'posted');
+  } finally { for (const entry of mocks) entry.mock.restore(); db.close(); }
+  const plans = captured.map(({ sql, params }) => f.read('EXPLAIN QUERY PLAN ' + sql, ...params).map(row => row.detail).join('\n'));
+  for (const plan of plans) assert.doesNotMatch(plan, /\bSCAN\b|USE TEMP B-TREE/);
+  assert.ok(plans.some(plan => /cards.*\(owner=\? AND key>\? AND key<\?\)/.test(plan)), plans.join('\n'));
+  assert.ok(plans.some(plan => /receipts_owner_seq.*\(owner=\? AND seq>\?\)/.test(plan)), plans.join('\n'));
+  assert.ok(plans.some(plan => /suppressions_exact_key.*\(owner=\? AND key=\?\)/.test(plan)), plans.join('\n'));
+  assert.ok(plans.some(plan => /suppressions_prefix_owner.*\(owner=\?\)/.test(plan)), plans.join('\n'));
+  assert.ok(plans.some(plan => /suppressions_permanent_created.*\(created_at<\?\)/.test(plan)), plans.join('\n'));
+  assert.equal(f.read('SELECT COUNT(*) AS n FROM suppressions WHERE expires_at IS NULL')[0].n, 2);
+  await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes });
+  assert.deepEqual(f.read('SELECT * FROM suppressions WHERE expires_at IS NULL'), []);
+  assert.equal((await f.post('old-prefix/released')).status, 'posted');
+  assert.equal((await f.post('temporary')).status, 'suppressed');
 });
 
 test('stable owner cards are idempotent, whole, and retained through detach and CAS reattach', async t => {
@@ -115,13 +262,13 @@ test('opaque details round-trip across reopen, compare canonically, and do not c
     assert.throws(() => f.ledger.post({ owner, key: 'invalid', text: 'x', details: invalid }), TypeError);
 });
 
-test('the fresh default uses v3 and refuses old formats without changing them; overrides still win', async t => {
+test('fresh format 4 keeps the v3 filename and refuses old defaults without changing them; overrides still win', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'delivery-default-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const oldPath = path.join(root, '.square', 'delivery.sqlite');
+  const oldPath = path.join(root, '.square', 'delivery.v3.sqlite');
   await fs.mkdir(path.dirname(oldPath));
   const old = new DatabaseSync(oldPath);
-  old.exec('PRAGMA application_id=1145849682; PRAGMA user_version=2; CREATE TABLE cards (text TEXT);');
+  old.exec('PRAGMA application_id=1145849682; PRAGMA user_version=3; CREATE TABLE cards (text TEXT);');
   old.close();
   const before = await fs.readFile(oldPath);
   const override = process.env.SQUARE_DELIVERY;
@@ -129,12 +276,15 @@ test('the fresh default uses v3 and refuses old formats without changing them; o
   try {
     delete process.env.SQUARE_DELIVERY;
     assert.equal(deliveryLedgerLocation(), path.join(root, '.square', 'delivery.v3.sqlite'));
-    const ledger = await DeliveryLedger.open();
-    await ledger.close();
+    await assert.rejects(DeliveryLedger.open(), /Unsupported delivery ledger format/);
     await assert.rejects(DeliveryLedger.open({ location: oldPath }), /Unsupported delivery ledger format/);
     assert.deepEqual(await fs.readFile(oldPath), before);
-    const db = new DatabaseSync(deliveryLedgerLocation(), { readOnly: true });
-    try { assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3); }
+    assert.deepEqual(await fs.readdir(path.dirname(oldPath)), ['delivery.v3.sqlite']);
+    const fresh = path.join(root, 'fresh.sqlite');
+    const ledger = await DeliveryLedger.open({ location: fresh });
+    await ledger.close();
+    const db = new DatabaseSync(fresh, { readOnly: true });
+    try { assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4); }
     finally { db.close(); }
     process.env.SQUARE_DELIVERY = path.join(root, 'custom.sqlite');
     const custom = await DeliveryLedger.open();
@@ -371,8 +521,12 @@ test('receipt failure rolls back presentation outcome and every receipt in a bat
   finally { injection.mock.restore(); db.close(); }
   assert.equal((await f.ledger.receipts(owner)).length, 0);
   assert.deepEqual(f.read('SELECT outcome FROM attempts').map(r => r.outcome), ['dispatching', 'dispatching']);
+  assert.equal(f.read('SELECT next_receipt_seq FROM meta')[0].next_receipt_seq, 1);
   assert.equal(await batch.settle('presented'), true);
-  assert.equal((await f.ledger.receipts(owner)).length, 2);
+  assert.deepEqual((await f.ledger.receipts(owner)).map(({ seq, key }) => ({ seq, key })), [
+    { seq: 1, key: 'p:1' }, { seq: 2, key: 'p:2' },
+  ]);
+  assert.equal(f.read('SELECT next_receipt_seq FROM meta')[0].next_receipt_seq, 3);
 });
 
 test('expiry becomes unknown without stealing custody, with late truthful settlement retained', async t => {
@@ -745,8 +899,12 @@ test('persistence failure prevents I/O and settlement errors never report succes
 test('GC is bounded and sequence/cancellation authority survives collection of every card', async t => {
   let now = 1;
   const f = await fixture(t, { clock: () => now });
-  for (let index = 0; index < 201; index++) await f.post('p:' + index);
+  for (let index = 0; index < 201; index++) {
+    await f.post('p:' + index);
+    if (index === 99) await (await f.claim()).settle('presented');
+  }
   await (await f.claim()).settle('presented');
+  assert.equal((await f.ledger.receipts(owner)).at(-1).seq, 201);
   await f.ledger.cancel({ owner, generation: f.session.generation });
   now += 31 * day;
   await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes });
@@ -761,6 +919,8 @@ test('GC is bounded and sequence/cancellation authority survives collection of e
   const batch = await f.claim();
   assert.equal(batch.cards[0].seq, 202);
   assert.equal(batch.cards[0].key, 'p:later');
+  await batch.settle('presented');
+  assert.deepEqual((await f.ledger.receipts(owner)).map(receipt => receipt.seq), [202]);
 });
 
 test('prepared handoff references fence admission and preserve separate late presentation evidence', async t => {
