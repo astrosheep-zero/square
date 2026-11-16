@@ -119,7 +119,7 @@ function correlation(value: DeliveryCorrelation): void {
 
 /** Shared by host and producer callers; an explicit delivery override always wins. */
 export function deliveryLedgerLocation(env: NodeJS.ProcessEnv = process.env, homeDir = os.homedir()): string {
-  return env.SQUARE_DELIVERY ?? path.join(homeDir, '.square', 'delivery.v3.sqlite');
+  return env.SQUARE_DELIVERY ?? path.join(homeDir, '.square', 'delivery.v4.sqlite');
 }
 
 function encodeDetails(details: Readonly<Record<string, unknown>>): string {

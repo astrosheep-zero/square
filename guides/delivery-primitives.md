@@ -1,7 +1,7 @@
 # Delivery ledger
 
 `@astrosheep/square/delivery-ledger` exports `DeliveryLedger` and its types, also available from the
-package root. The per-user ledger defaults to `~/.square/delivery.v3.sqlite` and stores producer-neutral,
+package root. The per-user ledger defaults to `~/.square/delivery.v4.sqlite` and stores producer-neutral,
 finished text cards, session attachment, routes, attempts and receipts. Producers own content and
 recipient selection; adapters own transport behavior. Routes contain only `{kind, address}`.
 A card may also carry producer-neutral presentation `details`:
@@ -65,7 +65,7 @@ prefix. Omit `expiresAt` for permanent suppression within ledger retention, or s
 temporary suppression. This does not consume Square activity; producer-owned exact ACK is described
 in [square-api.md](square-api.md). The ledger does not match producer metadata. Ledger Format 4 and
 Square Format 13 require fresh stores; older formats are refused read-only, without migration or deletion.
-The default ledger filename remains `delivery.v3.sqlite`, so an old file at that path is also refused.
+The default ledger filename is now `delivery.v4.sqlite`; an older `delivery.v3.sqlite` is left untouched and is refused if opened explicitly.
 Permanent suppression retention drains through a partial `created_at` index. Pending producer selection
 still searches retained say/audience history, withdrawn-claim selection searches posting rows, and
 `read_through` aggregates retained reads.

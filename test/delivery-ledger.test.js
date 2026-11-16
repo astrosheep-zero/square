@@ -262,10 +262,11 @@ test('opaque details round-trip across reopen, compare canonically, and do not c
     assert.throws(() => f.ledger.post({ owner, key: 'invalid', text: 'x', details: invalid }), TypeError);
 });
 
-test('fresh format 4 keeps the v3 filename and refuses old defaults without changing them; overrides still win', async t => {
+test('fresh format 4 defaults to delivery.v4.sqlite and leaves an old v3 file untouched; overrides still win', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'delivery-default-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const oldPath = path.join(root, '.square', 'delivery.v3.sqlite');
+  const defaultPath = path.join(root, '.square', 'delivery.v4.sqlite');
   await fs.mkdir(path.dirname(oldPath));
   const old = new DatabaseSync(oldPath);
   old.exec('PRAGMA application_id=1145849682; PRAGMA user_version=3; CREATE TABLE cards (text TEXT);');
@@ -275,17 +276,16 @@ test('fresh format 4 keeps the v3 filename and refuses old defaults without chan
   const homedir = mock.method(os, 'homedir', () => root);
   try {
     delete process.env.SQUARE_DELIVERY;
-    assert.equal(deliveryLedgerLocation(), path.join(root, '.square', 'delivery.v3.sqlite'));
-    await assert.rejects(DeliveryLedger.open(), /Unsupported delivery ledger format/);
-    await assert.rejects(DeliveryLedger.open({ location: oldPath }), /Unsupported delivery ledger format/);
-    assert.deepEqual(await fs.readFile(oldPath), before);
-    assert.deepEqual(await fs.readdir(path.dirname(oldPath)), ['delivery.v3.sqlite']);
-    const fresh = path.join(root, 'fresh.sqlite');
-    const ledger = await DeliveryLedger.open({ location: fresh });
+    assert.equal(deliveryLedgerLocation(), defaultPath);
+    const ledger = await DeliveryLedger.open();
     await ledger.close();
-    const db = new DatabaseSync(fresh, { readOnly: true });
+    const db = new DatabaseSync(defaultPath, { readOnly: true });
     try { assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4); }
     finally { db.close(); }
+    assert.deepEqual(await fs.readFile(oldPath), before);
+    assert.deepEqual(await fs.readdir(path.dirname(oldPath)), ['delivery.v3.sqlite', 'delivery.v4.sqlite']);
+    await assert.rejects(DeliveryLedger.open({ location: oldPath }), /Unsupported delivery ledger format/);
+    assert.deepEqual(await fs.readFile(oldPath), before);
     process.env.SQUARE_DELIVERY = path.join(root, 'custom.sqlite');
     const custom = await DeliveryLedger.open();
     await custom.close();

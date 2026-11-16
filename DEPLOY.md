@@ -76,13 +76,14 @@ existing installation and delivery paths.
 
 ## Square persistence
 
-The user-level delivery ledger defaults to `~/.square/delivery.v3.sqlite`. It holds
+The user-level delivery ledger (Ledger Format 4) defaults to `~/.square/delivery.v4.sqlite`. It holds
 neutral cards, host session lifecycle, attempts and receipts; Square content and
 producer waiting controls remain in the `.square` artifact. There is no discovery
 index. Host start and end attach or detach the ledger session without restoring
-or detaching Square seats.
+or detaching Square seats. An older `delivery.v3.sqlite` is left untouched; opening
+it explicitly is refused as an unsupported format.
 
-Each `.square` artifact is a transactional SQLite database. Format 12 is fresh-store
+Each `.square` artifact is a transactional SQLite database. Format 13 is fresh-store
 only: ordinary opens refuse older or unsupported formats read-only, without migration,
 conversion or deletion.
 
