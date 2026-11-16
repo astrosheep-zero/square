@@ -263,20 +263,27 @@ export class LedgerStore {
     }, signal);
   }
   suppress(input: { owner: string; key: string; scope: 'exact' | 'prefix'; expiresAt?: number }, signal?: AbortSignal): Promise<SuppressionResult> {
+    return this.transaction(true, now => this.suppressCard(input, now), signal);
+  }
+  suppressExact(owner: string, keys: readonly string[], signal?: AbortSignal): Promise<void> {
     return this.transaction(true, now => {
-      const permanentId = input.scope === 'exact' && input.expiresAt === undefined
-        ? (this.db.prepare("SELECT id FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL").get(input.owner, input.key) as Row | undefined)?.id as string | undefined
-        : undefined;
-      const id = permanentId ?? randomUUID();
-      const matching = (this.db.prepare('SELECT * FROM cards WHERE owner=?').all(input.owner) as Row[])
-        .filter(row => input.scope === 'exact' ? row.key === input.key : String(row.key).startsWith(input.key));
-      const inCustody = matching.some(row => this.awaitingEffect(row.seq as number));
-      if (permanentId === undefined) this.db.prepare('INSERT INTO suppressions VALUES(?,?,?,?,?,?)').run(id, input.owner, input.key, input.scope, now, input.expiresAt ?? null);
-      if (input.scope === 'exact' && input.expiresAt === undefined) for (const row of matching) {
-        if (!this.awaitingEffect(row.seq as number)) this.deleteCard(row.seq as number);
-      }
-      return { id, status: inCustody ? 'in-custody' : 'suppressed' };
+      for (const key of keys) this.suppressCard({ owner, key, scope: 'exact' }, now);
     }, signal);
+  }
+  private suppressCard(input: { owner: string; key: string; scope: 'exact' | 'prefix'; expiresAt?: number }, now: number): SuppressionResult {
+    const permanentId = input.scope === 'exact' && input.expiresAt === undefined
+      ? (this.db.prepare("SELECT id FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL").get(input.owner, input.key) as Row | undefined)?.id as string | undefined
+      : undefined;
+    const id = permanentId ?? randomUUID();
+    const matching = input.scope === 'exact'
+      ? this.db.prepare('SELECT * FROM cards WHERE owner=? AND key=?').all(input.owner, input.key) as Row[]
+      : (this.db.prepare('SELECT * FROM cards WHERE owner=?').all(input.owner) as Row[]).filter(row => String(row.key).startsWith(input.key));
+    const inCustody = matching.some(row => this.awaitingEffect(row.seq as number));
+    if (permanentId === undefined) this.db.prepare('INSERT INTO suppressions VALUES(?,?,?,?,?,?)').run(id, input.owner, input.key, input.scope, now, input.expiresAt ?? null);
+    if (input.scope === 'exact' && input.expiresAt === undefined) for (const row of matching) {
+      if (!this.awaitingEffect(row.seq as number)) this.deleteCard(row.seq as number);
+    }
+    return { id, status: inCustody ? 'in-custody' : 'suppressed' };
   }
   renewSuppression(input: { owner: string; id: string; expiresAt: number }, signal?: AbortSignal): Promise<boolean> {
     return this.transaction(true, now => this.db.prepare('UPDATE suppressions SET expires_at=? WHERE owner=? AND id=? AND (expires_at IS NULL OR expires_at>?)').run(input.expiresAt, input.owner, input.id, now).changes > 0, signal);

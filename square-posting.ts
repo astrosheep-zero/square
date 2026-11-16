@@ -87,7 +87,13 @@ async function suppressWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryL
     return post.consumed || !seat || seat.owner !== post.owner || seat.generation !== post.generation;
   }), signal)).value;
   // Departure withdraws only the captured notification, never producer read history or held effects.
-  for (const post of posts) await ledger.suppress({ owner: post.owner, key: squarePostKey(location, post), scope: 'exact' }, signal);
+  const keysByOwner = new Map<string, string[]>();
+  for (const post of posts) {
+    const keys = keysByOwner.get(post.owner) ?? [];
+    keys.push(squarePostKey(location, post));
+    keysByOwner.set(post.owner, keys);
+  }
+  for (const [owner, keys] of keysByOwner) await ledger.suppressExact(owner, keys, signal);
 }
 /** One export path for Square activities and Square-owned notices. No transaction spans I/O. */
 export async function flushSquarePosts(artifact: SquareArtifactPort, location: string, clock: () => number, signal?: AbortSignal, ledgerLocation?: string): Promise<void> {

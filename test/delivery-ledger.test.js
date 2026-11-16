@@ -180,6 +180,29 @@ test('suppression blocks before and after claim, then permanent exact tombstones
   assert.equal((await f.post('p:2')).status, 'suppressed');
 });
 
+test('batch exact suppression is idempotent, owner-scoped, and preserves held presentation evidence', async t => {
+  const f = await fixture(t);
+  await f.post('held');
+  const claim = await f.claim();
+  await f.post('withdraw');
+  await f.post('withdraw-more');
+  const other = 'native:session/other';
+  const session = await f.ledger.attach({ owner: other, expectedGeneration: null, routes });
+  await f.ledger.post({ owner: other, key: 'withdraw', text: 'other owner' });
+  const keys = ['held', 'withdraw', 'future', 'withdraw'];
+  for (let i = 0; i < 2; i++) await f.ledger.suppressExact(owner, keys);
+  assert.equal(await claim.current(), false);
+  assert.deepEqual((await f.ledger.pending(owner, { generation: f.session.generation })).map(card => card.key), ['withdraw-more']);
+  assert.deepEqual((await f.ledger.pending(other, { generation: session.generation })).map(card => card.key), ['withdraw']);
+  assert.equal((await f.post('future')).status, 'suppressed');
+  assert.equal(await claim.settle('presented'), true);
+  assert.deepEqual((await f.ledger.receipts(owner)).map(receipt => receipt.key), ['held']);
+  assert.throws(() => f.ledger.suppressExact(owner, ['withdraw-more', '']), TypeError);
+  const abort = AbortSignal.abort(new Error('cancelled batch'));
+  await assert.rejects(f.ledger.suppressExact(owner, ['withdraw-more'], abort), /cancelled batch/);
+  assert.deepEqual((await f.ledger.pending(owner, { generation: f.session.generation })).map(card => card.key), ['withdraw-more']);
+});
+
 test('suppression preserves a truthful late presentation after timeout', async t => {
   const f = await fixture(t);
   await f.post('p:late-presented');

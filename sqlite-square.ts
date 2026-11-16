@@ -269,7 +269,6 @@ export class SqliteSquare {
 
     /** Receipt selection rechecks the lease inside the writer, not at its last heartbeat. */
     private async perceivePage(name: string, seat: Seat, options: PerceiveOptions, control?: OperationControl, leaseId?: string): Promise<PerceiveSelection | null> {
-      await this.owner.reconcile(control?.signal);
       return (await this.owner.artifact.transactAs(participantAuthority(seat), facts => {
         if (leaseId !== undefined && facts.lease(name)?.leaseId !== leaseId) return null;
         return decidePerceive(facts, name, options, this.owner.clock());
@@ -354,6 +353,7 @@ export class SqliteSquare {
           if (pulse.type === 'replaced') return await complete(undefined, 'replaced');
           if (pulse.type === 'terminal') return await complete(undefined, pulse.status);
           if (pulse.heartbeatAt !== undefined) nextHeartbeat = pulse.heartbeatAt + WATCH_HEARTBEAT_MS;
+          await square.reconcile(control?.signal);
           const perceived = await this.perceivePage(name, seat!, selection, control, leaseId);
           if (perceived === null) return await complete(undefined, 'replaced');
           if (perceived.activities.length > 0) return await complete(perceived);

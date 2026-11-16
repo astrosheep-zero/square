@@ -205,6 +205,11 @@ export class DeliveryLedger {
     if (!['exact', 'prefix'].includes(input.scope) || input.expiresAt !== undefined && !Number.isFinite(input.expiresAt)) throw new TypeError('Invalid suppression');
     return this.store.suppress(input, signal);
   }
+  /** Permanently withdraw exact card keys in one transaction; captured custody survives. */
+  suppressExact(owner: Owner, keys: readonly string[], signal?: AbortSignal): Promise<void> {
+    validateOwner(owner); keys.forEach(nonempty);
+    return this.store.suppressExact(owner, keys, signal);
+  }
   renewSuppression(input: { readonly owner: Owner; readonly id: string; readonly expiresAt: number }, signal?: AbortSignal): Promise<boolean> {
     validateOwner(input.owner); nonempty(input.id);
     if (!Number.isFinite(input.expiresAt)) throw new TypeError('Expected finite suppression expiry');

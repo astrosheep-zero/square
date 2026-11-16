@@ -5,9 +5,46 @@ import os from 'node:os';
 import path from 'node:path';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
+import { DatabaseSync } from 'node:sqlite';
+import { createProducerDriver } from '../dist/square-producer-sqlite.js';
 import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
+
+test('producer selection does not issue a query per historical recipient, and exact receipts stay scoped', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-post-selection-'));
+  const square = await Square.build({ path: path.join(root, 'world.square'), ledgerLocation: path.join(root, 'ledger.sqlite'), markdown: '' });
+  await square.join('Alice', { owner: 'selection:alice' });
+  await square.join('Bob', { owner: 'selection:bob' });
+  const artifact = createArtifactPort(square.location);
+  const db = new DatabaseSync(square.location);
+  t.after(async () => { db.close(); await artifact.close(); await square.close(); await fs.rm(root, { recursive: true, force: true }); });
+  const seat = (await artifact.read(facts => facts.seat('Alice'))).value;
+  const add = count => artifact.transactAs({ kind: 'participant', seat }, facts => {
+    for (let i = 0; i < count; i++) facts.land({ kind: 'say', actor: 'Alice', at: i, body: 'pending body', mentions: ['Bob'] });
+  });
+  const measure = operation => {
+    const prepare = db.prepare.bind(db);
+    const calls = t.mock.method(db, 'prepare', (...args) => prepare(...args));
+    try { const result = operation(createProducerDriver(db)); return { result, queries: calls.mock.callCount() }; }
+    finally { calls.mock.restore(); }
+  };
+  await add(1);
+  const first = measure(driver => driver.pendingPosts());
+  await add(127);
+  const many = measure(driver => driver.pendingPosts());
+  assert.equal(many.result.length, 128);
+  assert.equal(many.queries, first.queries, 'history growth must not add per-recipient queries');
+  const post = { ...many.result[0], full: true };
+  const driver = createProducerDriver(db);
+  assert.equal(driver.acquirePost(post, 'selection-token', process.pid, Date.now()), 'initial');
+  assert.equal(driver.settlePost('selection-token', true, 'posted'), true);
+  assert.equal(driver.foldReceipt({ ...post, generation: 'stale' }, Date.now()), false);
+  assert.equal(driver.foldReceipt(post, Date.now()), true);
+  assert.equal(driver.foldReceipt(post, Date.now()), false);
+  assert.equal(driver.pendingPosts().length, 127);
+  assert.deepEqual(driver.postedPosts().map(item => [item.index, item.consumed]), [[post.index, true]]);
+});
 
 for (const stage of ['before-post', 'after-post']) test(`producer recovery preserves ownership and idempotence at ${stage}`, { timeout: 10000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-post-crash-'));
