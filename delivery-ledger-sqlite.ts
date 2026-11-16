@@ -202,6 +202,10 @@ export class LedgerStore {
       AND (SELECT MAX(a.settled_at) FROM attempts a WHERE a.seq=c.seq)<?
       AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.seq=c.seq AND a.outcome='dispatching') ORDER BY c.seq LIMIT 100`).all(cutoff) as Row[];
     for (const row of old) this.deleteCard(row.seq as number, now);
+    const stale = this.db.prepare(`SELECT c.seq FROM cards c WHERE c.posted_at<?
+      AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.seq=c.seq AND a.outcome IN ('dispatching','accepted','unknown'))
+      ORDER BY c.seq LIMIT 100`).all(cutoff) as Row[];
+    for (const row of stale) this.deleteCard(row.seq as number, now);
     this.db.prepare('DELETE FROM receipts WHERE rowid IN (SELECT rowid FROM receipts WHERE at<? ORDER BY at LIMIT 100)').run(cutoff);
   }
   session(owner: string, signal?: AbortSignal): Promise<DeliverySession | undefined> { return this.transaction(false, () => this.getSession(owner), signal); }

@@ -547,7 +547,7 @@ test('push persists before I/O, records uncertainty on failure/timeout and relea
   assert.equal(thrown.outcome, 'unknown');
 });
 
-test('retention expires receipts and unconfirmed custody at 30 days, keeps pending cards and monotonic seq', async t => {
+test('retention expires receipts, undelivered cards and unconfirmed custody at 30 days while preserving monotonic seq', async t => {
   let now = 1;
   const f = await fixture(t, { clock: () => now });
   await f.post('p:done');
@@ -567,7 +567,7 @@ test('retention expires receipts and unconfirmed custody at 30 days, keeps pendi
   now++;
   await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes });
   assert.equal((await f.ledger.receipts(owner)).length, 0);
-  assert.deepEqual(f.read('SELECT key FROM cards ORDER BY seq').map(r => r.key), ['p:pending']);
+  assert.deepEqual(f.read('SELECT * FROM cards'), []);
   assert.deepEqual(f.read('SELECT * FROM attempts'), []);
   assert.equal((await f.post('p:accepted')).status, 'suppressed');
   assert.equal((await f.post('p:uncertain')).status, 'suppressed');
@@ -575,6 +575,45 @@ test('retention expires receipts and unconfirmed custody at 30 days, keeps pendi
   const batch = await f.claim();
   assert.equal(batch.cards[0].key, 'p:new');
   assert.ok(batch.cards[0].seq > last);
+});
+
+test('never-attempted cards expire from posting with retained exact tombstones, not on reads', async t => {
+  let now = 1;
+  const f = await fixture(t, { clock: () => now });
+  await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes: [] });
+  await f.post('old');
+  now += 30 * day;
+  await f.post('young');
+  assert.deepEqual((await f.ledger.pending(owner, { generation: f.session.generation })).map(c => c.key), ['old', 'young']);
+  now++;
+  assert.deepEqual((await f.ledger.pending(owner, { generation: f.session.generation })).map(c => c.key), ['old', 'young']);
+  await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes: [] });
+  assert.deepEqual((await f.ledger.pending(owner, { generation: f.session.generation })).map(c => c.key), ['young']);
+  assert.equal((await f.post('old')).status, 'suppressed');
+  now += 30 * day + 1;
+  await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes: [] });
+  assert.equal((await f.post('old')).status, 'posted');
+});
+
+test('failed and released cards expire from posting without shortening custody or dispatching retention', async t => {
+  let now = 1;
+  const f = await fixture(t, { clock: () => now, leaseMs: 60 * day });
+  await f.post('in-flight');
+  const claim = await f.claim();
+  for (const key of ['failed', 'released', 'accepted', 'unknown']) await f.post(key);
+  now += day;
+  for (const [key, outcome] of [['failed', 'failed'], ['released', 'not-capable'], ['accepted', 'accepted'], ['unknown', 'unknown']])
+    assert.equal((await f.dispatch(key, outcome)).outcome, outcome);
+  now = 30 * day + 2;
+  await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes });
+  assert.deepEqual(f.read('SELECT key FROM cards ORDER BY seq').map(c => c.key), ['in-flight', 'accepted', 'unknown']);
+  for (const key of ['failed', 'released']) assert.equal((await f.post(key)).status, 'suppressed');
+  assert.equal(await claim.current(), true);
+  now += day;
+  await f.ledger.updateRoutes({ owner, generation: f.session.generation, routes });
+  assert.deepEqual(f.read('SELECT key FROM cards ORDER BY seq').map(c => c.key), ['in-flight']);
+  for (const key of ['accepted', 'unknown']) assert.equal((await f.post(key)).status, 'suppressed');
+  assert.equal(await claim.current(), true);
 });
 
 test('observation arms before reads, wakes on post, and is abortable; health contains neutral facts', async t => {

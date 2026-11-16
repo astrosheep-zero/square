@@ -22,9 +22,11 @@ The ledger is an outbox. Accepted and unknown attempts drop card text and detail
 transaction, retaining only custody so an exact late observation can still write a receipt. A presented
 presentation attempt deletes its card and attempts once no attempt is dispatching; a permanent exact
 suppression prevents reposting the key. Unconfirmed accepted/unknown custody expires only after
-30 days from its latest settlement. Failed and released attempts keep content for retry. Receipts and
-permanent suppressions expire in bounded batches after 30 days. Deleted sessions lose cards, attempts
-and suppressions; sessions detached longer than 30 days lose cards and attempts. Session rows remain:
+30 days from its latest settlement. Failed and released attempts keep content for retry. Cards with no
+dispatching, accepted or unknown attempt expire in bounded batches after 30 days from posting, leaving
+permanent exact suppressions just like presented cards. Receipts and permanent suppressions expire in
+bounded batches after 30 days. Deleted sessions lose cards, attempts and suppressions; sessions detached
+longer than 30 days lose cards and attempts. Session rows remain:
 a deleted row is the authority for producer reconciliation and cannot be registered again.
 
 Square folds receipts lazily into its own read state only for full activity cards; a shortened activity
