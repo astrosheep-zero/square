@@ -7,6 +7,7 @@ import squarePiExtension from '../plugins/pi/square-pi.js';
 import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { SQUARE_TOOLS } from '../dist/square-tools.js';
+import { DeliveryLedger } from '../dist/delivery-ledger.js';
 
 function registeredTools() {
   const tools = new Map();
@@ -120,11 +121,34 @@ test('Pi calls use live context, preserve environment, and return human text and
   assert.match(history.content[0].text, /hello/);
   const unmatched = await call('express', { as: 'rei', body: '@bob @Eve @eve', mentions: ['bob', 'Eve'], force: true });
   assert.match(unmatched.content[0].text, /you walk over to @bob/);
-  assert.match(unmatched.content[0].text, /@Eve isn't standing here/);
+  assert.match(unmatched.content[0].text, /⚠ @Eve is not in this square\./);
   const conflict = await call('express', { as: 'rei', body: '@bob', bell: true, mentions: ['bob'], force: true });
   assert.equal(conflict.isError, true);
   assert.match(conflict.content[0].text, /a bell cannot be combined with a mention/);
   assert.deepEqual({ ...process.env }, before);
+});
+
+test('Pi express reports absent and away targets once, while addressed activity survives resume', async t => {
+  const { call, context } = await fixture(t);
+  await call('join', { as: 'Alice' });
+  const bobContext = context('pi-tools-away-bob');
+  await call('join', { as: 'Bob' }, bobContext);
+  const question = await call('express', { as: 'Bob', body: 'question', force: true }, bobContext);
+  const reply = question.content[0].text.match(/act\/\d+/)[0];
+  const ledger = await DeliveryLedger.open({ location: process.env.SQUARE_DELIVERY });
+  t.after(() => ledger.close());
+  const session = await ledger.session('pi:pi-tools-away-bob');
+  await ledger.detach({ owner: session.owner, generation: session.generation });
+  const sent = await call('express', { as: 'Alice', body: '@bob @BOB @Nobody @nobody', mentions: ['bob', 'Nobody'], reply, force: true });
+  assert.equal(sent.isError, undefined);
+  assert.match(sent.content[0].text, /● you walk over to @Bob — act\/\d+/);
+  assert.deepEqual(sent.content[0].text.split('\n').filter(line => line.startsWith('⚠')), [
+    '⚠ @Nobody is not in this square.', '⚠ @Bob is away.',
+  ]);
+  await ledger.attach({ owner: session.owner, expectedGeneration: session.generation, routes: [] });
+  await call('express', { as: 'Alice', body: 'resume check', noMention: true, force: true });
+  const perceived = await call('perceive', { as: 'Bob' }, bobContext);
+  assert.match(perceived.content[0].text, /@bob @BOB @Nobody @nobody/);
 });
 
 test('Pi list uses live owner and cwd, while single-square calls require location', async t => {

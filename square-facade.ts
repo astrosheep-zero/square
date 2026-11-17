@@ -52,6 +52,8 @@ export interface ExpressResult {
   readonly replyAuthorNotHere?: string;
   /** Explicit mentions and body @name tokens with no standing match at landing; never stored on the activity. */
   readonly unmatchedMentions?: readonly string[];
+  /** Directed joined targets observed detached before landing, fenced to the same owner/join generation; not delivery or unread evidence. */
+  readonly awayRecipients?: readonly string[];
   /** Occasional participant-facing nudge; not part of the activity. */
   readonly hint?: string;
   readonly observation?: ExpressObservation;

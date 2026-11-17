@@ -64,7 +64,7 @@ export class SqliteSquare {
   ) {
     if (typeof ledgerLocation !== 'string' || !path.isAbsolute(ledgerLocation)) throw new TypeError('Expected a resolved absolute delivery ledger location');
   }
-  private reconcile(signal?: AbortSignal): Promise<void> { return reconcileSquareDelivery(this.artifact, this.canonicalLocation, this.clock, signal, this.ledgerLocation); }
+  private reconcile(signal?: AbortSignal): Promise<readonly Seat[]> { return reconcileSquareDelivery(this.artifact, this.canonicalLocation, this.clock, signal, this.ledgerLocation); }
   // Posting is retryable after commit; a delivery failure cannot make a landed write unsent.
   private async flush(signal?: AbortSignal): Promise<void> { await flushSquarePosts(this.artifact, this.canonicalLocation, this.clock, signal, this.ledgerLocation).catch(() => undefined); }
 
@@ -204,7 +204,7 @@ export class SqliteSquare {
         while (true) {
           checkControl(control);
           try {
-            await square.reconcile(control?.signal);
+            const awayByName = new Map((await square.reconcile(control?.signal)).map(seat => [nameKey(seat.participant), seat]));
             effect = 'unknown';
             const now = square.clock();
             const reply = rejectUnsentActivity(() => {
@@ -226,7 +226,21 @@ export class SqliteSquare {
                 return proposed;
               });
               const stored = facts.land(decision.act);
+              const awayRecipients: string[] = [];
+              if (decision.act.kind === 'say') {
+                const replyAuthor = decision.act.reply === undefined ? undefined : facts.activity(decision.act.reply)?.actor;
+                const targets = new Set([...(decision.act.mentions ?? []), ...(replyAuthor === undefined ? [] : [replyAuthor])].map(nameKey));
+                for (const target of targets) {
+                  if (target === nameKey(name)) continue;
+                  const observed = awayByName.get(target);
+                  if (observed === undefined) continue;
+                  const current = facts.seat(target);
+                  if (facts.participant(target)?.joined && current?.owner === observed.owner && current.generation === observed.generation)
+                    awayRecipients.push(current.participant);
+                }
+              }
               return { stored, standingCount: inSquareCount(facts),
+                ...(awayRecipients.length === 0 ? {} : { awayRecipients }),
                 ownActivityCount: facts.participant(name)!.sayCount, hardCap: facts.header().hardCap,
                 ...(decision.unmatchedMentions === undefined ? {} : { unmatchedMentions: decision.unmatchedMentions }),
                 ...(decision.replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere: decision.replyAuthorNotHere }) };

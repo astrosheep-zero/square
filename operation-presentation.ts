@@ -111,10 +111,10 @@ export function renderExpression(squarePath: string, data: ExpressResult, owner?
       : activity.metadata !== undefined && (activity.body ?? '').trim() === '' ? 'structured activity lands' : isGestureOnly(activity.body ?? '') ? 'your gesture lands' : 'your words land'} — ${activity.id}${style('dim', capCount)}`;
   const notReached = [...(data.unmatchedMentions ?? []), ...(data.replyAuthorNotHere === undefined ? [] : [data.replyAuthorNotHere])]
     .filter((name, index, names) => names.findIndex((other) => sameName(name, other)) === index);
-  const reachNotice = notReached.length
-    ? `\n  · ${notReached.map((name) => `${participantIdentity(name)} isn't standing here`).join('; ')} — activity landed without reaching them` : '';
+  const reachNotice = notReached.map(name => `\n⚠ ${participantIdentity(name)} is not in this square.`).join('');
+  const awayNotice = (data.awayRecipients ?? []).map(name => `\n⚠ ${participantIdentity(name)} is away.`).join('');
   return withPathOutput(projection.location ?? squarePath,
-    confirmation + (data.hint ? `\n${style('dim', `· ${data.hint}`)}` : '') + reachNotice + pending,
+    confirmation + (data.hint ? `\n${style('dim', `· ${data.hint}`)}` : '') + reachNotice + awayNotice + pending,
     { participantCount: projection.standingCount });
 }
 

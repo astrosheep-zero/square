@@ -5,6 +5,8 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import { CLI, ROOT, persistSquare, run, tempSquare, testEnv, withName } from './square-cli-helpers.js';
+import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { Square } from '../dist/square-api.js';
 
 const shellReplay = { skip: process.platform === 'win32' ? 'Printed command replay requires a POSIX shell.' : false };
 
@@ -32,7 +34,7 @@ test('a bell ignores body @names, including unmatched names, with redundant no-m
   const result = run(withName(file, 'Alice', ['express', '--no-wait', '--bell', '--no-mention', '-']), { input: 'ringing for @Bob @Eve\n' });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /● you ring the bell/);
-  assert.doesNotMatch(result.stdout + result.stderr, /isn't standing|conflict|draft kept/);
+  assert.doesNotMatch(result.stdout + result.stderr, /is not in this square|conflict|draft kept/);
 });
 
 test('unmatched body @names and explicit mentions land with the same reach warning', async () => {
@@ -48,9 +50,35 @@ test('unmatched body @names and explicit mentions land with the same reach warni
   const flag = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Ghost', 'hello there']));
   assert.equal(flag.status, 0, flag.stdout + flag.stderr);
   for (const [sent, target] of [[result, 'Nobody'], [flag, 'Ghost']]) {
-    assert.match(sent.stdout, new RegExp(`@${target} isn't standing here — activity landed without reaching them`));
+    assert.match(sent.stdout, new RegExp(`⚠ @${target} is not in this square\\.`));
     assert.equal(printedCommands(sent.stdout + sent.stderr).length, 0);
   }
+});
+
+test('CLI express warns once for absent and observed away targets', async t => {
+  const ledger = await DeliveryLedger.open({ location: process.env.SQUARE_DELIVERY });
+  t.after(() => ledger.close());
+  let reply, session;
+  const file = await persistSquare(async ({ square, body }) => {
+    await square.join('Alice', { owner: body });
+    const bob = (await square.join('Bob', { owner: 'test:cli-away-bob' })).participant;
+    reply = (await bob.express('question', { force: true })).activity.id;
+    session = await ledger.session('test:cli-away-bob');
+    await ledger.detach({ owner: session.owner, generation: session.generation });
+  });
+  const result = run(withName(file, 'Alice', ['express', '--force', '--mention', 'bob', '--mention', 'Nobody', '--reply', reply, '@bob @BOB @Nobody @nobody']));
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /● you walk over to @Bob — act\/\d+ · 1\/3/);
+  assert.deepEqual(result.stdout.split('\n').filter(line => line.startsWith('⚠')), [
+    '⚠ @Nobody is not in this square.', '⚠ @Bob is away.',
+  ]);
+  const square = await Square.at({ path: file });
+  t.after(() => square.close());
+  await ledger.attach({ owner: session.owner, expectedGeneration: session.generation, routes: [] });
+  // Reconcile the resumed session without requiring another join.
+  await square.send({ from: 'test', to: 'Alice', body: 'resume' });
+  const bob = await square.participant('Bob', { owner: session.owner });
+  assert.deepEqual((await bob.perceive()).activities.map(a => a.body), ['@bob @BOB @Nobody @nobody']);
 });
 
 test('perceive --id refuses an activity that is not addressed to the caller with ✕ and a runnable read', shellReplay, async () => {
@@ -112,7 +140,7 @@ test('a reply to an author who stepped out says the reply did not reach them', a
   const result = run(withName(file, 'Alice', ['express', '--force', '--reply', 'act/2', 'answer']));
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /● your words land — act\/4/);
-  assert.match(result.stdout, /@Bob isn't standing here — activity landed without reaching them/);
+  assert.match(result.stdout, /⚠ @Bob is not in this square\./);
 });
 
 test('unread activity appended to a receipt is explicitly a nonconsuming preview', async () => {

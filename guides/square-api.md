@@ -49,9 +49,22 @@ later cancellation.
 
 Explicit mentions and body `@name` candidates share soft recipient resolution: absent or unknown
 targets do not block `express`. The receipt lists them in `unmatchedMentions`; a departed reply author
-is reported in `replyAuthorNotHere`. These warnings are not stored on the activity. CLI and tools
-combine them into one deduplicated reach notice. Standing recipients still receive the activity;
-rejoining later never adds a recipient to its frozen audience.
+is reported in `replyAuthorNotHere`. The optional `awayRecipients` lists directed joined targets
+observed detached by the reconciliation immediately before landing, without requiring `observe: true`.
+It covers resolved mentions and a joined reply author, deduplicates canonical names and excludes the
+speaker. Bell alone does not enumerate away recipients; a reply on a bell still targets its author.
+The landing transaction fences each observation to the same owner and join generation. Missing
+sessions, unknown observations, routes and cached attachment alone do not establish away status.
+These facts are not stored on the activity and do not prove delivery, consumption or current unread
+state. The captured observation remains unchanged by later attach, detach or receipt activity.
+
+CLI and tools share one `⚠ @Alice is not in this square.` per absent target,
+and one `⚠ @Bob is away.` per observed away target. Away names use the resolved participant
+identity; unmatched names retain the requested spelling.
+Absent mention and reply warnings deduplicate. Joined addressed recipients retain their frozen audience
+and unconsumed activity while away; they can perceive after resume without joining again. Ignore still
+controls audience, so an away warning for an ignored sender's target does not imply unread activity.
+Rejoining later never adds an absent recipient to an earlier activity's frozen audience.
 
 A live idle perceive owns matching activity notifications before producer export ownership is acquired.
 Matching uses its sender and directed-attention filters against the activity's landed delivery route;

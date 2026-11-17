@@ -53,15 +53,17 @@ export async function ensureInitialDeliverySession(owner: Seat['owner'], route: 
   } finally { await ledger.close(); }
 }
 /** Called only by privileged mutations. Sandbox lease/ACK/selection never enters here. */
-export async function reconcileSquareDelivery(artifact: SquareArtifactPort, location: string, clock: () => number, signal: AbortSignal | undefined, ledgerLocation: string): Promise<void> {
+export async function reconcileSquareDelivery(artifact: SquareArtifactPort, location: string, clock: () => number, signal: AbortSignal | undefined, ledgerLocation: string): Promise<readonly Seat[]> {
   requireLedgerLocation(ledgerLocation);
   const seats = (await artifact.read(currentSeats, signal)).value;
   const ledger = await openLedger(ledgerLocation, signal);
   try {
     const sessions = await deliverySessionsForSeats(ledger, seats, signal);
+    const awaySeats: Seat[] = [];
     for (const seat of seats) {
       const session = sessions.get(seat.owner);
       if (!session) continue;
+      if (session.state === 'detached') awaySeats.push(seat);
       if (session.state === 'deleted') {
         await artifact.transactAs({ kind: 'host-cleanup', seat }, facts => {
           const current = facts.seat(seat.participant);
@@ -94,6 +96,7 @@ export async function reconcileSquareDelivery(artifact: SquareArtifactPort, loca
       }, signal);
     }
     await suppressWithdrawn(artifact, ledger, location, signal);
+    return awaySeats;
   } finally { await ledger.close(); }
 }
 function currentSeats(facts: SquareRead): readonly Seat[] {

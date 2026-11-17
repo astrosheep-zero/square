@@ -372,10 +372,10 @@ test('MCP shares location and noMention parameters with native tools', async (t)
       const bareActivity = (await square.history()).activities.at(-1);
       const directed = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@Eve', noMention: true, mentions: ['bob'], reply: bareActivity.id, force: true } });
       assert.match(directed.content[0].text, /you walk over to @bob/);
-      assert.doesNotMatch(directed.content[0].text, /isn't standing here/);
+      assert.doesNotMatch(directed.content[0].text, /is not in this square/);
       const bell = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@bob @Eve', bell: true, force: true } });
       assert.match(bell.content[0].text, /you ring the bell/);
-      assert.doesNotMatch(bell.content[0].text, /isn't standing here/);
+      assert.doesNotMatch(bell.content[0].text, /is not in this square/);
       const original = await client.callTool({ name: 'history', arguments: { location: squarePath } });
       assert.match(original.content[0].text, /@bob @Eve/);
       const activities = (await square.history()).activities;
@@ -387,6 +387,31 @@ test('MCP shares location and noMention parameters with native tools', async (t)
       assert.deepEqual(activities.at(-1).mentions, []);
     } finally { await square.close(); }
   } finally { await close(); }
+});
+
+test('MCP express shares absent and away warnings without changing retained audience', async t => {
+  const { cwd, squarePath, server } = await fixture('away');
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const square = await Square.at({ path: squarePath });
+  const ledger = await DeliveryLedger.open({ location: process.env.SQUARE_DELIVERY });
+  const { client, close } = await connectedClient(server);
+  t.after(async () => { await close(); await square.close(); await ledger.close(); });
+  await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'Alice' } });
+  const bob = (await square.join('Bob', { owner: 'test:mcp-away-bob' })).participant;
+  const question = await bob.express('question', { force: true });
+  const session = await ledger.session('test:mcp-away-bob');
+  await ledger.detach({ owner: session.owner, generation: session.generation });
+  const result = await client.callTool({ name: 'express', arguments: {
+    location: squarePath, as: 'Alice', body: '@bob @BOB @Nobody @nobody', mentions: ['bob', 'Nobody'], reply: question.activity.id, force: true,
+  } });
+  assert.equal(result.isError, undefined);
+  assert.match(result.content[0].text, /● you walk over to @Bob — act\/\d+/);
+  assert.deepEqual(result.content[0].text.split('\n').filter(line => line.startsWith('⚠')), [
+    '⚠ @Nobody is not in this square.', '⚠ @Bob is away.',
+  ]);
+  assert.equal((await square.participants({ local: true })).participants.find(p => p.name === 'Bob').unreadActivityCount, 1);
+  await ledger.attach({ owner: session.owner, expectedGeneration: session.generation, routes: [] });
+  assert.deepEqual((await bob.perceive()).activities.map(a => a.body), ['@bob @BOB @Nobody @nobody']);
 });
 
 test('MCP cancellation reaches an in-progress application operation', async () => {

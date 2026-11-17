@@ -251,14 +251,14 @@ test('the CLI lands matched and unmatched body @names without rewriting the body
 
   const unknown = run(withName(file, 'Alice', ['express', 'hey @Eve']));
   assert.equal(unknown.status, 0, unknown.stderr);
-  assert.match(unknown.stdout, /@Eve isn't standing here — activity landed without reaching them/);
+  assert.match(unknown.stdout, /⚠ @Eve is not in this square\./);
   acts = (await readSquareSnapshot(file)).state.acts;
   assert.equal(acts.at(-1).body, 'hey @Eve');
   assert.deepEqual(acts.at(-1).mentions, []);
 
   const mixed = run(withName(file, 'Alice', ['express', '-']), { input: 'hello @Eve and @Bob' });
   assert.equal(mixed.status, 0, mixed.stderr);
-  assert.match(mixed.stdout, /@Eve isn't standing here — activity landed without reaching them/);
+  assert.match(mixed.stdout, /⚠ @Eve is not in this square\./);
   assert.doesNotMatch(mixed.stdout, /landed bare/);
   acts = (await readSquareSnapshot(file)).state.acts;
   assert.equal(acts.at(-1).body, 'hello @Eve and @Bob');
@@ -276,13 +276,13 @@ test('the CLI lands matched and unmatched body @names without rewriting the body
 
   const replyUnknown = run(withName(file, 'Alice', ['express', '--reply', 'act/1', '@Eve']));
   assert.equal(replyUnknown.status, 0, replyUnknown.stderr);
-  assert.match(replyUnknown.stdout, /@Eve isn't standing here — activity landed without reaching them/);
+  assert.match(replyUnknown.stdout, /⚠ @Eve is not in this square\./);
   assert.doesNotMatch(replyUnknown.stdout, /landed bare/);
 
   const explicit = run(withName(file, 'Alice', ['express', '--no-mention', '--mention', 'Bob', '@Eve']));
   assert.equal(explicit.status, 0, explicit.stderr);
   assert.match(explicit.stdout, /you walk over to @Bob/);
-  assert.doesNotMatch(explicit.stdout, /isn't standing/);
+  assert.doesNotMatch(explicit.stdout, /is not in this square/);
 
   const pipedBare = run(withName(file, 'Alice', ['express', '-']), { input: 'no audience here' });
   assert.equal(pipedBare.status, 0, pipedBare.stderr);

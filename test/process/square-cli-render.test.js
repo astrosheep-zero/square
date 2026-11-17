@@ -340,7 +340,7 @@ test('unknown recipient warnings confirm the activity still landed', async () =>
   const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']));
   assert.equal(expressed.status, 0, expressed.stderr);
   assert.match(expressed.stdout, /your words land — act\/\d+/);
-  assert.match(expressed.stdout, /@Eve isn't standing here — activity landed without reaching them/);
+  assert.match(expressed.stdout, /⚠ @Eve is not in this square\./);
   assert.equal(expressed.stderr, '');
 });
 

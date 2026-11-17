@@ -49,7 +49,7 @@ test('text confirmation retains reach warnings without claiming a receiver heard
   await bob.done();
   const result = await express.run(square, { location: square.location, as: 'Alice', body: '@Absent answer', mentions: ['Bob', 'Absent'], reply: question.activity.id, force: true }, {}, { owner: body });
   assert.equal((await square.history()).activities.at(-1).reply, question.activity.id);
-  assert.match(result, /activity landed without reaching them/);
-  assert.equal(result.match(/@Bob isn't standing here/g).length, 1);
-  assert.match(result, /@Absent isn't standing here/);
+  assert.match(result, /● your words land — act\/\d+/);
+  assert.equal(result.match(/⚠ @Bob is not in this square\./g).length, 1);
+  assert.match(result, /⚠ @Absent is not in this square\./);
 });

@@ -16,6 +16,14 @@ Host-confirmed deletion marks the ledger session deleted; the next privileged mu
 operation reconciles it and lands a generation-fenced `done`. Read-only history, status and
 participants do not perform that mutation.
 
+An express receipt can report `awayRecipients` for resolved mentions and a joined reply author.
+This captures only explicitly detached lifecycle observations from the preceding reconciliation,
+fenced at landing by owner and join generation. A missing session is unknown, and a cached detached
+seat alone does not justify a warning. The shared CLI/tool text says `⚠ @Bob is away.`; it makes no
+claim about physical or network availability, delivery or current unread state. The activity still
+lands, and addressed joined recipients keep their audience and pending activity until consumption.
+Ignore continues to control audience independently; bell alone does not enumerate away warnings.
+
 Participant handles capture owner and join generation; stale, departed or replaced custody refuses.
 Sandbox selection and exact ACK authorize against locally known World custody alone,
 without requiring access to the user ledger. This is not proof of current host attachment: a ledger-only

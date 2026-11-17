@@ -52,7 +52,7 @@ test('absent explicit recipients land once without a draft or retry', async () =
     const body = `first line for ${target}\r\nsecond line with 'quotes'\r\n`;
     const result = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', target, '--reply', 'act/0', '-']), { input: body });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, new RegExp(`@${target} isn't standing here — activity landed without reaching them`));
+    assert.match(result.stdout, new RegExp(`⚠ @${target} is not in this square\\.`));
     assert.doesNotMatch(result.stdout + result.stderr, /draft kept|retry/);
     const landed = await says(file);
     assert.equal(landed.length, target === 'Bobb' ? 1 : 2);
@@ -132,7 +132,7 @@ test('explicit bell conflict repairs flags without asking for body edits', shell
   assert.doesNotMatch(saved.commands[0], /--mention /);
   const retry = executeRecovery(saved.commands[0]);
   assert.equal(retry.status, 0, retry.stdout + retry.stderr);
-  assert.doesNotMatch(retry.stdout, /isn't standing/);
+  assert.doesNotMatch(retry.stdout, /is not in this square/);
   assert.equal((await says(file)).at(-1).reach, 'bell');
 });
 

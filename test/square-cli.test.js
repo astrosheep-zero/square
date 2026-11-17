@@ -536,7 +536,7 @@ test('an unknown recipient returns a reach warning without refusing', async () =
 
   const expressed = run(withName(file, 'Alice', ['express', '--mention', 'Eve', 'hello']));
   assert.equal(expressed.status, 0, expressed.stderr);
-  assert.match(expressed.stdout, /@Eve isn't standing here — activity landed without reaching them/);
+  assert.match(expressed.stdout, /⚠ @Eve is not in this square\./);
   assert.equal(expressed.stderr, '');
 });
 
