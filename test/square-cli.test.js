@@ -234,6 +234,7 @@ test('every public subcommand exposes scoped help without a square', async () =>
     'uninstall',
     'harness',
     'doctor',
+    'migrate',
   ];
 
   const results = await Promise.all(commands.map((command) => runAsync([command, '--help'], { cwd })));
@@ -254,7 +255,7 @@ test('every public subcommand exposes scoped help without a square', async () =>
   assert.match(index.stdout, /^Prepare and manage:$/m);
   assert.match(index.stdout, /^Setup:$/m);
   assert.match(index.stdout, /^  list$/m);
-  assert.doesNotMatch(index.stdout, /^  migrate(?:\s|$)/m);
+  assert.match(index.stdout, /^  migrate(?:\s|$)/m);
   assert.doesNotMatch(index.stdout, /^  ls,/m);
 
   const missingSquare = path.join(cwd, 'missing.square');
@@ -274,7 +275,7 @@ test('help command resolves aliases and rejects unknown commands', async () => {
     runAsync(['help', 'history'], { cwd }),
     runAsync(['help', 'list'], { cwd }),
     runAsync(['help', 'missing-command'], { cwd }),
-    ...['act', 'echo', 'compact', 'migrate', 'participants'].flatMap((removed) => [
+    ...['act', 'echo', 'compact', 'participants'].flatMap((removed) => [
       runAsync(['help', removed], { cwd }),
       runAsync([removed], { cwd }),
     ]),
@@ -288,7 +289,7 @@ test('help command resolves aliases and rejects unknown commands', async () => {
   assert.match(unknown.stderr, /unknown command: missing-command/);
   assert.match(unknown.stderr, /square --help/);
   for (const [index, result] of removedResults.entries()) {
-    const removed = ['act', 'echo', 'compact', 'migrate', 'participants'][Math.floor(index / 2)];
+    const removed = ['act', 'echo', 'compact', 'participants'][Math.floor(index / 2)];
     assert.equal(result.status, 2, removed);
     assert.match(result.stderr, new RegExp(`unknown command: ${removed}`));
     assert.doesNotMatch(result.stderr, /did you mean/i);
@@ -343,7 +344,7 @@ test('CLI uses an explicit location and participant', async (t) => {
 test('square-accessing commands refuse to invent a default location', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-no-default-location-'));
   try {
-    for (const command of ['build', 'stream', 'join', 'perceive', 'express', 'done', 'history', 'status', 'doctor']) {
+    for (const command of ['build', 'stream', 'join', 'perceive', 'express', 'done', 'history', 'status', 'doctor', 'migrate']) {
       const result = run([command], { cwd, input: command === 'build' ? 'body\n' : undefined });
       assert.equal(result.status, 2, `${command}: ${result.stderr}`);
       assert.match(result.stderr, new RegExp(`${command} needs a square location`));

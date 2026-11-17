@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
+import { seedFormat12 } from '../fixtures/format12.js';
 
 import { formatActivityId } from '../../dist/square-core.js';
 import { createArtifactPort, readSquareSnapshot, writeSquareFile } from '../../dist/artifact.js';
@@ -22,6 +24,73 @@ import {
   assertDraftRecovery,
   testEnv,
 } from '../square-cli-helpers.js';
+
+test('migrate CLI uses --location for the explicit offline edge and never creates a ledger on success or refusal', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-migrate-cli-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = seedFormat12(path.join(root, 'old #? 名.square'));
+  const ledger = path.join(root, 'must-stay-absent.sqlite');
+  const opts = { cwd: root, env: { SQUARE_DELIVERY: ledger } };
+  const help = run(['migrate', '--help'], opts);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /--location.*migrate/);
+  assert.match(help.stdout, /Stop all old writers/);
+  const missingLocation = run(['migrate'], opts);
+  assert.equal(missingLocation.status, 2);
+  assert.match(missingLocation.stderr, /migrate needs a square location/);
+  const first = run(['migrate', '--location', path.basename(file)], opts);
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(first.stdout, /format 12 → 13/);
+  assert.equal(fs.existsSync(ledger), false);
+  const bytes = fs.readFileSync(file);
+  const second = run(['--location', path.basename(file), 'migrate'], opts);
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /format 13 → 13 \(unchanged\)/);
+  assert.deepEqual(fs.readFileSync(file), bytes);
+  const unsupported = seedFormat12(path.join(root, 'unsupported.square'));
+  const db = new DatabaseSync(unsupported);
+  db.exec('PRAGMA user_version=14'); db.close();
+  const unsupportedBytes = fs.readFileSync(unsupported);
+  const refused = run(['--location', unsupported, 'migrate'], opts);
+  assert.equal(refused.status, 2, refused.stderr);
+  assert.match(refused.stderr, /supports only format 12 to 13/);
+  assert.deepEqual(fs.readFileSync(unsupported), unsupportedBytes);
+  assert.equal(fs.existsSync(ledger), false);
+  for (const args of [
+    ['--location', 'missing.square', 'migrate'], ['--location', file, 'migrate', 'positional-is-not-supported'],
+  ]) assert.notEqual(run(args, opts).status, 0);
+  assert.equal(fs.existsSync(path.join(root, 'missing.square')), false);
+  assert.equal(fs.existsSync(ledger), false);
+});
+
+test('migrate CLI errors bypass generic Square recovery and ledger opening even for malformed13 producer rows', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-migrate-recovery-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = seedFormat12(path.join(root, 'bad.square'));
+  assert.equal(run(['--location', file, 'migrate']).status, 0);
+  const db = new DatabaseSync(file);
+  db.exec('UPDATE square_posts SET owner_pid=0 WHERE token IS NOT NULL'); db.close();
+  const marker = path.join(root, 'forbidden-open'), ledger = path.join(root, 'ledger.sqlite');
+  fs.writeFileSync(ledger, 'unrelated preexisting ledger bytes');
+  const before = fs.readFileSync(file), ledgerBefore = fs.readFileSync(ledger);
+  const script = path.join(root, 'run.mjs');
+  fs.writeFileSync(script, `
+    import fs from 'node:fs';
+    import { Square, DeliveryLedger } from ${JSON.stringify(new URL('../../dist/index.js', import.meta.url).href)};
+    import { runCli } from ${JSON.stringify(new URL('../../dist/cli/program.js', import.meta.url).href)};
+    const forbidden = () => { fs.writeFileSync(${JSON.stringify(marker)}, 'opened'); throw Error('forbidden migration dependency'); };
+    Square.at = forbidden;
+    DeliveryLedger.open = forbidden;
+    await runCli(['--location', ${JSON.stringify(file)}, 'migrate']);
+  `);
+  const failed = spawnSync(process.execPath, [script], { encoding: 'utf8', env: testEnv({ SQUARE_DELIVERY: ledger }) });
+  assert.equal(failed.status, 2, failed.stderr);
+  assert.match(failed.stderr, /Invalid square artifact/);
+  assert.equal(fs.existsSync(marker), false, 'neither Square.at nor DeliveryLedger.open was called');
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.deepEqual(fs.readFileSync(ledger), ledgerBefore);
+  assert.equal(fs.existsSync(`${ledger}-journal`), false);
+});
 
 test('status stays compact and focuses on the current square', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {

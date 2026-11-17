@@ -83,9 +83,20 @@ index. Host start and end attach or detach the ledger session without restoring
 or detaching Square seats. An older `delivery.v3.sqlite` is left untouched; opening
 it explicitly is refused as an unsupported format.
 
-Each `.square` artifact is a transactional SQLite database. Format 13 is fresh-store
-only: ordinary opens refuse older or unsupported formats read-only, without migration,
-conversion or deletion.
+Each `.square` artifact is a transactional SQLite database. Ordinary opens accept
+only Format 13 and refuse older or unsupported formats read-only. The narrow explicit
+exception is an offline Format 12→13 upgrade:
+
+```sh
+square --location ./example.square migrate
+```
+
+Stop every old writer before running it and keep old binaries from reconnecting.
+This command preserves the existing artifact in place, atomically adds the two
+Format 13 producer tables, and validates Format 13 as a read-only no-op on repeat.
+It never opens, upgrades or attaches a host delivery ledger; Ledger Format 3→4 has
+no migration. See [offline artifact migration](guides/migration.md) for the SDK API,
+validation and separate ledger lifecycle.
 
 Close all Square access before moving an artifact. For a live artifact, use
 SQLite's backup facilities; copying only the main `.square` file is not a safe

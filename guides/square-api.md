@@ -152,11 +152,27 @@ ranges, and permanent suppression retention uses a `created_at` index. Producer 
 searches retained say/audience history, withdrawn-claim selection searches posting rows, and
 `read_through` aggregates retained read activities; these remaining physical reads can grow with history.
 
-Format 13 is a breaking fresh-store format. Square owns its activities, audience, participants, read
-state, posting/full-card bookkeeping, receipt watermarks and outstanding departure intents in the `.square` SQLite artifact. The per-user host delivery
-ledger owns producer-neutral cards, attachment, routes, attempts and receipts; there is no discovery
-index. Ledger Format 4 also requires a fresh store. Older artifacts and ledgers are refused read-only:
-no migration, conversion or deletion. Host start/resume
+Format 13 owns activities, audience, participants, read state, posting/full-card bookkeeping,
+receipt watermarks and outstanding departure intents in the `.square` SQLite artifact. The per-user
+host delivery ledger owns producer-neutral cards, attachment, routes, attempts and receipts; there
+is no discovery index. Ordinary artifact opens accept only Format 13. The sole explicit upgrade
+edge is offline Format 12→13 through the standalone `migrateSquare` export:
+
+```ts
+import { migrateSquare } from '@astrosheep/square';
+
+const result = await migrateSquare({ cwd: process.cwd(), path: './example.square' }, { signal });
+// { location: absolutePath, fromVersion: 12, toVersion: 13, changed: true }
+// A fully validated Format13 returns fromVersion: 13 and changed: false, read-only.
+```
+
+Stop all old writers first. The operation uses the normal `SquareLocation` path resolution and
+requires an existing `.square` file. It never opens `Square`, resolves a delivery ledger, or attaches
+a host session. Every old logical row and revision stays unchanged; receipt watermarks start empty.
+See [migration](migration.md) for refusal, atomicity and departure backfill details.
+
+Ledger Format 4 still requires a fresh store; there is no Ledger Format 3→4 migration. All other
+artifact versions and older ledgers are refused without conversion or deletion. Host start/resume
 and end attach/detach the ledger session, not Square seats. Host-confirmed deletion is reconciled to a
 fenced `done` lazily by the next mutating operation, never by history, status or participants.
 

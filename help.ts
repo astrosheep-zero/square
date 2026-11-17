@@ -93,6 +93,11 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Targets:', '  claude, codex, opencode, pi  Diagnose one installed adapter.', '  delivery                      Diagnose pending delivery and recent wake-release reasons for the selected square.'],
   },
   {
+    names: ['migrate'], usage: 'migrate', usesSquare: true, group: 'maintenance',
+    summary: 'Explicitly upgrade one offline Format12 artifact to Format13.',
+    details: ['Stop all old writers first. Uses only the artifact; never opens or upgrades the host delivery ledger.', 'Format13 is fully validated read-only and left unchanged. Other versions are refused.', 'Usage: square --location ./example.square migrate'],
+  },
+  {
     names: ['doctor'], usage: 'doctor', usesSquare: true, group: 'maintenance',
     summary: 'Validate artifact integrity.',
   },
@@ -110,7 +115,7 @@ export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
     { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'perceive', 'history', 'status', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list'] },
-    { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor'] },
+    { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor', 'migrate'] },
   ];
   const commandLines = groups.flatMap(({ key, title, order }) => [
     title,

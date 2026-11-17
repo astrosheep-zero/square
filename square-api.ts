@@ -3,6 +3,7 @@ import { SquareError, type Owner } from './model.js';
 import { requireOwner } from './seats.js';
 import type { OperationControl, Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
 
+export { migrateSquare, type MigrateSquareResult } from './migrate.js';
 export type Square = SqliteSquare;
 export const Square = { at: (input: SquareAtInput, control?: OperationControl) => SqliteSquare.at(input, control),
   build: (input: SquareBuildInput, control?: OperationControl) => SqliteSquare.build(input, control), inMemory: SqliteSquare.inMemory };

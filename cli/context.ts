@@ -117,6 +117,7 @@ const LOCATION_REQUIRED_COMMANDS = new Set([
   'history',
   'status',
   'doctor',
+  'migrate',
 ]);
 
 export interface ParsedGlobalArgs {

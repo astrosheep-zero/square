@@ -124,11 +124,11 @@ function storageLeaks(sources) {
         if (edge.names.some(name => !allowed.includes(name)) || edge.types.some(name => !allowedTypes.includes(name)))
           leaks.push(`${file} -> ${target}`);
       }
-      if (target === 'square-sqlite.ts' && file !== 'artifact.ts')
+      if (target === 'square-sqlite.ts' && !['artifact.ts', 'migrate.ts'].includes(file))
         leaks.push(`${file} -> ${target}`);
-      if (target === 'square-producer-sqlite.ts' && !['artifact.ts', 'square-sqlite.ts'].includes(file))
+      if (target === 'square-producer-sqlite.ts' && !['artifact.ts', 'square-sqlite.ts', 'migrate.ts'].includes(file))
         leaks.push(`${file} -> ${target}`);
-      if (target === 'sqlite-transaction.ts' && !['artifact-store.ts', 'delivery-ledger-sqlite.ts'].includes(file))
+      if (target === 'sqlite-transaction.ts' && !['artifact-store.ts', 'delivery-ledger-sqlite.ts', 'migrate.ts'].includes(file))
         leaks.push(`${file} -> ${target}`);
     }
   }
@@ -157,7 +157,7 @@ test('one canonicalizer owns square location keys', () => {
 });
 
 test('SQLite artifact rows stay private to storage framing', () => {
-  const boundary = ['artifact.ts', 'artifact-store.ts', 'sqlite-framing.ts', 'sqlite-values.ts', 'square-sqlite.ts', 'square-producer-sqlite.ts', 'delivery-ledger-sqlite.ts'];
+  const boundary = ['artifact.ts', 'artifact-store.ts', 'sqlite-framing.ts', 'sqlite-values.ts', 'square-sqlite.ts', 'square-producer-sqlite.ts', 'delivery-ledger-sqlite.ts', 'migrate.ts'];
   assert.deepEqual(filesContaining(/from ['"]node:sqlite['"]/, [...boundary, 'packages/agent-delivery/src/file-lock.ts', 'sqlite-transaction.ts']), []);
   const framing = productionSources.get('sqlite-framing.ts') ?? '';
   assert.match(framing, /CREATE TABLE storage_meta/);
