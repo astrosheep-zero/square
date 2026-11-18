@@ -60,7 +60,7 @@ test('producer cancellation after HTTP invocation returns while its retained con
     assert.ok(result.lateSettlement);
     assert.equal(closes, 1);
     // An independent writer commits while the retained transport has not settled.
-    assert.equal((await f.ledger.post({ owner, key: 'independent', text: 'not blocked' })).status, 'posted');
+    assert.equal((await f.ledger.post({ owner, key: ["independent"], text: 'not blocked' })).status, 'posted');
     await assert.rejects(senderLedger.session(owner), /closed/);
     release.resolve();
     assert.deepEqual(await result.lateSettlement, { outcome: 'accepted', persistence: { status: 'recorded' } });
@@ -80,8 +80,8 @@ test('receiver cancellation retires promptly and records only the already-invoke
   const f = await fixture(t), entered = deferred(), finish = deferred(), closed = deferred();
   const owner = harnessOwner({ channel: 'opencode', session: 'late' });
   const session = await f.ledger.attach({ owner, expectedGeneration: null, routes: [{ kind: 'controlled', address: {} }] });
-  await f.ledger.post({ owner, key: 'first', text: 'first' });
-  await f.ledger.post({ owner, key: 'second', text: 'second' });
+  await f.ledger.post({ owner, key: ["first"], text: 'first' });
+  await f.ledger.post({ owner, key: ["second"], text: 'second' });
   const abort = new AbortController(), original = DeliveryLedger.prototype.dispatchHandoff;
   let result, calls = 0, closes = 0;
   DeliveryLedger.prototype.dispatchHandoff = async function (...args) {

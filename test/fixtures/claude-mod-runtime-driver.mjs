@@ -9,7 +9,7 @@ try {
   if (command === 'seed-call') console.log(JSON.stringify(await beginClaudeMcpCall({
     toolUseId: key, sessionId, cwd: `${root}/work`,
   }, { ...process.env, SQUARE_DELIVERY: `${root}/delivery.sqlite` })));
-  else if (command === 'post') console.log(JSON.stringify(await ledger.post({ owner, key, text })));
+  else if (command === 'post') console.log(JSON.stringify(await ledger.post({ owner, key: JSON.parse(key), text })));
   else if (command === 'inspect') {
     const current = await ledger.session(owner);
     console.log(JSON.stringify({

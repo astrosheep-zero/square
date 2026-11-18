@@ -1,3 +1,4 @@
+import { deliveryKeyEqual, encodeDeliveryKey } from '../dist/delivery-key.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -117,10 +118,10 @@ test('crash uncertainty cannot resurrect a collected notification, and expired r
   await kill();
   const future = Date.now() + 31 * DAY;
   t.mock.method(Date, 'now', () => future);
-  await c.ledger.post({ owner: c.owner, key: 'gc-trigger', text: 'unrelated card triggers bounded collection' });
+  await c.ledger.post({ owner: c.owner, key: ["gc-trigger"], text: 'unrelated card triggers bounded collection' });
   assert.equal((await c.ledger.receipts(c.owner)).length, 0);
   await c.square.join('Bob', { owner: c.owner });
-  assert.deepEqual((await c.cards()).map(card => card.key), ['gc-trigger']);
+  assert.deepEqual((await c.cards()).map(card => card.key), [["gc-trigger"]]);
   assert.deepEqual((await c.bob.pending()).activities.map(item => item.id), [activity.id], 'missing proof never fabricates consumption');
   assert.deepEqual((await c.bob.perceive({ id: activity.id })).activities.map(item => item.id), [activity.id]);
   // Source time is deliberately ancient. A never-exported source has no admission TTL.
@@ -181,11 +182,11 @@ test('an unsent recovery cannot erase an earlier uncertain insertion or resurrec
   assert.equal(await claim.settle('presented'), true);
   const future = Date.now() + 31 * DAY;
   t.mock.method(Date, 'now', () => future);
-  await originalPost.call(c.ledger, { owner: c.owner, key: 'collect', text: 'collect retained evidence' });
+  await originalPost.call(c.ledger, { owner: c.owner, key: ["collect"], text: 'collect retained evidence' });
   const count = t.mock.method(DeliveryLedger.prototype, 'post', async function (input) { calls++; return originalPost.call(this, input); });
   await c.square.join('Bob', { owner: c.owner });
   assert.equal(calls, 1, 'earlier uncertainty still blocks automatic reinsertion');
-  assert.deepEqual((await c.cards()).map(card => card.key), ['collect']);
+  assert.deepEqual((await c.cards()).map(card => card.key), [["collect"]]);
   assert.equal((await c.artifact.read(facts => facts.pendingPosts())).value.length, 0, 'expired uncertainty is no longer exportable work');
   assert.equal((await c.artifact.read(facts => facts.postsAt([{ kind: 'notice', index: 0, recipientKey: 'bob', generation: facts.seat('Bob').generation }]))).value.length, 1,
     'expiry excludes work without erasing the producer record');
@@ -209,16 +210,16 @@ test('done withdraws only its captured unclaimed cards without consuming history
   const first = (await alice.express('unclaimed for both', { mentions: ['Bob', 'Carol'], force: true })).activity;
   const second = (await alice.express('held for Bob', { mentions: ['Bob'], force: true })).activity;
   const cards = await c.cards();
-  const held = cards.find(card => card.key.includes(`#${second.id}/recipient/bob/`));
+  const held = cards.find(card => card.key[3] === 'bob' && card.key[6] + '/' + card.key[7] === second.id);
   await c.ledger.updateRoutes({ owner: c.owner, generation: c.session.generation, routes: [{ kind: 'test-held', address: {} }] });
   await c.ledger.dispatchHandoff(c.owner, held.key, { kind: 'test-held', send: async () => 'unknown' }, { generation: c.session.generation, timeoutMs: 1000 });
   await c.bob.done();
   const pending = await c.cards();
-  assert.equal(pending.some(card => card.key.includes(`#${first.id}/recipient/bob/`)), false);
-  assert.ok(pending.some(card => card.key.includes(`/recipient/carol/`)), 'another seat under the same owner is not withdrawn');
-  assert.equal(pending.some(card => card.key === held.key), false, 'suppressed custody is not pending');
+  assert.equal(pending.some(card => card.key[3] === 'bob' && card.key[6] + '/' + card.key[7] === first.id), false);
+  assert.ok(pending.some(card => card.key[3] === 'carol'), 'another seat under the same owner is not withdrawn');
+  assert.equal(pending.some(card => deliveryKeyEqual(card.key, held.key)), false, 'suppressed custody is not pending');
   const db = new DatabaseSync(c.ledgerLocation, { readOnly: true });
-  try { assert.equal(db.prepare('SELECT 1 FROM cards WHERE owner=? AND key=?').get(c.owner, held.key) !== undefined, true, 'in-custody row remains until settlement'); }
+  try { assert.equal(db.prepare('SELECT 1 FROM cards WHERE owner=? AND key=?').get(c.owner, encodeDeliveryKey(held.key)) !== undefined, true, 'in-custody row remains until settlement'); }
   finally { db.close(); }
   assert.equal((await c.artifact.read(facts => facts.receipt('Bob', Number(first.id.slice(4))))).value, undefined);
   const reborn = (await c.square.join('Bob', { owner: c.owner })).participant;

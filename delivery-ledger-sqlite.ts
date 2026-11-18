@@ -1,5 +1,9 @@
 import fs from 'node:fs/promises';
+import { encodeDeliveryKey, deliveryKeyPrefix, type DeliveryKey } from './delivery-key.js';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { validateOwner } from './neutral.js';
+import type { MigrateDeliveryLedgerResult } from './migrate-delivery-ledger.js';
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync as NodeDatabaseSync, DatabaseSyncOptions, SQLInputValue } from 'node:sqlite';
 
@@ -27,10 +31,10 @@ export const { DatabaseSync } = await (process.versions.bun
 type DatabaseSync = NodeDatabaseSync;
 import { inSqliteTransaction, retrySqliteBusy, awaitSqliteQueue } from './sqlite-transaction.js';
 import { validateSchema } from './sqlite-framing.js';
-import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, SuppressionResult } from './delivery-ledger.js';
+import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, SuppressionResult, DeliverySuppression } from './delivery-ledger.js';
 
 type Row = Record<string, SQLInputValue>;
-const FORMAT = 4;
+const FORMAT = 5;
 const APPLICATION_ID = 0x444c4752;
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const LIVE_CARD_CAP = 200;
@@ -38,7 +42,7 @@ const SCHEMA = `CREATE TABLE meta (format INTEGER NOT NULL, next_seq INTEGER NOT
 CREATE TABLE sessions (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, state TEXT NOT NULL, routes_json TEXT NOT NULL, at REAL NOT NULL);
 CREATE TABLE cards (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, text TEXT NOT NULL, details TEXT, posted_at REAL NOT NULL, UNIQUE(owner,key));
 CREATE INDEX cards_owner ON cards(owner,seq);
-CREATE TABLE suppressions (id TEXT PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('exact','prefix')), created_at REAL NOT NULL, expires_at REAL);
+CREATE TABLE suppressions (id TEXT PRIMARY KEY, owner TEXT, key TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('exact','prefix')), created_at REAL NOT NULL, expires_at REAL, CHECK ((owner IS NOT NULL AND id<>'ledger-mute') OR (owner IS NULL AND id='ledger-mute' AND scope='prefix' AND key='[]' AND expires_at IS NOT NULL AND expires_at BETWEEN -1.7976931348623157e308 AND 1.7976931348623157e308)));
 CREATE INDEX suppressions_owner ON suppressions(owner);
 CREATE INDEX suppressions_exact_key ON suppressions(owner,key) WHERE scope='exact';
 CREATE INDEX suppressions_prefix_owner ON suppressions(owner) WHERE scope='prefix';
@@ -66,7 +70,7 @@ function session(row: Row | undefined): DeliverySession | undefined {
     routes: JSON.parse(row.routes_json as string), at: row.at as number } : undefined;
 }
 function card(row: Row): DeliveryCard {
-  return { seq: row.seq as number, owner: row.owner as string, key: row.key as string, text: row.text as string,
+  return { seq: row.seq as number, owner: row.owner as string, key: JSON.parse(row.key as string), text: row.text as string,
     ...(row.details === null ? {} : { details: JSON.parse(row.details as string) }), postedAt: row.posted_at as number };
 }
 function attempt(row: Row): DeliveryAttempt {
@@ -76,16 +80,6 @@ function attempt(row: Row): DeliveryAttempt {
     ...(row.settled_at === null ? {} : { settledAt: row.settled_at as number }) };
 }
 function holds(row: DeliveryAttempt): boolean { return !['failed', 'released'].includes(row.outcome); }
-
-/** SQLite BINARY text order follows Unicode scalars, including supplementary characters. */
-function prefixUpperBound(prefix: string): string | undefined {
-  const points = Array.from(prefix);
-  while (points.length) {
-    const point = points.pop()!.codePointAt(0)!;
-    if (point < 0x10ffff) return points.join('') + String.fromCodePoint(point === 0xd7ff ? 0xe000 : point + 1);
-  }
-  return undefined;
-}
 
 /** All ledger file access and SQL are confined here. Transactions never span external effects. */
 export class LedgerStore {
@@ -229,13 +223,18 @@ export class LedgerStore {
   sessions(signal?: AbortSignal): Promise<readonly DeliverySession[]> {
     return this.transaction(false, () => (this.db.prepare('SELECT * FROM sessions ORDER BY owner').all() as Row[]).map(row => session(row)!), signal);
   }
-  cards(options: { readonly owner: string; readonly keyPrefix: string }, signal?: AbortSignal): Promise<readonly { readonly owner: string; readonly key: string }[]> {
-    return this.transaction(false, () => {
-      const upper = prefixUpperBound(options.keyPrefix);
-      return (this.db.prepare(`SELECT owner,key FROM cards WHERE owner=? AND key>=?${upper === undefined ? '' : ' AND key<?'} ORDER BY key`)
-        .all(options.owner, options.keyPrefix, ...(upper === undefined ? [] : [upper])) as Row[])
-        .map(row => ({ owner: row.owner as string, key: row.key as string }));
-    }, signal);
+  private matchingCards(owner: string | null, key: string, scope: 'exact' | 'prefix'): Row[] {
+    if (owner === null) return this.db.prepare('SELECT * FROM cards').all() as Row[];
+    if (scope === 'exact') return this.db.prepare('SELECT * FROM cards WHERE owner=? AND key=?').all(owner, key) as Row[];
+    if (key === '[]') return this.db.prepare('SELECT * FROM cards WHERE owner=? ORDER BY key').all(owner) as Row[];
+    const lower = key.slice(0, -1) + ',', upper = key.slice(0, -1) + '-';
+    return this.db.prepare(`SELECT * FROM cards WHERE owner=? AND key=? UNION ALL
+      SELECT * FROM cards WHERE owner=? AND key>=? AND key<? ORDER BY key`).all(owner, key, owner, lower, upper) as Row[];
+  }
+  cards(options: { readonly owner: string; readonly keyPrefix: DeliveryKey }, signal?: AbortSignal): Promise<readonly { readonly owner: string; readonly key: DeliveryKey }[]> {
+    const owner = options.owner, key = encodeDeliveryKey(options.keyPrefix, true);
+    return this.transaction(false, () => this.matchingCards(owner, key, 'prefix')
+      .map(row => ({ owner: row.owner as string, key: JSON.parse(row.key as string) })), signal);
   }
   pendingCards(owner: string, generation: string, signal?: AbortSignal): Promise<readonly DeliveryCard[]> {
     return this.transaction(false, now => this.attached(owner, generation)
@@ -272,7 +271,8 @@ export class LedgerStore {
       return true;
     }, signal);
   }
-  post(input: { owner: string; key: string; text: string; details: string | null }, signal?: AbortSignal): Promise<PostResult> {
+  post(value: { owner: string; key: DeliveryKey; text: string; details: string | null }, signal?: AbortSignal): Promise<PostResult> {
+    const input = { ...value, key: encodeDeliveryKey(value.key) };
     return this.transaction(true, now => {
       const s = this.getSession(input.owner);
       if (!s) return { status: 'unknown-session' };
@@ -302,12 +302,14 @@ export class LedgerStore {
       excess--;
     }
   }
-  suppress(input: { owner: string; key: string; scope: 'exact' | 'prefix'; expiresAt?: number }, signal?: AbortSignal): Promise<SuppressionResult> {
+  suppress(value: { owner: string; key: DeliveryKey; scope: 'exact' | 'prefix'; expiresAt?: number }, signal?: AbortSignal): Promise<SuppressionResult> {
+    const input = { ...value, key: encodeDeliveryKey(value.key, value.scope === 'prefix') };
     return this.transaction(true, now => this.suppressCard(input, now), signal);
   }
-  suppressExact(owner: string, keys: readonly string[], signal?: AbortSignal): Promise<void> {
+  suppressExact(owner: string, keys: readonly DeliveryKey[], signal?: AbortSignal): Promise<void> {
+    const encoded = keys.map(key => encodeDeliveryKey(key));
     return this.transaction(true, now => {
-      for (const key of keys) this.suppressCard({ owner, key, scope: 'exact' }, now);
+      for (const key of encoded) this.suppressCard({ owner, key, scope: 'exact' }, now);
     }, signal);
   }
   private suppressCard(input: { owner: string; key: string; scope: 'exact' | 'prefix'; expiresAt?: number }, now: number): SuppressionResult {
@@ -315,9 +317,7 @@ export class LedgerStore {
       ? (this.db.prepare("SELECT id FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL").get(input.owner, input.key) as Row | undefined)?.id as string | undefined
       : undefined;
     const id = permanentId ?? randomUUID();
-    const matching = input.scope === 'exact'
-      ? this.db.prepare('SELECT * FROM cards WHERE owner=? AND key=?').all(input.owner, input.key) as Row[]
-      : (this.db.prepare('SELECT * FROM cards WHERE owner=?').all(input.owner) as Row[]).filter(row => String(row.key).startsWith(input.key));
+    const matching = this.matchingCards(input.owner, input.key, input.scope);
     const inCustody = matching.some(row => this.awaitingEffect(row.seq as number));
     if (permanentId === undefined) this.db.prepare('INSERT INTO suppressions VALUES(?,?,?,?,?,?)').run(id, input.owner, input.key, input.scope, now, input.expiresAt ?? null);
     if (input.scope === 'exact' && input.expiresAt === undefined) for (const row of matching) {
@@ -325,11 +325,33 @@ export class LedgerStore {
     }
     return { id, status: inCustody ? 'in-custody' : 'suppressed' };
   }
-  renewSuppression(input: { owner: string; id: string; expiresAt: number }, signal?: AbortSignal): Promise<boolean> {
-    return this.transaction(true, now => this.db.prepare('UPDATE suppressions SET expires_at=? WHERE owner=? AND id=? AND (expires_at IS NULL OR expires_at>?)').run(input.expiresAt, input.owner, input.id, now).changes > 0, signal);
+  setSuppression(value: { owner: string | null; id: string; key: DeliveryKey; scope: 'exact' | 'prefix'; expiresAt: number }, signal?: AbortSignal): Promise<SuppressionResult> {
+    const input = { ...value, key: encodeDeliveryKey(value.key, value.scope === 'prefix') };
+    return this.transaction(true, now => {
+      const previous = this.db.prepare('SELECT * FROM suppressions WHERE id=?').get(input.id);
+      if (previous && (previous.owner !== input.owner || previous.key !== input.key || previous.scope !== input.scope || previous.expires_at === null))
+        throw new Error('Suppression id belongs to a different hold');
+      const inCustody = this.matchingCards(input.owner, input.key, input.scope).some(row => this.awaitingEffect(row.seq as number));
+      this.db.prepare(`INSERT INTO suppressions VALUES(?,?,?,?,?,?) ON CONFLICT(id)
+        DO UPDATE SET created_at=excluded.created_at,expires_at=excluded.expires_at`)
+        .run(input.id, input.owner, input.key, input.scope, now, input.expiresAt);
+      return { id: input.id, status: inCustody ? 'in-custody' : 'suppressed' };
+    }, signal);
   }
-  releaseSuppression(input: { owner: string; id: string }, signal?: AbortSignal): Promise<boolean> {
-    return this.transaction(true, () => this.db.prepare('DELETE FROM suppressions WHERE owner=? AND id=?').run(input.owner, input.id).changes > 0, signal);
+  suppression(input: { owner: string | null; id: string }, signal?: AbortSignal): Promise<DeliverySuppression | undefined> {
+    const { owner, id } = input;
+    return this.transaction(false, now => {
+      const row = this.db.prepare('SELECT * FROM suppressions WHERE owner IS ? AND id=? AND (expires_at IS NULL OR expires_at>?)').get(owner, id, now);
+      return row ? { id: row.id as string, owner: row.owner as string | null, key: JSON.parse(row.key as string),
+        scope: row.scope as 'exact' | 'prefix', createdAt: row.created_at as number,
+        ...(row.expires_at === null ? {} : { expiresAt: row.expires_at as number }) } : undefined;
+    }, signal);
+  }
+  renewSuppression(input: { owner: string | null; id: string; expiresAt: number }, signal?: AbortSignal): Promise<boolean> {
+    return this.transaction(true, now => this.db.prepare('UPDATE suppressions SET expires_at=? WHERE owner IS ? AND id=? AND (expires_at IS NULL OR expires_at>?)').run(input.expiresAt, input.owner, input.id, now).changes > 0, signal);
+  }
+  releaseSuppression(input: { owner: string | null; id: string }, signal?: AbortSignal): Promise<boolean> {
+    return this.transaction(true, () => this.db.prepare('DELETE FROM suppressions WHERE owner IS ? AND id=?').run(input.owner, input.id).changes > 0, signal);
   }
   cancel(input: { owner: string; generation: string }, signal?: AbortSignal): Promise<boolean> {
     return this.transaction(true, () => {
@@ -342,8 +364,10 @@ export class LedgerStore {
   private isSuppressed(owner: string, key: string, now: number): boolean {
     return !!this.db.prepare(`SELECT 1 FROM suppressions WHERE owner=? AND key=? AND scope='exact'
       AND (expires_at IS NULL OR expires_at>?) LIMIT 1`).get(owner, key, now)
-      || !!this.db.prepare(`SELECT 1 FROM suppressions WHERE owner=? AND scope='prefix'
-        AND (expires_at IS NULL OR expires_at>?) AND substr(?,1,length(key))=key LIMIT 1`).get(owner, now, key);
+      || !!this.db.prepare(`SELECT 1 FROM suppressions WHERE owner IS NULL AND expires_at>? LIMIT 1`).get(now)
+      || (this.db.prepare(`SELECT key FROM suppressions WHERE owner=? AND scope='prefix'
+        AND (expires_at IS NULL OR expires_at>?)`).all(owner, now) as Row[])
+        .some(row => deliveryKeyPrefix(JSON.parse(row.key as string), JSON.parse(key)));
   }
   private eligible(row: Row, now: number): boolean {
     if (this.isSuppressed(String(row.owner), String(row.key), now)) return false;
@@ -375,7 +399,8 @@ export class LedgerStore {
       return cards.length ? { cards, attempts } : undefined;
     }, signal);
   }
-  claimHandoff(owner: string, key: string, generation: string, kind: string, leaseMs: number, signal?: AbortSignal): Promise<{ card: DeliveryCard; route: DeliveryRoute; attempt: DeliveryAttempt } | undefined> {
+  claimHandoff(owner: string, path: DeliveryKey, generation: string, kind: string, leaseMs: number, signal?: AbortSignal): Promise<{ card: DeliveryCard; route: DeliveryRoute; attempt: DeliveryAttempt } | undefined> {
+    const key = encodeDeliveryKey(path);
     return this.transaction(true, now => {
       const route = this.attached(owner, generation)?.routes.find(route => route.kind === kind);
       if (!route) return undefined;
@@ -500,18 +525,22 @@ export class LedgerStore {
       return a ? this.confirm(a, now) : false;
     }, signal);
   }
-  receipts(owner: string, options: { afterSeq?: number; keys?: readonly string[]; since?: number }, signal?: AbortSignal): Promise<readonly DeliveryReceipt[]> {
-    return this.transaction(false, () => (this.db.prepare(`SELECT * FROM receipts WHERE owner=? AND seq>?${options.since === undefined ? '' : ' AND at>=?'} ORDER BY seq`)
-      .all(owner, options.afterSeq ?? 0, ...(options.since === undefined ? [] : [options.since])) as Row[])
-      .filter(row => options.keys === undefined || options.keys.includes(row.key as string))
-      .map(row => ({ seq: row.seq as number, owner: row.owner as string, key: row.key as string, at: row.at as number })), signal);
+  receipts(owner: string, options: { afterSeq?: number; keys?: readonly DeliveryKey[]; since?: number }, signal?: AbortSignal): Promise<readonly DeliveryReceipt[]> {
+    const keys = options.keys?.map(key => encodeDeliveryKey(key)), { afterSeq, since } = options;
+    return this.transaction(false, () => {
+      const rows = keys === undefined ? this.db.prepare(`SELECT * FROM receipts WHERE owner=? AND seq>?${since === undefined ? '' : ' AND at>=?'} ORDER BY seq`)
+        .all(owner, afterSeq ?? 0, ...(since === undefined ? [] : [since])) as Row[]
+        : [...new Set(keys)].flatMap(key => this.db.prepare(`SELECT * FROM receipts WHERE owner=? AND key=? AND seq>?${since === undefined ? '' : ' AND at>=?'}`)
+          .all(owner, key, afterSeq ?? 0, ...(since === undefined ? [] : [since])) as Row[]).sort((a, b) => Number(a.seq) - Number(b.seq));
+      return rows.map(row => ({ seq: row.seq as number, owner: row.owner as string, key: JSON.parse(row.key as string), at: row.at as number }));
+    }, signal);
   }
   health(owner?: string, signal?: AbortSignal): Promise<DeliveryHealth> {
     return this.transaction(false, now => {
       const all = (this.db.prepare('SELECT a.* FROM attempts a JOIN cards c ON c.seq=a.seq WHERE (? IS NULL OR c.owner=?) ORDER BY a.started_at,a.token').all(owner ?? null, owner ?? null) as Row[]).map(attempt);
       const repeatedFailures = (this.db.prepare(`SELECT c.owner,c.key,COUNT(*) AS count FROM attempts a JOIN cards c ON c.seq=a.seq
         WHERE a.outcome='failed' AND (? IS NULL OR c.owner=?) GROUP BY c.owner,c.key HAVING COUNT(*)>=2 ORDER BY c.seq`).all(owner ?? null, owner ?? null) as Row[])
-        .map(row => ({ owner: row.owner as string, key: row.key as string, count: row.count as number }));
+        .map(row => ({ owner: row.owner as string, key: JSON.parse(row.key as string), count: row.count as number }));
       const sessions = (this.db.prepare("SELECT * FROM sessions WHERE state='attached' AND (? IS NULL OR owner=?) ORDER BY owner").all(owner ?? null, owner ?? null) as Row[]).map(row => session(row)!);
       return { unknownAttempts: all.filter(a => a.outcome === 'unknown' || a.outcome === 'dispatching' && a.expiresAt <= now)
         .map(a => a.outcome === 'dispatching' ? { ...a, outcome: 'unknown' as const } : a), repeatedFailures,
@@ -519,3 +548,157 @@ export class LedgerStore {
     }, signal);
   }
 }
+
+type LedgerSnapshot = Record<'meta' | 'sessions' | 'cards' | 'suppressions' | 'attempts' | 'receipts' | 'cancellations', Row[]>;
+function migrationSnapshot(db: DatabaseSync, location: string, signal?: AbortSignal): { version: 4 | 5; rows: LedgerSnapshot } {
+  signal?.throwIfAborted();
+  const header = db.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get();
+  if (header?.application_id !== APPLICATION_ID || ![4, 5].includes(Number(header.user_version))) throw new Error('Unsupported delivery ledger format');
+  const version = header.user_version as 4 | 5;
+  validateSchema(db, version === 4 ? FORMAT4_SCHEMA : SCHEMA, location);
+  const check = db.prepare('PRAGMA integrity_check').all();
+  if (check.length !== 1 || check[0].integrity_check !== 'ok') throw new Error('Invalid delivery ledger integrity');
+  const tables = ['meta', 'sessions', 'cards', 'suppressions', 'attempts', 'receipts', 'cancellations'] as const;
+  const rows = Object.fromEntries(tables.map(table => [table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])) as LedgerSnapshot;
+  const require = (condition: boolean) => { if (!condition) throw new Error('Invalid delivery ledger evidence'); };
+  const string = (v: SQLInputValue, nonempty = true) => require(typeof v === 'string' && (!nonempty || v.length > 0));
+  const finite = (v: SQLInputValue) => require(typeof v === 'number' && Number.isFinite(v));
+  const integer = (v: SQLInputValue, min = 1) => require(Number.isSafeInteger(v) && Number(v) >= min);
+  const json = (v: SQLInputValue) => { string(v); return JSON.parse(v as string); };
+  const identity = (v: SQLInputValue, prefix = false) => {
+    string(v, version === 5 || !prefix);
+    if (version === 5) require(encodeDeliveryKey(json(v), prefix) === v);
+  };
+  require(rows.meta.length === 1 && rows.meta[0].format === version);
+  integer(rows.meta[0].next_seq); integer(rows.meta[0].next_receipt_seq);
+  for (const r of rows.sessions) {
+    signal?.throwIfAborted(); validateOwner(r.owner as string); string(r.generation); finite(r.at);
+    require(['attached', 'detached', 'deleted'].includes(r.state as string));
+    const routes = json(r.routes_json);
+    require(Array.isArray(routes));
+    const kinds = new Set<string>();
+    for (const route of routes) {
+      require(route && typeof route.kind === 'string' && route.kind.length > 0 && !kinds.has(route.kind)); kinds.add(route.kind);
+      require(route.address && typeof route.address === 'object' && !Array.isArray(route.address)
+        && Object.values(route.address).every(v => typeof v === 'string')
+        && Object.keys(route).every(k => ['kind', 'address'].includes(k)));
+    }
+  }
+  const owners = new Set(rows.sessions.map(r => r.owner)), seqs = new Set(rows.cards.map(r => r.seq));
+  for (const r of rows.cards) {
+    signal?.throwIfAborted(); integer(r.seq); validateOwner(r.owner as string); require(owners.has(r.owner)); identity(r.key); string(r.text, false); finite(r.posted_at);
+    require(Number(r.seq) < Number(rows.meta[0].next_seq));
+    if (r.details !== null) { const d = json(r.details); require(d && typeof d === 'object' && !Array.isArray(d)); }
+  }
+  for (const r of rows.suppressions) {
+    string(r.id); require(['exact', 'prefix'].includes(r.scope as string)); identity(r.key, r.scope === 'prefix'); finite(r.created_at);
+    if (r.expires_at !== null) finite(r.expires_at);
+    if (r.owner === null) require(version === 5 && r.id === 'ledger-mute' && r.scope === 'prefix' && r.key === '[]' && r.expires_at !== null);
+    else { validateOwner(r.owner as string); if (version === 5) require(r.id !== 'ledger-mute'); }
+  }
+  for (const r of rows.attempts) {
+    string(r.token); integer(r.seq); require(seqs.has(r.seq)); string(r.generation);
+    require(['handoff', 'presentation'].includes(r.track as string));
+    require(['dispatching', 'accepted', 'presented', 'failed', 'unknown', 'released'].includes(r.outcome as string));
+    if (r.route_kind !== null) string(r.route_kind);
+    const c = json(r.correlation_json);
+    require(c && typeof c === 'object' && !Array.isArray(c) && Object.entries(c).every(([k, v]) => ['token', 'messageId', 'payloadHash'].includes(k) && typeof v === 'string'));
+    finite(r.started_at); finite(r.expires_at); if (r.settled_at !== null) finite(r.settled_at);
+  }
+  for (const r of rows.receipts) {
+    integer(r.seq); validateOwner(r.owner as string); identity(r.key); finite(r.at);
+    require(Number(r.seq) < Number(rows.meta[0].next_receipt_seq));
+  }
+  for (const r of rows.cancellations) { validateOwner(r.owner as string); string(r.generation); integer(r.through_seq, 0); }
+  return { version, rows };
+}
+
+/** The only SQLite boundary for explicit offline preservation migration. */
+export async function migrateLedgerStore(location: string, convertKey: (legacy: string) => string, convertPrefix: (legacy: string) => string, signal?: AbortSignal): Promise<MigrateDeliveryLedgerResult> {
+  const open = (readOnly: boolean) => {
+    const uri = pathToFileURL(location); uri.searchParams.set('mode', readOnly ? 'ro' : 'rw');
+    return new DatabaseSync(uri.href, { readOnly });
+  };
+  signal?.throwIfAborted();
+  const probe = await retrySqliteBusy(() => open(true), signal);
+  let source: ReturnType<typeof migrationSnapshot>;
+  let converted: LedgerSnapshot;
+  try {
+    ({ source, converted } = await inSqliteTransaction(probe, false, () => migrationSnapshot(probe, location, signal), snapshot => {
+      const converted = structuredClone(snapshot.rows);
+      if (snapshot.version === 4) {
+        const identities = new Map<string, string>();
+        for (const table of ['cards', 'receipts', 'suppressions'] as const) {
+          for (const row of converted[table]) {
+            signal?.throwIfAborted();
+            const legacy = row.key as string;
+            row.key = (table === 'suppressions' && row.scope === 'prefix' ? convertPrefix : convertKey)(legacy);
+            if (table === 'suppressions' && row.id === 'ledger-mute') throw new Error('Legacy suppression uses reserved global id');
+            const prefix = table === 'suppressions' && row.scope === 'prefix';
+            const identity = JSON.stringify([row.owner, prefix ? 'prefix' : 'exact', row.key]);
+            if (identities.has(identity) && identities.get(identity) !== legacy) throw new Error('Converted delivery key collision');
+            identities.set(identity, legacy);
+          }
+        }
+        // A converted hold must reach exactly the same existing identities, including receipt-only ones.
+        const exact = [...snapshot.rows.cards, ...snapshot.rows.receipts, ...snapshot.rows.suppressions];
+        const mapped = [...converted.cards, ...converted.receipts, ...converted.suppressions];
+        for (let i = 0; i < snapshot.rows.suppressions.length; i++) {
+          const old = snapshot.rows.suppressions[i], next = converted.suppressions[i];
+          if (old.scope !== 'prefix') continue;
+          for (let j = 0; j < exact.length; j++) {
+            if (exact[j].owner !== old.owner) continue;
+            if ((exact[j].key as string).startsWith(old.key as string) !== deliveryKeyPrefix(JSON.parse(next.key as string), JSON.parse(mapped[j].key as string)))
+              throw new Error('Converted suppression prefix changes existing membership');
+          }
+        }
+      }
+      return { source: snapshot, converted };
+    }, signal));
+  } finally { probe.close(); }
+  if (source.version === 5) return { location, fromVersion: 5, toVersion: 5, changed: false };
+  const db = await retrySqliteBusy(() => open(false), signal);
+  let begun = false;
+  try {
+    db.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=FULL');
+    await retrySqliteBusy(() => { db.exec('BEGIN EXCLUSIVE'); begun = true; }, signal);
+    const current = migrationSnapshot(db, location, signal);
+    if (JSON.stringify(current) !== JSON.stringify(source)) throw new Error('Delivery ledger changed since migration preflight');
+    // Rebuild all key-bearing tables together: no temporary old/new unique-key aliases.
+    db.exec('DROP TABLE cards; DROP TABLE receipts; DROP TABLE suppressions');
+    for (const sql of SCHEMA.split(';').map(s => s.trim()).filter(Boolean)) {
+      if (/^CREATE TABLE (cards|receipts|suppressions)\b/.test(sql) || /^CREATE (?:UNIQUE )?INDEX \w+ ON (cards|receipts|suppressions)\b/.test(sql)) db.exec(sql);
+    }
+    for (const table of ['cards', 'receipts', 'suppressions'] as const) for (const row of converted[table]) {
+      signal?.throwIfAborted();
+      const columns = Object.keys(row);
+      db.prepare(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`).run(...columns.map(k => row[k]));
+    }
+    db.exec('UPDATE meta SET format=5; PRAGMA user_version=5');
+    migrationSnapshot(db, location, signal);
+    await retrySqliteBusy(() => db.exec('COMMIT'), signal);
+    begun = false;
+    return { location, fromVersion: 4, toVersion: 5, changed: true };
+  } catch (error) {
+    if (begun) { try { db.exec('ROLLBACK'); } catch { /* retain original failure */ } }
+    throw error;
+  } finally { db.close(); }
+}
+
+const FORMAT4_SCHEMA = `CREATE TABLE meta (format INTEGER NOT NULL, next_seq INTEGER NOT NULL, next_receipt_seq INTEGER NOT NULL);
+CREATE TABLE sessions (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, state TEXT NOT NULL, routes_json TEXT NOT NULL, at REAL NOT NULL);
+CREATE TABLE cards (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, text TEXT NOT NULL, details TEXT, posted_at REAL NOT NULL, UNIQUE(owner,key));
+CREATE INDEX cards_owner ON cards(owner,seq);
+CREATE TABLE suppressions (id TEXT PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('exact','prefix')), created_at REAL NOT NULL, expires_at REAL);
+CREATE INDEX suppressions_owner ON suppressions(owner);
+CREATE INDEX suppressions_exact_key ON suppressions(owner,key) WHERE scope='exact';
+CREATE INDEX suppressions_prefix_owner ON suppressions(owner) WHERE scope='prefix';
+CREATE INDEX suppressions_expiry ON suppressions(expires_at) WHERE expires_at IS NOT NULL;
+CREATE UNIQUE INDEX suppressions_permanent_exact ON suppressions(owner,key) WHERE scope='exact' AND expires_at IS NULL;
+CREATE INDEX suppressions_permanent_created ON suppressions(created_at) WHERE expires_at IS NULL;
+CREATE TABLE attempts (token TEXT PRIMARY KEY, seq INTEGER NOT NULL, generation TEXT NOT NULL, track TEXT NOT NULL, route_kind TEXT, outcome TEXT NOT NULL, correlation_json TEXT NOT NULL, started_at REAL NOT NULL, expires_at REAL NOT NULL, settled_at REAL);
+CREATE INDEX attempts_seq ON attempts(seq);
+CREATE TABLE receipts (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL, UNIQUE(owner,key));
+CREATE INDEX receipts_owner_seq ON receipts(owner,seq);
+CREATE INDEX receipts_time ON receipts(at);
+CREATE TABLE cancellations (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, through_seq INTEGER NOT NULL);`;

@@ -184,12 +184,22 @@ requires an existing `.square` file. It never opens `Square`, resolves a deliver
 a host session. Every old logical row and revision stays unchanged; receipt watermarks start empty.
 See [migration](migration.md) for refusal, atomicity and departure backfill details.
 
-Ledger Format 4 still requires a fresh store; there is no Ledger Format 3→4 migration. All other
-artifact versions and older ledgers are refused without conversion or deletion. Host start/resume
+Ledger Format5 uses array-path identities and retains the default location `delivery.v4.sqlite`.
+Its separate explicit offline Format4→5 edge is `migrateDeliveryLedger({location,
+convertOpaqueKey?, convertOpaquePrefix?}, {signal}?)`, exported through `square-api`, the package
+root and `@astrosheep/square/delivery-ledger`. All opaque producer identities require their own
+synchronous converters; known canonical Square keys convert directly. The migration preserves
+custody and receipts without sending, normalizing or collecting evidence. Ordinary opens never
+upgrade or select a new filename. Stop all hosts/producers and coordinate their array-key release
+before any real ledger cutover; see [migration](migration.md).
+All other artifact versions and older ledgers are refused without conversion or deletion. Host start/resume
 and end attach/detach the ledger session, not Square seats. Host-confirmed deletion is reconciled to a
 fenced `done` lazily by the next mutating operation, never by history, status or participants.
 
 The package exports `DeliveryLedger` and its types from both the root and
 `@astrosheep/square/delivery-ledger`. External producers post finished text and own their content;
-the ledger does not match producer metadata. Proactive delivery suppression uses the ledger's exact
-or prefix `suppress` operation, with an optional expiry; see [delivery-primitives.md](delivery-primitives.md).
+the ledger does not match producer metadata. Every key is a `readonly string[]` compared by content;
+whole-element prefixes may be `[]`. Proactive delivery suppression uses exact or prefix `suppress`
+with optional expiry, or finite independent named holds through `setSuppression`. The reserved
+null-owner `ledger-mute` hold applies globally without per-owner rows; this is a persistence/API
+foundation, not a user-facing mute command. See [delivery-primitives.md](delivery-primitives.md).

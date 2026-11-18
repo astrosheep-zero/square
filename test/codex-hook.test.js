@@ -18,7 +18,7 @@ async function fixture(t) {
   const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
   t.after(() => ledger.close());
   await ledger.attach({ owner, expectedGeneration: null, routes: [] });
-  await ledger.post({ owner, key: 'fixture:1', text: 'hello from a producer' });
+  await ledger.post({ owner, key: ["fixture","1"], text: 'hello from a producer' });
   return { env, ledger, owner, input: { session_id: 'thread', hook_event_name: 'PostToolUse' } };
 }
 
@@ -37,12 +37,12 @@ test('Codex confirms only after the output sink accepts the response', async t =
 test('Codex reserves the reminder frame within its context budget', async t => {
   const { env, ledger, owner, input } = await fixture(t);
   const remaining = 1200 - deliveryFrameOverhead({ tagged: true }) - 'hello from a producer'.length - 2;
-  await ledger.post({ owner, key: 'fixture:2', text: 'x'.repeat(remaining) });
-  await ledger.post({ owner, key: 'fixture:3', text: 'later' });
+  await ledger.post({ owner, key: ["fixture","2"], text: 'x'.repeat(remaining) });
+  await ledger.post({ owner, key: ["fixture","3"], text: 'later' });
   let output;
   await codexHookResponse(input, text => { output = JSON.parse(text); }, env, () => {});
   assert.equal(output.hookSpecificOutput.additionalContext.length, 1200);
-  assert.deepEqual((await ledger.receipts(owner)).map(receipt => receipt.key).sort(), ['fixture:1', 'fixture:2']);
+  assert.deepEqual((await ledger.receipts(owner)).map(receipt => receipt.key).sort(), [["fixture","1"], ["fixture","2"]]);
 });
 
 test('the actual CLI writes one hook response before recording its receipt', async t => {
@@ -61,7 +61,7 @@ for (const event of ['UserPromptSubmit', 'PostToolUse']) test(`actual ${event} p
   const { env, ledger, owner } = await fixture(t);
   const cli = fileURLToPath(new URL('../dist/square.js', import.meta.url));
   const event = 'PostToolUse';
-  await ledger.post({ owner, key: event, text: `card for ${event}` });
+  await ledger.post({ owner, key: [event], text: `card for ${event}` });
   const input = JSON.stringify({ session_id: 'thread', hook_event_name: event, turn_id: 'turn' });
   const first = spawnSync(process.execPath, [cli, 'codex-hook'], { input, encoding: 'utf8', env });
   assert.equal(first.status, 0, first.stderr);
@@ -71,7 +71,7 @@ for (const event of ['UserPromptSubmit', 'PostToolUse']) test(`actual ${event} p
   const second = spawnSync(process.execPath, [cli, 'codex-hook'], { input, encoding: 'utf8', env });
   assert.equal(second.status, 0, second.stderr);
   assert.equal(second.stdout, '');
-  assert.equal((await ledger.receipts(owner, { keys: [event] })).length, 1);
+  assert.equal((await ledger.receipts(owner, { keys: [[event]] })).length, 1);
 });
 
 test('suppression after the sink effect preserves truthful presentation and its tombstone', async t => {
@@ -79,11 +79,11 @@ test('suppression after the sink effect preserves truthful presentation and its 
   let output;
   await codexHookResponse(input, async text => {
     output = text;
-    await ledger.suppress({ owner, key: 'fixture:1', scope: 'exact' });
+    await ledger.suppress({ owner, key: ["fixture","1"], scope: 'exact' });
   }, env, () => {});
   assert.match(output, /hello from a producer/);
   assert.equal((await ledger.receipts(owner)).length, 1);
-  assert.equal((await ledger.post({ owner, key: 'fixture:1', text: 'replacement' })).status, 'suppressed');
+  assert.equal((await ledger.post({ owner, key: ["fixture","1"], text: 'replacement' })).status, 'suppressed');
 });
 
 test('watch and interrupt commands reject malformed or wrong native events without output or consumption', async t => {

@@ -1,3 +1,4 @@
+import { deliveryKeyEqual, encodeDeliveryKey } from '../dist/delivery-key.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -17,7 +18,7 @@ test('receipt folds and owner watermarks commit atomically, replay safely and sk
   await c.insert({ body: 'second full receipt' });
   await c.flush();
   const truncated = await c.alice.express('long '.repeat(100), { mentions: ['Bob'], force: true });
-  await c.ledger.post({ owner: c.session.owner, key: 'another-producer:key', text: 'foreign receipt' });
+  await c.ledger.post({ owner: c.session.owner, key: ["another-producer","key"], text: 'foreign receipt' });
   const claim = await c.ledger.claimPresentation(c.session.owner, { generation: c.session.generation, budgetChars: 100000 });
   await claim.settle('presented');
   const receipts = await c.ledger.receipts(c.session.owner);
@@ -94,7 +95,7 @@ test('durable departure cleanup survives interrupted suppression and fences late
   });
   await reconcileSquareDelivery(peer.artifact, c.location, Date.now, undefined, c.ledgerLocation);
   assert.deepEqual(await c.cards(), []);
-  assert.ok(c.suppressions().includes(oldKey));
+  assert.ok(c.suppressions().includes(encodeDeliveryKey(oldKey)));
   assert.equal((await c.ledger.post({ owner: captured.owner, key: c.key(captured), text: captured.body })).status, 'suppressed');
   assert.deepEqual((await c.artifact.read(facts => facts.departedSeats())).value.map(seatIdentity),
     [{ participant: 'Bob', owner: newer.owner, generation: newer.generation }]);
@@ -134,7 +135,7 @@ test('late export settlement refreshes departure cleanup after the ledger snapsh
 test('cap withdrawal leaves producer activity unread and available to pending and perceive', async t => {
   const c = await fixture(t);
   const activity = (await c.alice.express('oldest card remains unread', { mentions: ['Bob'], force: true })).activity;
-  for (let i = 0; i < 200; i++) await c.ledger.post({ owner: c.session.owner, key: `other:${i}`, text: 'newer notification' });
+  for (let i = 0; i < 200; i++) await c.ledger.post({ owner: c.session.owner, key: [`other:${i}`], text: 'newer notification' });
   assert.deepEqual(await c.cards(), []);
   assert.deepEqual((await c.bob.pending()).activities.map(item => item.id), [activity.id]);
   assert.deepEqual((await c.bob.perceive({ id: activity.id })).activities.map(item => item.id), [activity.id]);
@@ -183,7 +184,7 @@ async function fixture(t) {
   };
   return { square, location, alice, bob, artifact, ledger, ledgerLocation, session, suppressions,
     key: post => squarePostKey(location, post),
-    cards: async () => (await Promise.all([alice.seat.owner, bob.seat.owner].map(owner => ledger.cards({ owner, keyPrefix: `square:${location}#` })))).flat(),
+    cards: async () => (await Promise.all([alice.seat.owner, bob.seat.owner].map(owner => ledger.cards({ owner, keyPrefix: ['square', location] })))).flat(),
     insert: input => artifact.transactAs({ kind: 'send', actor: 'notice' }, facts => facts.insertNotice({ from: 'notice', to: 'Bob', ...input }, Date.now())),
     reconcile: () => reconcileSquareDelivery(artifact, location, Date.now, undefined, ledgerLocation),
     flush: () => flushSquarePosts(artifact, location, Date.now, undefined, ledgerLocation),
@@ -200,8 +201,8 @@ test('Square post keys round-trip canonical recipient identity and opaque genera
   for (const post of cases) assert.deepEqual(parseSquarePostKey(location, squarePostKey(location, post)),
     { kind: post.kind, index: post.index, recipientKey: nameKey(post.recipient), generation: post.generation });
   const valid = squarePostKey(location, cases[0]);
-  for (const key of [valid.replace('#act/0/', '#act/01/'), valid + '/extra', valid.replace('/recipient/alice/', '/recipient/%xx/'),
-    valid.replace('/recipient/alice/', '/recipient/Alice/'), valid.replace('#act/0/', '#act/9007199254740992/'), 'another-producer:key'])
+  for (const key of [[...valid.slice(0, 7), '01'], [...valid, 'extra'], [...valid.slice(0, 3), 'Alice', ...valid.slice(4)],
+    [...valid.slice(0, 7), '9007199254740992'], ['square', location, 'act', '0', 'recipient', 'alice', 'join', valid[5]], ['another-producer', 'key']])
     assert.equal(parseSquarePostKey(location, key), undefined);
   assert.equal(parseSquarePostKey(location + '/other', valid), undefined);
 });
@@ -212,15 +213,15 @@ test('gone consumed cards do not recreate suppressions after ledger retention', 
   const key = (await c.cards())[0].key;
   await c.bob.perceive({ id: sent.id });
   assert.deepEqual(await c.cards(), []);
-  assert.ok(c.suppressions().includes(key));
+  assert.ok(c.suppressions().includes(encodeDeliveryKey(key)));
   const future = Date.now() + 31 * DAY;
   t.mock.method(Date, 'now', () => future);
-  await c.ledger.post({ owner: c.session.owner, key: 'gc-trigger', text: 'unrelated producer' });
-  assert.equal(c.suppressions().includes(key), false);
+  await c.ledger.post({ owner: c.session.owner, key: ["gc-trigger"], text: 'unrelated producer' });
+  assert.equal(c.suppressions().includes(encodeDeliveryKey(key)), false);
   await c.square.join('Bob', { owner: c.session.owner });
   await c.alice.express('no directed audience', { force: true });
   await c.bob.perceive();
-  assert.equal(c.suppressions().includes(key), false);
+  assert.equal(c.suppressions().includes(encodeDeliveryKey(key)), false);
   assert.deepEqual(await c.cards(), []);
 });
 
@@ -234,7 +235,7 @@ test('withdrawal suppresses live cards and in-window claims before a captured ex
   const claimKey = c.key(claim);
   await c.artifact.transactAs({ kind: 'producer' }, facts => facts.acquirePost({ ...claim, full: true }, 'in-flight', process.pid, Date.now()));
   await c.bob.ack({ from: 'notice', match: { fields: [{ path: ['outcome'], equals: 'withdraw' }] }, future: 'exact' });
-  assert.ok((await c.cards()).some(card => card.key === liveKey), 'local ACK leaves ledger maintenance to a privileged operation');
+  assert.ok((await c.cards()).some(card => deliveryKeyEqual(card.key, liveKey)), 'local ACK leaves ledger maintenance to a privileged operation');
   const claims = (await c.artifact.read(facts => {
     const ids = [parseSquarePostKey(c.location, claimKey)];
     assert.deepEqual(facts.postDispositionsAt(ids), facts.postsAt(ids).map(disposition));
@@ -243,7 +244,7 @@ test('withdrawal suppresses live cards and in-window claims before a captured ex
   assert.deepEqual(claims, [{ ...disposition(claim), consumed: true }]);
   await c.reconcile();
   assert.deepEqual(await c.cards(), []);
-  assert.deepEqual(new Set(c.suppressions()), new Set([liveKey, claimKey]));
+  assert.deepEqual(new Set(c.suppressions()), new Set([liveKey, claimKey].map(key => encodeDeliveryKey(key))));
   assert.equal((await c.ledger.post({ owner: claim.owner, key: claimKey, text: claim.body })).status, 'suppressed');
   assert.equal((await c.artifact.read(facts => facts.withdrawnClaims(Date.now() + 30 * DAY))).value.length, 0);
 
@@ -279,8 +280,8 @@ test('withdrawal suppresses live cards and in-window claims before a captured ex
   await c.artifact.transactAs({ kind: 'producer' }, facts => facts.acquirePost({ ...oldSeatClaim, full: true }, 'old-seat', process.pid, Date.now()));
   await c.insert({ body: 'old seat, never exported' });
   await c.bob.done();
-  assert.ok(c.suppressions().includes(c.key(oldSeatClaim)));
-  assert.ok(liveKeys.every(key => c.suppressions().includes(key)), 'departure sees fresh membership for every old-generation card');
+  assert.ok(c.suppressions().includes(encodeDeliveryKey(c.key(oldSeatClaim))));
+  assert.ok(liveKeys.every(key => c.suppressions().includes(encodeDeliveryKey(key))), 'departure sees fresh membership for every old-generation card');
   assert.ok(reads.length >= 2, 'joined and departed callbacks independently read current membership');
   await c.square.join('Bob', { owner: c.session.owner });
   assert.deepEqual((await c.artifact.read(facts => facts.pendingPosts())).value, []);
@@ -365,7 +366,7 @@ test('perceive maintenance is driven by live ledger evidence, not consumed or un
   await c.bob.ack(history.slice(0, 64).map(index => `act/${index}`));
   const future = Date.now() + 31 * DAY;
   t.mock.method(Date, 'now', () => future);
-  for (let i = 0; i < 2; i++) await c.ledger.post({ owner: c.session.owner, key: `other-producer:${i}`, text: 'collect expired evidence' });
+  for (let i = 0; i < 2; i++) await c.ledger.post({ owner: c.session.owner, key: [`other-producer:${i}`], text: 'collect expired evidence' });
   assert.deepEqual(await c.ledger.receipts(c.session.owner), []);
   assert.deepEqual(await c.cards(), []);
 
@@ -406,13 +407,13 @@ test('perceive maintenance is driven by live ledger evidence, not consumed or un
   assert.ok(receiptCalls.length > 0);
   assert.ok(receiptCalls.every(call => call.options?.keys === undefined), 'receipt reads never carry historical artifact key lists');
   const bobReceipts = receiptCalls.find(call => call.owner === c.session.owner).keys;
-  assert.deepEqual(bobReceipts.filter(key => key.startsWith(`square:${c.location}#`)).map(key => parseSquarePostKey(c.location, key).index).sort((a, b) => a - b),
+  assert.deepEqual(bobReceipts.filter(key => parseSquarePostKey(c.location, key)).map(key => parseSquarePostKey(c.location, key).index).sort((a, b) => a - b),
     [Number(full.id.slice(4)), Number(truncated.id.slice(4))]);
   assert.ok(lookedUp.length > 0, 'receipt hydration remains covered');
   assert.ok(dispositionLookups.length > 0, 'live withdrawal uses the narrow read');
   assert.ok([...lookedUp, ...dispositionLookups].every(id => !history.includes(id.index)), 'gone old full cards, even unconsumed ones, are never looked up');
   assert.deepEqual(pendingRows, []);
-  assert.deepEqual(new Set(suppressCalls), new Set([ackedKey, targetKey]));
+  assert.deepEqual(new Set(suppressCalls.map(key => encodeDeliveryKey(key))), new Set([ackedKey, targetKey].map(key => encodeDeliveryKey(key))));
   assert.ok((await read(facts => facts.receipt('Bob', Number(full.id.slice(4))))).value);
   assert.equal((await read(facts => facts.receipt('Bob', Number(truncated.id.slice(4))))).value, undefined);
 });

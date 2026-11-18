@@ -169,7 +169,7 @@ const ledger = await DeliveryLedger.open({location: ${JSON.stringify(path.join(f
 try {
   const session = await ledger.attach({owner:'pi:packed',expectedGeneration:null,routes:[]});
   if (!session) throw new Error('attach failed');
-  const sent = await ledger.post({owner:'pi:packed',key:'producer:1',text:'packed card'});
+  const sent = await ledger.post({owner:'pi:packed',key:['producer','1'],text:'packed card'});
   const pending = await ledger.pending('pi:packed',{generation:session.generation});
   console.log(JSON.stringify({sent,pending}));
 } finally {await ledger.close();}`);

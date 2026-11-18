@@ -76,9 +76,10 @@ existing installation and delivery paths.
 
 ## Square persistence
 
-The user-level delivery ledger (Ledger Format 4) defaults to `~/.square/delivery.v4.sqlite`. It holds
-neutral cards, host session lifecycle, attempts and receipts; Square content and
-producer waiting controls remain in the `.square` artifact. There is no discovery
+The user-level delivery ledger (Ledger Format 5) defaults to `~/.square/delivery.v4.sqlite`. It holds
+neutral cards with array-path identities, host session lifecycle, suppression holds,
+attempts and receipts; Square content and producer waiting controls remain in the
+`.square` artifact. There is no discovery
 index. Host start and end attach or detach the ledger session without restoring
 or detaching Square seats. An older `delivery.v3.sqlite` is left untouched; opening
 it explicitly is refused as an unsupported format.
@@ -94,9 +95,23 @@ square --location ./example.square migrate
 Stop every old writer before running it and keep old binaries from reconnecting.
 This command preserves the existing artifact in place, atomically adds the two
 Format 13 producer tables, and validates Format 13 as a read-only no-op on repeat.
-It never opens, upgrades or attaches a host delivery ledger; Ledger Format 3→4 has
-no migration. See [offline artifact migration](guides/migration.md) for the SDK API,
-validation and separate ledger lifecycle.
+It never opens, upgrades or attaches a host delivery ledger.
+
+The separate ledger upgrade is the explicit offline SDK operation
+`migrateDeliveryLedger({location, convertOpaqueKey?, convertOpaquePrefix?}, {signal}?)`
+for Format 4→5. Ordinary ledger opens refuse Format 4 read-only; there is no implicit
+migration, filename cutover, or fresh-ledger fallback. The default remains
+`delivery.v4.sqlite`. Ledger Format 3 and other versions remain unsupported.
+
+Before a real ledger cutover, stop all host receivers and external producers,
+back up the offline ledger, and coordinate array-key-capable builds and explicit
+converters for every opaque producer namespace. In particular, the external Keiyaku
+producer and its exact/prefix converters must be ready together. Keep old writers
+stopped after migration. The operation preserves card/session/attempt/receipt,
+suppression and cancellation evidence atomically, without sending, acknowledging
+or garbage-collecting it. Repeating against a valid Format 5 is read-only and
+unchanged. See [offline migrations](guides/migration.md) for APIs, conversion
+refusals and coordinated release prerequisites.
 
 Close all Square access before moving an artifact. For a live artifact, use
 SQLite's backup facilities; copying only the main `.square` file is not a safe

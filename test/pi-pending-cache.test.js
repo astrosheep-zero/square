@@ -51,7 +51,7 @@ test('Pi pulls ledger cards and records receipts only after message_end, preserv
   const attached = await f.ledger.session(f.owner);
   assert.notEqual(attached.generation, f.initial.generation);
   assert.deepEqual(attached.routes, [...f.initial.routes, { kind: 'pi-native', address: { sessionId: 'receiver' } }]);
-  await f.ledger.post({ owner: f.owner, key: 'producer:one', text: 'a finished card' });
+  await f.ledger.post({ owner: f.owner, key: ["producer","one"], text: 'a finished card' });
   await until(() => f.sent.length === 1, 'Pi did not inject the card');
   assert.equal(f.sent[0].content, renderDeliveryReminder(['a finished card'], { tagged: true }));
   assert.deepEqual(await f.ledger.receipts(f.owner), []);
@@ -82,7 +82,7 @@ test('Pi carries full producer bodies in mixed rich cards without consuming unre
     ref: activity.id, author: 'sender', label: 'express', body, at: activity.at, reach: 'mention', recipient: 'recipient' });
   assert.equal(cards[0].text.includes(body), false, 'the model card remains shortened');
   const plain = '<square-activity from="pretend">\nPlain **markdown**, not another Square activity.\n</square-activity>';
-  await f.ledger.post({ owner: f.owner, key: 'square:pretend#act/999', text: plain, details: { kind: 'external' } });
+  await f.ledger.post({ owner: f.owner, key: ["square","pretend#act","999"], text: plain, details: { kind: 'external' } });
   await f.handlers.get('session_start')({}, f.ctx);
   await until(() => f.sent.length === 1, 'Pi did not inject the mixed batch');
   const message = f.sent[0];
@@ -121,9 +121,9 @@ test('Pi renders generic details after producer storage disappears and falls bac
   const [posted] = await f.ledger.pending(f.owner, { generation: f.initial.generation });
   assert.equal(posted.details.reach, 'bell');
   const external = { kind: 'presentation', origin: 'jobs', author: 'worker', ref: 'job/42', at: Date.now(), reach: 'attention', body: 'full external body' };
-  await f.ledger.post({ owner: f.owner, key: 'external', text: 'external preview', details: external });
-  await f.ledger.post({ owner: f.owner, key: 'invalid', text: 'invalid fallback', details: { ...external, body: 7 } });
-  await f.ledger.post({ owner: f.owner, key: 'plain', text: 'plain fallback' });
+  await f.ledger.post({ owner: f.owner, key: ["external"], text: 'external preview', details: external });
+  await f.ledger.post({ owner: f.owner, key: ["invalid"], text: 'invalid fallback', details: { ...external, body: 7 } });
+  await f.ledger.post({ owner: f.owner, key: ["plain"], text: 'plain fallback' });
   await square.close();
   fs.unlinkSync(square.location);
   await f.handlers.get('session_start')({}, f.ctx);
@@ -140,9 +140,9 @@ test('Pi renders generic details after producer storage disappears and falls bac
 
 test('Pi reserves the reminder frame within its batch budget', async t => {
   const f = await fixture(t, { start: false });
-  await f.ledger.post({ owner: f.owner, key: 'producer:one', text: 'first' });
-  await f.ledger.post({ owner: f.owner, key: 'producer:two', text: 'x'.repeat(12_000 - deliveryFrameOverhead({ tagged: true }) - 7) });
-  await f.ledger.post({ owner: f.owner, key: 'producer:later', text: 'later' });
+  await f.ledger.post({ owner: f.owner, key: ["producer","one"], text: 'first' });
+  await f.ledger.post({ owner: f.owner, key: ["producer","two"], text: 'x'.repeat(12_000 - deliveryFrameOverhead({ tagged: true }) - 7) });
+  await f.ledger.post({ owner: f.owner, key: ["producer","later"], text: 'later' });
   await f.handlers.get('session_start')({}, f.ctx);
   await until(() => f.sent.length === 1, 'Pi did not inject the batch');
   assert.equal(f.sent[0].content.length, 12_000);
@@ -153,8 +153,8 @@ test('Pi reserves the reminder frame within its batch budget', async t => {
 test('Pi yields while a producer-push attempt holds custody', async t => {
   const f = await fixture(t, { start: false });
   const started = Promise.withResolvers(), release = Promise.withResolvers();
-  await f.ledger.post({ owner: f.owner, key: 'producer:held', text: 'held card' });
-  const push = f.ledger.dispatchHandoff(f.owner, 'producer:held', {
+  await f.ledger.post({ owner: f.owner, key: ["producer","held"], text: 'held card' });
+  const push = f.ledger.dispatchHandoff(f.owner, ["producer","held"], {
     kind: 'push', async send() { started.resolve(); await release.promise; return 'accepted'; },
   }, { generation: f.initial.generation, timeoutMs: 10_000 });
   await started.promise;
@@ -170,7 +170,7 @@ test('Pi yields while a producer-push attempt holds custody', async t => {
 
 test('Pi cancellation at the final custody recheck prevents sending the claimed batch', async t => {
   const f = await fixture(t, { start: false });
-  await f.ledger.post({ owner: f.owner, key: 'cancelled', text: 'not presented' });
+  await f.ledger.post({ owner: f.owner, key: ["cancelled"], text: 'not presented' });
   const started = Promise.withResolvers(), release = Promise.withResolvers();
   const claim = DeliveryLedger.prototype.claimPresentation;
   const lookup = mock.method(DeliveryLedger.prototype, 'claimPresentation', async function (...args) {
@@ -199,17 +199,17 @@ test('Pi cancellation suppresses the queued batch but allows later cards', async
   const f = await fixture(t);
   const controller = new AbortController();
   await f.handlers.get('agent_start')({}, { mode: 'tui', signal: controller.signal });
-  await f.ledger.post({ owner: f.owner, key: 'producer:old', text: 'old card' });
+  await f.ledger.post({ owner: f.owner, key: ["producer","old"], text: 'old card' });
   await until(() => f.sent.length === 1, 'Pi did not queue the card');
   controller.abort();
   await f.handlers.get('agent_settled')();
   await f.handlers.get('message_end')({ message: { role: 'custom', customType: 'square', content: f.sent[0].content } });
   assert.deepEqual(await f.ledger.receipts(f.owner), []);
-  await f.ledger.post({ owner: f.owner, key: 'producer:new', text: 'new card' });
+  await f.ledger.post({ owner: f.owner, key: ["producer","new"], text: 'new card' });
   await until(() => f.sent.length === 2, 'Pi did not deliver new activity after cancellation');
   assert.match(f.sent[1].content, /new card/);
   assert.doesNotMatch(f.sent[1].content, /old card/);
   await f.handlers.get('message_end')({ message: { role: 'custom', customType: 'square', content: f.sent[1].content } });
   await until(async () => (await f.ledger.receipts(f.owner)).length === 1, 'Pi did not record the new receipt');
-  assert.equal((await f.ledger.receipts(f.owner))[0].key, 'producer:new');
+  assert.deepEqual((await f.ledger.receipts(f.owner))[0].key, ["producer","new"]);
 });

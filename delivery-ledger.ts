@@ -1,8 +1,11 @@
+export { migrateDeliveryLedger, type MigrateDeliveryLedgerInput, type MigrateDeliveryLedgerResult } from './migrate-delivery-ledger.js';
 import os from 'node:os';
 import path from 'node:path';
 import { validateOwner, type Owner } from './neutral.js';
 import { observeFileMetadata, type VersionObserver } from './file-changes.js';
 import { LedgerStore } from './delivery-ledger-sqlite.js';
+import { copyDeliveryKey, type DeliveryKey } from './delivery-key.js';
+export { copyDeliveryKey, encodeDeliveryKey, deliveryKeyEqual, deliveryKeyPrefix, type DeliveryKey } from './delivery-key.js';
 import { redactCurrentDiagnostic } from './diagnostic-redaction.js';
 
 export interface DeliveryRoute {
@@ -19,7 +22,7 @@ export interface DeliverySession {
 export interface DeliveryCard {
   readonly seq: number;
   readonly owner: Owner;
-  readonly key: string;
+  readonly key: DeliveryKey;
   readonly text: string;
   readonly details?: Readonly<Record<string, unknown>>;
   readonly postedAt: number;
@@ -50,12 +53,20 @@ export interface DeliveryAttempt {
   readonly expiresAt: number;
   readonly settledAt?: number;
 }
-export interface DeliveryReceipt { readonly seq: number; readonly owner: Owner; readonly key: string; readonly at: number }
+export interface DeliveryReceipt { readonly seq: number; readonly owner: Owner; readonly key: DeliveryKey; readonly at: number }
 export type PostResult = { readonly status: 'posted' | 'duplicate' | 'conflict' | 'unknown-session' | 'deleted-session' | 'suppressed' };
 export type SuppressionResult = { readonly id: string; readonly status: 'suppressed' | 'in-custody' };
+export interface DeliverySuppression {
+  readonly id: string;
+  readonly owner: Owner | null;
+  readonly key: DeliveryKey;
+  readonly scope: 'exact' | 'prefix';
+  readonly createdAt: number;
+  readonly expiresAt?: number;
+}
 export interface DeliveryHealth {
   readonly unknownAttempts: readonly DeliveryAttempt[];
-  readonly repeatedFailures: readonly { readonly owner: Owner; readonly key: string; readonly count: number }[];
+  readonly repeatedFailures: readonly { readonly owner: Owner; readonly key: DeliveryKey; readonly count: number }[];
   readonly sessionsWithoutRoute: readonly Owner[];
 }
 export interface PresentationClaim {
@@ -189,11 +200,10 @@ export class DeliveryLedger {
   }
   session(owner: Owner, signal?: AbortSignal): Promise<DeliverySession | undefined> { validateOwner(owner); return this.store.session(owner, signal); }
   sessions(signal?: AbortSignal): Promise<readonly DeliverySession[]> { return this.store.sessions(signal); }
-  /** Owner-scoped outbox identities in key order; prefix matching is literal. */
-  cards(options: { readonly owner: Owner; readonly keyPrefix: string }, signal?: AbortSignal): Promise<readonly { readonly owner: Owner; readonly key: string }[]> {
+  /** Owner-scoped outbox identities in canonical key order. */
+  cards(options: { readonly owner: Owner; readonly keyPrefix: DeliveryKey }, signal?: AbortSignal): Promise<readonly { readonly owner: Owner; readonly key: DeliveryKey }[]> {
     validateOwner(options.owner);
-    if (typeof options.keyPrefix !== 'string') throw new TypeError('Expected a key prefix');
-    return this.store.cards(options, signal);
+    return this.store.cards({ ...options, keyPrefix: copyDeliveryKey(options.keyPrefix, true) }, signal);
   }
   pending(owner: Owner, options: { readonly generation: string }, signal?: AbortSignal): Promise<readonly DeliveryCard[]> {
     validateOwner(owner); nonempty(options.generation); return this.store.pendingCards(owner, options.generation, signal);
@@ -201,38 +211,56 @@ export class DeliveryLedger {
   handoffs(owner: Owner, options: { readonly generation: string }, signal?: AbortSignal): Promise<readonly DeliveryAttempt[]> {
     validateOwner(owner); nonempty(options.generation); return this.store.handoffs(owner, options.generation, signal);
   }
-  post(input: { readonly owner: Owner; readonly key: string; readonly text: string; readonly details?: Readonly<Record<string, unknown>> }, signal?: AbortSignal): Promise<PostResult> {
-    validateOwner(input.owner); nonempty(input.key);
+  post(input: { readonly owner: Owner; readonly key: DeliveryKey; readonly text: string; readonly details?: Readonly<Record<string, unknown>> }, signal?: AbortSignal): Promise<PostResult> {
+    validateOwner(input.owner);
+    const key = copyDeliveryKey(input.key);
     if (typeof input.text !== 'string') throw new TypeError('Expected card text');
-    return this.store.post({ ...input, details: input.details === undefined ? null : encodeDetails(input.details) }, signal);
+    return this.store.post({ ...input, key, details: input.details === undefined ? null : encodeDetails(input.details) }, signal);
   }
-  suppress(input: { readonly owner: Owner; readonly key: string; readonly scope: 'exact' | 'prefix'; readonly expiresAt?: number }, signal?: AbortSignal): Promise<SuppressionResult> {
-    validateOwner(input.owner); nonempty(input.key);
+  suppress(input: { readonly owner: Owner; readonly key: DeliveryKey; readonly scope: 'exact' | 'prefix'; readonly expiresAt?: number }, signal?: AbortSignal): Promise<SuppressionResult> {
+    validateOwner(input.owner);
+    const key = copyDeliveryKey(input.key, input.scope === 'prefix');
     if (!['exact', 'prefix'].includes(input.scope) || input.expiresAt !== undefined && !Number.isFinite(input.expiresAt)) throw new TypeError('Invalid suppression');
-    return this.store.suppress(input, signal);
+    return this.store.suppress({ ...input, key }, signal);
   }
   /** Permanently withdraw exact card keys in one transaction; captured custody survives. */
-  suppressExact(owner: Owner, keys: readonly string[], signal?: AbortSignal): Promise<void> {
-    validateOwner(owner); keys.forEach(nonempty);
-    return this.store.suppressExact(owner, keys, signal);
+  suppressExact(owner: Owner, keys: readonly DeliveryKey[], signal?: AbortSignal): Promise<void> {
+    validateOwner(owner);
+    return this.store.suppressExact(owner, keys.map(key => copyDeliveryKey(key)), signal);
   }
-  renewSuppression(input: { readonly owner: Owner; readonly id: string; readonly expiresAt: number }, signal?: AbortSignal): Promise<boolean> {
-    validateOwner(input.owner); nonempty(input.id);
+  setSuppression(input: { readonly owner: Owner | null; readonly id: string; readonly key: DeliveryKey; readonly scope: 'exact' | 'prefix'; readonly expiresAt: number }, signal?: AbortSignal): Promise<SuppressionResult> {
+    if (input.owner !== null) validateOwner(input.owner);
+    nonempty(input.id);
+    const key = copyDeliveryKey(input.key, input.scope === 'prefix');
+    if (!['exact', 'prefix'].includes(input.scope) || !Number.isFinite(input.expiresAt)
+      || (input.owner === null ? input.id !== 'ledger-mute' || input.scope !== 'prefix' || key.length !== 0 : input.id === 'ledger-mute'))
+      throw new TypeError('Invalid named suppression');
+    return this.store.setSuppression({ ...input, key }, signal);
+  }
+  suppression(input: { readonly owner: Owner | null; readonly id: string }, signal?: AbortSignal): Promise<DeliverySuppression | undefined> {
+    if (input.owner !== null) validateOwner(input.owner);
+    nonempty(input.id);
+    return this.store.suppression(input, signal);
+  }
+  renewSuppression(input: { readonly owner: Owner | null; readonly id: string; readonly expiresAt: number }, signal?: AbortSignal): Promise<boolean> {
+    if (input.owner !== null) validateOwner(input.owner);
+    nonempty(input.id);
     if (!Number.isFinite(input.expiresAt)) throw new TypeError('Expected finite suppression expiry');
     return this.store.renewSuppression(input, signal);
   }
-  releaseSuppression(input: { readonly owner: Owner; readonly id: string }, signal?: AbortSignal): Promise<boolean> {
-    validateOwner(input.owner); nonempty(input.id); return this.store.releaseSuppression(input, signal);
+  releaseSuppression(input: { readonly owner: Owner | null; readonly id: string }, signal?: AbortSignal): Promise<boolean> {
+    if (input.owner !== null) validateOwner(input.owner);
+    nonempty(input.id); return this.store.releaseSuppression(input, signal);
   }
   cancel(input: { readonly owner: Owner; readonly generation: string }, signal?: AbortSignal): Promise<boolean> {
     validateOwner(input.owner); nonempty(input.generation); return this.store.cancel(input, signal);
   }
-  receipts(owner: Owner, options: { readonly afterSeq?: number; readonly keys?: readonly string[]; readonly since?: number } = {}, signal?: AbortSignal): Promise<readonly DeliveryReceipt[]> {
+  receipts(owner: Owner, options: { readonly afterSeq?: number; readonly keys?: readonly DeliveryKey[]; readonly since?: number } = {}, signal?: AbortSignal): Promise<readonly DeliveryReceipt[]> {
     validateOwner(owner);
     if (options.afterSeq !== undefined && (!Number.isSafeInteger(options.afterSeq) || options.afterSeq < 0)) throw new RangeError('Expected a nonnegative safe receipt sequence');
-    if (options.keys) options.keys.forEach(nonempty);
+    const keys = options.keys?.map(key => copyDeliveryKey(key));
     if (options.since !== undefined && !Number.isFinite(options.since)) throw new TypeError('Expected finite receipt time');
-    return this.store.receipts(owner, options, signal);
+    return this.store.receipts(owner, { ...options, keys }, signal);
   }
   async claimPresentation(owner: Owner, options: { readonly generation: string; readonly budgetChars: number; readonly signal?: AbortSignal }): Promise<PresentationClaim | undefined> {
     validateOwner(owner); nonempty(options.generation); positive(options.budgetChars);
@@ -267,10 +295,10 @@ export class DeliveryLedger {
   observe(owner: Owner): Promise<VersionObserver<string>> {
     validateOwner(owner); return observeFileMetadata(this.store.location);
   }
-  async dispatchHandoff(owner: Owner, key: string, transport: DeliveryTransport, options: {
+  async dispatchHandoff(owner: Owner, key: DeliveryKey, transport: DeliveryTransport, options: {
     readonly generation: string; readonly timeoutMs: number; readonly signal?: AbortSignal;
   }): Promise<HandoffResult> {
-    validateOwner(owner); nonempty(key); nonempty(options.generation); positive(options.timeoutMs);
+    validateOwner(owner); key = copyDeliveryKey(key); nonempty(options.generation); positive(options.timeoutMs);
     if (options.signal?.aborted) return { outcome: 'not-invoked' };
     nonempty(transport.kind);
     const lifetime = Promise.withResolvers<void>();

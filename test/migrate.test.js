@@ -1,3 +1,4 @@
+import { deliveryKeyEqual } from '../dist/delivery-key.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -92,7 +93,7 @@ test('existing13 producer reconciliation suppresses migrated old work, recovers 
   await flushSquarePosts(artifact, file, () => 3001, undefined, ledgerLocation);
   const recovered = posts.find(p => p.index === 11);
   const pending = await ledger.pending(recovered.owner, { generation: session.generation });
-  assert.ok(pending.some(c => c.key === squarePostKey(file, recovered)), 'preserved stale claim recovers under normal13 semantics');
+  assert.ok(pending.some(c => deliveryKeyEqual(c.key, squarePostKey(file, recovered))), 'preserved stale claim recovers under normal13 semantics');
   const row = read(file, db => db.prepare("SELECT * FROM square_posts WHERE kind='activity' AND item_index=11").get());
   assert.equal(row.posted, 1); assert.equal(row.token, null);
   assert.ok(row.first_export_at < Date.now() - 60000, 'recovery keeps original export age');

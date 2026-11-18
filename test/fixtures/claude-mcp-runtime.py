@@ -32,7 +32,7 @@ def reply(data):
                                if row.get('argv') == ['claude-mod'])
                 posted = subprocess.run([str(NODE), '--import', str(REPO / 'test/sandbox-env.js'),
                     str(REPO / 'test/fixtures/claude-mod-runtime-driver.mjs'), str(R), 'post', session,
-                    'notice:tool-boundary', 'NATIVE_DURING_TURN_TOOL_NOTICE'], capture_output=True, text=True, env=fixture.env, timeout=10)
+                    json.dumps(['notice', 'tool-boundary']), 'NATIVE_DURING_TURN_TOOL_NOTICE'], capture_output=True, text=True, env=fixture.env, timeout=10)
                 assert posted.returncode == 0, posted.stderr
                 return {'type': 'tool_use', 'id': 'toolu_fixture_agent', 'name': agent, 'input': {
                     'description': 'Check child MCP ownership', 'subagent_type': 'general-purpose',

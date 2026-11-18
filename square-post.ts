@@ -1,3 +1,4 @@
+import { deliveryKeyEqual, type DeliveryKey } from './delivery-key.js';
 import { nameKey, type ActivityMetadata, type DirectedNotificationRoute, type Owner } from './model.js';
 import type { MetadataMatch } from './delivery-deferral.js';
 import type { SeatRef } from './ports.js';
@@ -66,19 +67,17 @@ export interface ProducerWrite {
   settlePost(token: string, full: boolean, disposition: 'posted' | 'uncertain' | 'never-exported'): boolean;
   foldReceipt(post: SquarePost, at: number): boolean;
 }
-export function squarePostKey(location: string, post: Pick<SquarePost, 'kind' | 'index' | 'recipient' | 'generation'>): string {
-  return `square:${location}#${post.kind === 'activity' ? 'act' : 'notice'}/${post.index}/recipient/${encodeURIComponent(nameKey(post.recipient))}/join/${encodeURIComponent(post.generation)}`;
+export function squarePostKey(location: string, post: Pick<SquarePost, 'kind' | 'index' | 'recipient' | 'generation'>): DeliveryKey {
+  return ['square', location, 'recipient', nameKey(post.recipient), 'join', post.generation,
+    post.kind === 'activity' ? 'act' : 'notice', String(post.index)];
 }
 /** Only canonical keys from this square identify producer records. */
-export function parseSquarePostKey(location: string, key: string): SquarePostIdentity | undefined {
-  const prefix = `square:${location}#`;
-  if (!key.startsWith(prefix)) return undefined;
-  const match = /^(act|notice)\/(0|[1-9]\d*)\/recipient\/([^/]*)\/join\/([^/]*)$/.exec(key.slice(prefix.length));
-  if (!match) return undefined;
-  try {
-    const index = Number(match[2]), recipientKey = decodeURIComponent(match[3]!), generation = decodeURIComponent(match[4]!);
-    const kind = match[1] === 'act' ? 'activity' : 'notice';
-    if (!Number.isSafeInteger(index) || squarePostKey(location, { kind, index, recipient: recipientKey, generation }) !== key) return undefined;
-    return { kind, index, recipientKey, generation };
-  } catch { return undefined; }
+export function parseSquarePostKey(location: string, key: DeliveryKey): SquarePostIdentity | undefined {
+  if (!Array.isArray(key) || key.length !== 8 || !Array.from(key).every(segment => typeof segment === 'string')
+    || key[0] !== 'square' || key[1] !== location
+    || key[2] !== 'recipient' || key[4] !== 'join' || !['act', 'notice'].includes(key[6]!) || !/^(0|[1-9]\d*)$/.test(key[7]!)) return undefined;
+  const index = Number(key[7]), recipientKey = key[3]!, generation = key[5]!;
+  const kind = key[6] === 'act' ? 'activity' : 'notice';
+  if (!Number.isSafeInteger(index) || !deliveryKeyEqual(squarePostKey(location, { kind, index, recipient: recipientKey, generation }), key)) return undefined;
+  return { kind, index, recipientKey, generation };
 }

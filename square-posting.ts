@@ -1,3 +1,4 @@
+import { encodeDeliveryKey, type DeliveryKey } from './delivery-key.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { DeliveryLedger, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
@@ -85,12 +86,12 @@ export async function reconcileSquareDelivery(artifact: SquareArtifactPort, loca
         const id = parseSquarePostKey(location, receipt.key);
         return id ? [{ ...receipt, id }] : [];
       });
-      const at = new Map(relevant.map(receipt => [receipt.key, receipt.at]));
+      const at = new Map(relevant.map(receipt => [encodeDeliveryKey(receipt.key), receipt.at]));
       await artifact.transactAs({ kind: 'producer' }, facts => {
         const posts = facts.postsAt(relevant.map(receipt => receipt.id), 'receipt');
         for (const post of posts) {
           if (post.owner === owner && post.full === true && !post.consumed && currentPost(facts, post))
-            facts.foldReceipt(post, at.get(squarePostKey(location, post))!);
+            facts.foldReceipt(post, at.get(encodeDeliveryKey(squarePostKey(location, post)))!);
         }
         facts.advanceReceiptWatermark(owner, receipts[receipts.length - 1]!.seq);
       }, signal);
@@ -110,7 +111,7 @@ function currentPost(facts: SquareRead, post: SquarePost): boolean {
 async function suppressWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryLedger, location: string, signal?: AbortSignal): Promise<void> {
   const snapshot = (await artifact.read(facts => ({ seats: currentSeats(facts), departed: facts.departedSeats() }), signal)).value;
   const owners = new Set([...snapshot.seats, ...snapshot.departed].map(seat => seat.owner));
-  const live = (await Promise.all([...owners].map(owner => ledger.cards({ owner, keyPrefix: `square:${location}#` }, signal)))).flat()
+  const live = (await Promise.all([...owners].map(owner => ledger.cards({ owner, keyPrefix: ['square', location] }, signal)))).flat()
     .flatMap(card => { const id = parseSquarePostKey(location, card.key); return id ? [{ ...card, id }] : []; });
   const identities = new Set(live.map(card => JSON.stringify([card.owner, card.key])));
   const posts = (await artifact.read(facts => {
@@ -125,13 +126,14 @@ async function suppressWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryL
     ];
   }, signal)).value;
   // Only existing cards or in-window claims can still require withdrawal; custody survives.
-  const keysByOwner = new Map<string, Set<string>>();
+  const keysByOwner = new Map<string, Map<string, DeliveryKey>>();
   for (const post of posts) {
-    const keys = keysByOwner.get(post.owner) ?? new Set<string>();
-    keys.add(squarePostKey(location, post));
+    const keys = keysByOwner.get(post.owner) ?? new Map<string, DeliveryKey>();
+    const key = squarePostKey(location, post);
+    keys.set(encodeDeliveryKey(key), key);
     keysByOwner.set(post.owner, keys);
   }
-  for (const [owner, keys] of keysByOwner) await ledger.suppressExact(owner, [...keys], signal);
+  for (const [owner, keys] of keysByOwner) await ledger.suppressExact(owner, [...keys.values()], signal);
   if (snapshot.departed.length) await artifact.transactAs({ kind: 'producer' }, facts => {
     for (const seat of snapshot.departed) facts.clearDepartedSeat(seat);
   }, signal);

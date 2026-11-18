@@ -88,7 +88,7 @@ test('packed ESM and types expose the real Square and delivery ledger APIs', (t)
     try {
       const session = await ledger.attach({owner:'test:owner',expectedGeneration:null,routes:[]});
       assert.ok(session);
-      assert.equal((await ledger.post({owner:'test:owner',key:'producer:1',text:'hello'})).status, 'posted');
+      assert.equal((await ledger.post({owner:'test:owner',key:['producer','1'],text:'hello'})).status, 'posted');
       const claim = await ledger.claimPresentation('test:owner',{generation:session.generation,budgetChars:1000});
       assert.equal(claim.cards[0].text,'hello');
       assert.equal(await claim.settle('presented'),true);

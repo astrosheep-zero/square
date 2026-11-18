@@ -1,3 +1,4 @@
+import { encodeDeliveryKey } from './delivery-key.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
@@ -144,10 +145,10 @@ export async function runClaudeMod(
           .filter(attempt => !['failed', 'released'].includes(attempt.outcome)).map(attempt => attempt.seq));
         for (const card of await ledger.pending(receiver.owner, { generation: receiver.generation }, lifetimeSignal)) {
           if (lifetimeSignal.aborted || !['busy', 'idle'].includes(receiver.mode)) break;
-          if (held.has(card.seq) || receiver.attempted.has(card.key)) continue;
+          if (held.has(card.seq) || receiver.attempted.has(encodeDeliveryKey(card.key))) continue;
           // An idle child cannot be woken with the main session's prompt.submit.
           if (receiver.agentId !== undefined && receiver.mode !== 'busy') continue;
-          receiver.attempted.add(card.key);
+          receiver.attempted.add(encodeDeliveryKey(card.key));
           const transport: DeliveryTransport = {
             kind: routeKind,
             async send(deliveryCard, _address, context) {

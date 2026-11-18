@@ -80,7 +80,7 @@ test('each Stop queues once without any native contact and exits; the next Stop 
   await until(f.locked, 'first Stop watcher');
   const duplicate = f.command();
   assert.deepEqual(await duplicate.exited, [0, null]);
-  await postAndDispatch(f.ledger, { owner: f.owner, key: 'first', text: 'receiver-owned text' }, {
+  await postAndDispatch(f.ledger, { owner: f.owner, key: ["first"], text: 'receiver-owned text' }, {
     transports: [{ kind: 'codex-queue', send: async () => { producerCalls++; return 'accepted'; } }] });
   assert.equal(producerCalls, 0);
   assert.deepEqual(await first.exited, [0, null]);
@@ -89,7 +89,7 @@ test('each Stop queues once without any native contact and exits; the next Stop 
   assert.deepEqual(await f.ledger.receipts(f.owner), []); // queue admission is not presentation
   assert.equal((await f.calls()).length, 1);
 
-  await f.ledger.post({ owner: f.owner, key: 'second', text: 'later Stop' });
+  await f.ledger.post({ owner: f.owner, key: ["second"], text: 'later Stop' });
   const second = f.command('two');
   assert.deepEqual(await second.exited, [0, null]);
   assert.equal((await f.calls()).length, 2);
@@ -102,7 +102,7 @@ test('a newer Stop retires the older watcher and owns the next queue', async t =
   await until(f.locked, 'old watcher lock');
   const next = f.watch('two');
   await old.promise; // the newer Stop epoch retires the older watcher
-  await f.ledger.post({ owner: f.owner, key: 'new', text: 'new Stop owns delivery' });
+  await f.ledger.post({ owner: f.owner, key: ["new"], text: 'new Stop owns delivery' });
   await next.promise;
   assert.equal((await f.calls()).length, 1);
   assert.match((await f.calls())[0].at(-1), /new Stop owns delivery/);
@@ -114,7 +114,7 @@ test('active native events retire the watcher and leave cards to synchronous hoo
   await until(f.locked, 'idle watcher');
   await codexHookResponse({ session_id: 'thread', hook_event_name: 'UserPromptSubmit' }, undefined, f.env, () => {});
   await waiting.promise;
-  await f.ledger.post({ owner: f.owner, key: 'active', text: 'active hook fallback' });
+  await f.ledger.post({ owner: f.owner, key: ["active"], text: 'active hook fallback' });
   await pause(100);
   assert.deepEqual(await f.calls(), []);
   let output;
@@ -136,10 +136,10 @@ test('final route, attachment and cancellation checks prevent stale queueing', a
       if (change === 'detach') await f.ledger.detach({ owner: f.owner, generation: f.session.generation });
       if (change === 'generation') await f.ledger.attach({ owner: f.owner, expectedGeneration: f.session.generation, routes: f.session.routes });
       if (change === 'cancel') await f.ledger.cancel({ owner: f.owner, generation: f.session.generation });
-      if (change === 'suppress') await f.ledger.suppress({ owner: f.owner, key: 'pending', scope: 'exact' });
+      if (change === 'suppress') await f.ledger.suppress({ owner: f.owner, key: ["pending"], scope: 'exact' });
       return claim;
     });
-    await f.ledger.post({ owner: f.owner, key: 'pending', text: 'must remain unsent' });
+    await f.ledger.post({ owner: f.owner, key: ["pending"], text: 'must remain unsent' });
     await f.watch().promise;
     if (change === 'generation' || change === 'detach') assert.ok((await f.ledger.health(f.owner)).unknownAttempts.length);
     else assert.ok((await f.ledger.handoffs(f.owner, { generation: f.session.generation })).every(attempt => attempt.outcome !== 'dispatching'));
@@ -149,14 +149,14 @@ test('final route, attachment and cancellation checks prevent stale queueing', a
 
 test('Interrupt cancels its pending batch; a later Stop admits future cards', async t => {
   const f = await fixture(t);
-  await f.ledger.post({ owner: f.owner, key: 'cancelled', text: 'old batch' });
+  await f.ledger.post({ owner: f.owner, key: ["cancelled"], text: 'old batch' });
   const interrupt = spawn(process.execPath, [cli, 'codex-interrupt'], { env: f.env, stdio: ['pipe', 'pipe', 'pipe'] });
   const exited = once(interrupt, 'exit');
   interrupt.stdin.end(JSON.stringify({ session_id: 'thread', hook_event_name: 'Interrupt', turn_id: 'one' }));
   assert.deepEqual(await exited, [0, null]);
   const waiting = f.watch();
   await until(f.locked, 'watcher after interrupt');
-  await f.ledger.post({ owner: f.owner, key: 'future', text: 'future batch' });
+  await f.ledger.post({ owner: f.owner, key: ["future"], text: 'future batch' });
   await waiting.promise;
   assert.equal((await f.calls()).length, 1);
   assert.match((await f.calls())[0].at(-1), /future batch/);
@@ -166,7 +166,7 @@ test('Interrupt cancels its pending batch; a later Stop admits future cards', as
 test('refused and ambiguous queue attempts both end the watcher without retry or false receipts', async t => {
   for (const flag of ['QUEUE_REFUSED', 'QUEUE_UNKNOWN']) await t.test(flag, async t => {
     const f = await fixture(t); f.env[flag] = '1';
-    await f.ledger.post({ owner: f.owner, key: 'attempt', text: 'one attempt only' });
+    await f.ledger.post({ owner: f.owner, key: ["attempt"], text: 'one attempt only' });
     await f.watch().promise;
     assert.equal((await f.calls()).length, 1);
     const attempts = await f.ledger.handoffs(f.owner, { generation: f.session.generation });

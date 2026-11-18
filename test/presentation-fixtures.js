@@ -1,3 +1,4 @@
+import { deliveryKeyEqual } from '../dist/delivery-key.js';
 // Test-only read of the host ledger's presentation receipt.
 import fs from 'node:fs';
 import { createArtifactPort } from '../dist/artifact.js';
@@ -18,7 +19,7 @@ export async function hasPresentedForOwner(sessionId, squarePath, name, actIndex
     const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
     try {
       const key = squarePostKey(location, { kind: 'activity', index: actIndex, recipient: audience.recipient, generation: audience.generation });
-      return (await ledger.receipts(owner, { keys: [key] })).some(receipt => receipt.key === key);
+      return (await ledger.receipts(owner, { keys: [key] })).some(receipt => deliveryKeyEqual(receipt.key, key));
     } finally { await ledger.close(); }
   } finally { await artifact.close(); }
 }

@@ -66,8 +66,8 @@ test('v1 transform ignores synthetic parts and confirms only exact observed text
     parts: [{ type: 'text', text: 'hello', sessionID: 'ses_v1', messageID: 'native-message', synthetic }] });
   await hooks['experimental.chat.messages.transform']({}, { messages: [message(false)] });
   const generation = (await ledger.session(owner)).generation;
-  await ledger.post({ owner, key: 'card', text: 'hello' });
-  const result = await ledger.dispatchHandoff(owner, 'card', { kind: 'opencode-server', async send(card, _address, context) {
+  await ledger.post({ owner, key: ["card"], text: 'hello' });
+  const result = await ledger.dispatchHandoff(owner, ["card"], { kind: 'opencode-server', async send(card, _address, context) {
     await context.prepare({ token: context.token, messageId: 'native-message', payloadHash: createHash('sha256').update(card.text).digest('hex') });
     return 'unknown';
   } }, { generation, timeoutMs: 1000 });
@@ -76,7 +76,7 @@ test('v1 transform ignores synthetic parts and confirms only exact observed text
   assert.deepEqual(await ledger.receipts(owner), []);
   await hooks['experimental.chat.messages.transform']({}, { messages: [message(false)] });
   assert.equal((await ledger.receipts(owner)).length, 1);
-  await ledger.post({ owner, key: 'interrupted', text: 'later' });
+  await ledger.post({ owner, key: ["interrupted"], text: 'later' });
   await hooks.event({ event: { type: 'session.error', properties: { sessionID: 'ses_v1', error: { name: 'MessageAbortedError' } } } });
   const next = (await ledger.session(owner)).generation;
   assert.notEqual(next, generation);

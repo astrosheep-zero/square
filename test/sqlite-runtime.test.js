@@ -22,7 +22,7 @@ for (const runtime of runtimes) test(`${runtime.name} DatabaseSync, v1 plugin lo
   try {
     const owner = 'test:sqlite';
     const session = await ledger.attach({ owner, expectedGeneration: null, routes: [] });
-    await ledger.post({ owner, key: 'one', text: 'one card across runtimes' });
+    await ledger.post({ owner, key: ["one"], text: 'one card across runtimes' });
     const claim = () => ledger.claimPresentation(owner, { generation: session.generation, budgetChars: 10000 });
     const [children, local] = await Promise.all([
       Promise.all(Array.from({ length: 3 }, () => run('claim', session.generation))),
@@ -31,7 +31,7 @@ for (const runtime of runtimes) test(`${runtime.name} DatabaseSync, v1 plugin lo
     assert.equal(children.filter(result => result.stdout.includes('claimed')).length + Number(local), 1);
     assert.equal((await ledger.receipts(owner)).length, 1);
     assert.equal(await claim(), undefined);
-    await ledger.post({ owner, key: 'two', text: 'runtime reads and writes' });
+    await ledger.post({ owner, key: ["two"], text: 'runtime reads and writes' });
     assert.match((await run('claim', session.generation)).stdout, /claimed/);
     assert.equal((await ledger.receipts(owner)).length, 2);
   } finally { await ledger.close(); }

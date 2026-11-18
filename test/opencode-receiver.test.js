@@ -43,8 +43,8 @@ test('v2 records the native input identity before confirmed native acceptance', 
 
 test('exact context hash confirms the current handoff, never a changed message or canceled card', async t => {
   const f = await fixture(t);
-  await f.ledger.post({ owner: f.owner, key: 'first', text: 'hello' });
-  const result = await f.ledger.dispatchHandoff(f.owner, 'first', transport(async (card, _address, c) => {
+  await f.ledger.post({ owner: f.owner, key: ["first"], text: 'hello' });
+  const result = await f.ledger.dispatchHandoff(f.owner, ["first"], transport(async (card, _address, c) => {
     assert.ok(await c.prepare({ token: c.token, messageId: 'native-message', payloadHash: hash(card.text) }));
     return 'accepted';
   }), { generation: f.generation, timeoutMs: 1000 });
@@ -56,10 +56,10 @@ test('exact context hash confirms the current handoff, never a changed message o
   assert.equal((await f.ledger.receipts(f.owner)).length, 1);
   assert.deepEqual(await f.ledger.handoffs(f.owner, { generation: f.generation }), []);
   assert.equal(await f.ledger.handoff(result.token), undefined);
-  assert.equal((await f.ledger.post({ owner: f.owner, key: 'first', text: 'hello' })).status, 'suppressed');
+  assert.equal((await f.ledger.post({ owner: f.owner, key: ["first"], text: 'hello' })).status, 'suppressed');
 
-  await f.ledger.post({ owner: f.owner, key: 'second', text: 'later' });
-  await f.ledger.dispatchHandoff(f.owner, 'second', transport(async (card, _address, c) => {
+  await f.ledger.post({ owner: f.owner, key: ["second"], text: 'later' });
+  await f.ledger.dispatchHandoff(f.owner, ["second"], transport(async (card, _address, c) => {
     await c.prepare({ token: c.token, messageId: 'native-message', payloadHash: hash(card.text) });
     return 'accepted';
   }), { generation: f.generation, timeoutMs: 1000 });
@@ -67,8 +67,8 @@ test('exact context hash confirms the current handoff, never a changed message o
   await observeOpenCodeContext('ses_test', f.generation, context('later'), f.env, signal);
   assert.equal((await f.ledger.receipts(f.owner)).length, 1);
 
-  await f.ledger.post({ owner: f.owner, key: 'third', text: 'stale' });
-  await f.ledger.dispatchHandoff(f.owner, 'third', transport(async (card, _address, c) => {
+  await f.ledger.post({ owner: f.owner, key: ["third"], text: 'stale' });
+  await f.ledger.dispatchHandoff(f.owner, ["third"], transport(async (card, _address, c) => {
     await c.prepare({ token: c.token, messageId: 'native-message', payloadHash: hash(card.text) });
     return 'accepted';
   }), { generation: f.generation, timeoutMs: 1000 });
@@ -105,19 +105,19 @@ test('interrupt cancels the captured generation without suppressing later cards'
   };
   await hooks.prompt({ sessionID: 'ses_test' });
   const before = (await f.ledger.session(f.owner)).generation;
-  await f.ledger.post({ owner: f.owner, key: 'first', text: 'first' });
+  await f.ledger.post({ owner: f.owner, key: ["first"], text: 'first' });
   await until(() => calls.length === 1);
   events.push({ type: 'session.execution.interrupted', data: { sessionID: 'ses_test', reason: 'user' } });
   await until(async () => (await f.ledger.session(f.owner)).generation !== before);
   const after = (await f.ledger.session(f.owner)).generation;
   assert.deepEqual(await f.ledger.pending(f.owner, { generation: after }), []);
-  await f.ledger.post({ owner: f.owner, key: 'second', text: 'second' });
+  await f.ledger.post({ owner: f.owner, key: ["second"], text: 'second' });
   await until(() => calls.length === 2);
   await f.ledger.attach({ owner: f.owner, expectedGeneration: after, routes: [{ kind: 'opencode-server', address: { sessionId: 'ses_test' } }] });
   events.push({ type: 'session.execution.interrupted', data: { sessionID: 'ses_test', reason: 'user' } });
   await new Promise(resolve => setTimeout(resolve, 100));
   await hooks.prompt({ sessionID: 'ses_test' });
-  await f.ledger.post({ owner: f.owner, key: 'third', text: 'third' });
+  await f.ledger.post({ owner: f.owner, key: ["third"], text: 'third' });
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(calls.length, 2, 'a lost cancellation fence must not restart the watcher');
   } finally {
@@ -128,9 +128,9 @@ test('interrupt cancels the captured generation without suppressing later cards'
 
 test('watcher pulls ledger cards and competing presentation custody prevents duplicate handoff', async t => {
   const f = await fixture(t);
-  await f.ledger.post({ owner: f.owner, key: 'held', text: 'held' });
+  await f.ledger.post({ owner: f.owner, key: ["held"], text: 'held' });
   const claim = await f.ledger.claimPresentation(f.owner, { generation: f.generation, budgetChars: 1000 });
-  await f.ledger.post({ owner: f.owner, key: 'free', text: 'free' });
+  await f.ledger.post({ owner: f.owner, key: ["free"], text: 'free' });
   const abort = new AbortController();
   const sent = [];
   let resolve;
@@ -141,6 +141,6 @@ test('watcher pulls ledger cards and competing presentation custody prevents dup
   let timer;
   try { await Promise.race([landed, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('watcher timed out')), 5000); })]); }
   finally { clearTimeout(timer); abort.abort(); await running; }
-  assert.deepEqual(sent, ['free']);
+  assert.deepEqual(sent, [['free']]);
   await claim.settle('released');
 });

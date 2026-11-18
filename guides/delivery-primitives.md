@@ -10,7 +10,21 @@ milliseconds; `reach` is `mention`, `reply`, `attention`, or `bell`. `text` rema
 card; `body` holds the full Markdown for display. Receivers validate these details and render them
 without opening producer storage. Cards without valid presentation details remain plain text.
 
-Posting is idempotent by owner and key. Producer-push handoff and receiver-pull presentation have
+Posting is idempotent by owner and key content. `DeliveryKey` is `readonly string[]`: nonempty
+arrays for exact identities, with verbatim string segments (including empty strings and arbitrary UTF-16).
+Prefixes may be `[]`, which selects every key in the chosen scope. String keys, sparse arrays, nested
+arrays and nonstring segments are refused. No separator, escaping or normalization is implied. A prefix
+`['a']` reaches `['a']` and `['a', 'b']`, while `['ab']` and `['a', 'b2']` remain distinct identities.
+Methods snapshot key arrays before queuing work; returned arrays do not alias stored keys. Compare
+fresh arrays with `deliveryKeyEqual`, or use `encodeDeliveryKey` for map/set identities. Storage uses
+canonical JSON arrays; exact equality and descendant JSON ranges use the owner/key indexes.
+
+Square owns its producer grammar:
+`['square', canonicalPath, 'recipient', nameKey(recipient), 'join', joinGeneration, 'act' | 'notice', String(index)]`.
+The prefix through `joinGeneration` selects one seat generation; `['square', canonicalPath]` selects
+one square. Producer-neutral ledger code never parses these tags during ordinary operation.
+
+Producer-push handoff and receiver-pull presentation have
 separate attempt tracks, with cross-track exclusion based on ledger attempt state. Accepted or unknown
 handoff does not establish presentation; uncertain effects must not be blindly replayed. Presentation
 receipts record only the cards confirmed by the receiving boundary. A receipt means observed at that
@@ -30,12 +44,13 @@ suppression prevents reposting the key. Unconfirmed accepted/unknown custody exp
 30 days from its latest settlement. Failed and released attempts keep content for retry. Cards with no
 dispatching, accepted or unknown attempt expire in bounded batches after 30 days from posting, leaving
 permanent exact suppressions just like presented cards. Receipts and permanent suppressions expire in
-bounded batches after 30 days. Deleted sessions lose cards, attempts and suppressions; sessions detached
+bounded batches after 30 days. Deleted sessions lose cards, attempts and their owner suppressions;
+the all-owner hold is independent of session deletion. Sessions detached
 longer than 30 days lose cards and attempts. Session rows remain:
 a deleted row is the authority for producer reconciliation and cannot be registered again.
 
 `ledger.cards({owner, keyPrefix}, signal?)` reads existing card identities `{owner, key}` for one owner
-through the owner/key unique range index. Prefix matching is literal; the result includes held cards, not only pending
+through exact and descendant owner/key index ranges. Prefixes match whole elements; the result includes held cards, not only pending
 ones, and carries no producer-specific interpretation. Producer dispatch skips pending enumeration when
 a cached attached session has no producer-dispatchable route (no routes or only native receiver routes).
 This never blocks producer export, receipt folding or withdrawal; actual dispatch retains its per-card
@@ -63,9 +78,29 @@ recall an external send already past its final check. Producers can call
 `ledger.suppress({owner, key, scope: 'exact' | 'prefix', expiresAt?})` to suppress one key or a key
 prefix. Omit `expiresAt` for permanent suppression within ledger retention, or supply an expiry for
 temporary suppression. This does not consume Square activity; producer-owned exact ACK is described
-in [square-api.md](square-api.md). The ledger does not match producer metadata. Ledger Format 4 and
-Square Format 13 require fresh stores; older formats are refused read-only, without migration or deletion.
-The default ledger filename is now `delivery.v4.sqlite`; an older `delivery.v3.sqlite` is left untouched and is refused if opened explicitly.
+in [square-api.md](square-api.md). The ledger does not match producer metadata. Ledger Format5
+and Square Format13 are the current runtime formats. Ordinary opens refuse older files read-only.
+The explicit offline Ledger4→5 and Square12→13 edges are described in [migration.md](migration.md).
+The ledger filename remains `delivery.v4.sqlite`: upgrading the format never silently selects a new
+filename. An old `delivery.v3.sqlite` is untouched and remains unsupported.
+
+`ledger.setSuppression({owner, id, key, scope, expiresAt}, signal?)` atomically sets one named finite
+hold. A repeated id must match owner, key content and scope and already be timed; otherwise the
+operation refuses without changes. Matching expired holds can be replaced, and a collected id is
+recreated. Setting refreshes only that hold's creation and expiry times. Independent random holds
+from `suppress()` and permanent exact tombstones remain independent.
+`ledger.suppression({owner, id}, signal?)` returns the active row
+`{id, owner, key, scope, createdAt, expiresAt?}`; expiry at or before the current clock is absent even
+before collection. `renewSuppression` refuses expired/released holds; `releaseSuppression` removes
+only the exact owner/id pair. Both also accept `owner: null`.
+
+The sole all-owner combination is `{owner: null, id: 'ledger-mute', key: [], scope: 'prefix', expiresAt}`
+with finite expiry. Its reserved id cannot be used by an owner hold. One row fences every owner's
+post status, pending selection, presentation/handoff claims and final send guards. Suppressed new
+cards are retained under the usual cap and retention; a later normal pull can resume after expiry
+without another producer write. Holds do not recall external custody or invalidate truthful late
+receipts. This storage/API foundation does not add user-facing mute commands or timers.
+
 Permanent suppression retention drains through a partial `created_at` index. Pending producer selection
 still searches retained say/audience history, withdrawn-claim selection searches posting rows, and
 `read_through` aggregates retained reads.

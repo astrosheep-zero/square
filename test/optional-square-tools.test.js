@@ -121,7 +121,7 @@ test('hidden Pi tools preserve the local receiver and pending notification deliv
       if (endpoint !== undefined) {
         assert.equal((await connectPi({ harness: 'pi', sessionId, endpoint, timeoutMs: 2_000 })).sessionId, sessionId);
       }
-      await ledger.post({ owner, key: 'producer:card', text: 'still listening @Bob' });
+      await ledger.post({ owner, key: ["producer","card"], text: 'still listening @Bob' });
       await waitUntil(() => pi.sent.length === 1);
       const { message, options } = pi.sent[0];
       assert.match(message.content, /still listening @Bob/);

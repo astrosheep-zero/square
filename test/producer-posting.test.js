@@ -1,3 +1,4 @@
+import { encodeDeliveryKey } from '../dist/delivery-key.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -11,6 +12,32 @@ import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { parseSquarePostKey, squarePostKey } from '../dist/square-post.js';
+
+test('in-memory producer keys round-trip, fold exact receipts and withdraw only the current card', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-memory-keys-'));
+  const ledgerLocation = path.join(root, 'delivery.sqlite');
+  const square = Square.inMemory({ ledgerLocation, markdown: '' });
+  const ledger = await DeliveryLedger.open({ location: ledgerLocation });
+  t.after(async () => { await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
+  const alice = (await square.join('Alice', { owner: 'memory:alice' })).participant;
+  const bob = (await square.join('Bob', { owner: 'memory:bob' })).participant;
+  const session = await ledger.session('memory:bob');
+  await alice.express('short in-memory activity', { mentions: ['Bob'], force: true });
+  const claim = await ledger.claimPresentation('memory:bob', { generation: session.generation, budgetChars: 10000 });
+  assert.equal(claim.cards.length, 1);
+  const key = claim.cards[0].key;
+  assert.equal(key[1], square.location);
+  assert.match(square.location, /^memory:\/\//);
+  assert.deepEqual(parseSquarePostKey(square.location, key), { kind: 'activity', index: Number(key[7]), recipientKey: 'bob', generation: bob.generation });
+  await claim.settle('presented');
+  await square.join('Alice', { owner: 'memory:alice' });
+  assert.deepEqual((await bob.pending()).activities, [], 'normal mutation folds the in-memory full receipt');
+  const next = await alice.express('withdraw this in-memory card', { mentions: ['Bob'], force: true });
+  assert.equal((await ledger.cards({ owner: 'memory:bob', keyPrefix: ['square', square.location] })).length, 1);
+  await bob.perceive({ id: next.activity.id });
+  assert.deepEqual(await ledger.cards({ owner: 'memory:bob', keyPrefix: ['square', square.location] }), []);
+  assert.deepEqual((await ledger.receipts('memory:bob')).map(r => r.key), [key], 'withdrawal does not invent presentation evidence');
+});
 
 test('producer selection does not issue a query per historical recipient, and exact receipts stay scoped', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-post-selection-'));
@@ -156,7 +183,7 @@ test('two recipient seats of one host owner keep distinct cards and independent 
   const before = await ledger.session(shared);
   const cards = await ledger.pending(shared, { generation: before.generation });
   assert.equal(cards.length, 2);
-  assert.equal(new Set(cards.map(card => card.key)).size, 2);
+  assert.equal(new Set(cards.map(card => encodeDeliveryKey(card.key))).size, 2);
   assert.match(cards[0].text, /as="Bob"/);
   assert.match(cards[1].text, /as="Carol"/);
   const claim = await ledger.claimPresentation(shared, { generation: before.generation, budgetChars: 1 });

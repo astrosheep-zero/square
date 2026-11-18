@@ -31,8 +31,9 @@ calls, frames, errors = [], [], []
 condition = threading.Condition()
 
 
-def driver(command, key='', text=''):
-    run = subprocess.run([NODE, str(REPO / 'test/fixtures/claude-mod-runtime-driver.mjs'), str(ROOT), command, SESSION, key, text],
+def driver(command, key=None, text=''):
+    argument = json.dumps(key) if command == 'post' else key or ''
+    run = subprocess.run([NODE, str(REPO / 'test/fixtures/claude-mod-runtime-driver.mjs'), str(ROOT), command, SESSION, argument, text],
                          capture_output=True, text=True, timeout=10)
     if run.returncode:
         raise RuntimeError(run.stderr)
@@ -41,7 +42,7 @@ def driver(command, key='', text=''):
 
 def post_busy():
     time.sleep(0.15)
-    driver('post', 'busy-notice', 'SQUARE_MOD_BUSY_NOTICE')
+    driver('post', ['busy-notice'], 'SQUARE_MOD_BUSY_NOTICE')
 
 
 def sse(data, block, index):
@@ -145,13 +146,13 @@ with socketserver.ThreadingTCPServer(('127.0.0.1', 0), Server) as server:
         assert not results()[0].get('is_error')
         for n in [1, 2]:
             state.update(phase='idle-' + str(n), toolSent=False)
-            assert driver('post', 'idle-' + str(n), 'SQUARE_MOD_IDLE_NOTICE_' + str(n))['status'] == 'posted'
+            assert driver('post', ['idle-' + str(n)], 'SQUARE_MOD_IDLE_NOTICE_' + str(n))['status'] == 'posted'
             wait(lambda: len(results()) == n + 1)
             assert 'SQUARE_MOD_IDLE_NOTICE_' + str(n) in json.dumps(calls[-1]['data']['messages'])
             assert results()[-1].get('origin') == {'kind': 'plugin', 'name': 'square'}
             assert not results()[-1].get('is_error')
         count = len(calls)
-        driver('post', 'idle-2', 'SQUARE_MOD_IDLE_NOTICE_2')
+        driver('post', ['idle-2'], 'SQUARE_MOD_IDLE_NOTICE_2')
         time.sleep(0.2)
         assert len(calls) == count
         summary['idleWakes'] = 2
@@ -178,14 +179,14 @@ with socketserver.ThreadingTCPServer(('127.0.0.1', 0), Server) as server:
         assert interrupted.get('is_error') and interrupted.get('subtype') == 'error_during_execution'
         summary['expectedInterrupt'] = True
         count = len(calls)
-        driver('post', 'after-stop', 'SQUARE_MOD_MUST_NOT_WAKE_AFTER_STOP')
+        driver('post', ['after-stop'], 'SQUARE_MOD_MUST_NOT_WAKE_AFTER_STOP')
         time.sleep(0.5)
         assert len(calls) == count
         assert not any(frame.get('subtype') == 'ui_log' and 'SQUARE_MOD_MUST_NOT_WAKE_AFTER_STOP' in frame.get('text', '') for frame in frames)
         summary['stopDidNotWakeOrAppend'] = True
         inspection = driver('inspect')
         (ROOT / 'ledger-before-close.json').write_text(json.dumps(inspection, indent=2))
-        assert {row['key'] for row in inspection['receipts']} == {'idle-1', 'idle-2', 'busy-notice'}
+        assert sorted(row['key'] for row in inspection['receipts']) == [['busy-notice'], ['idle-1'], ['idle-2']]
         summary['exactReceipts'] = True
     finally:
         proc.stdin.close()

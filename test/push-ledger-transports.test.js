@@ -10,7 +10,7 @@ import { HttpWakeTransport } from '../dist/http-delivery.js';
 import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
 
 const owner = 'test:push';
-const card = { seq: 1, owner, key: 'producer:one', text: 'hello', postedAt: 1 };
+const card = { seq: 1, owner, key: ["producer","one"], text: 'hello', postedAt: 1 };
 const context = overrides => ({ token: 'handoff-token', deadline: Date.now() + 5000, signal: new AbortController().signal,
   prepare: async () => true, beforeSend: async () => true, ...overrides });
 

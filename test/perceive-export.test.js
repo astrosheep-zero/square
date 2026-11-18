@@ -59,7 +59,7 @@ async function armPerceive(c, options = { from: ['Alice'] }) {
   await started.promise; await parked.promise;
   return { result, resume: resume.resolve, abort: () => { abort.abort(); resume.resolve(); } };
 }
-const hasCard = (cards, id) => cards.some(card => card.key.includes(`#${id}/`));
+const hasCard = (cards, id) => cards.some(card => card.key[6] + '/' + card.key[7] === id);
 
 test('a live filtered perceive owns matching exports while excluded routes and notices remain eligible', { timeout: 10000 }, async t => {
   const c = await fixture(t);
@@ -95,7 +95,7 @@ for (const ending of ['release', 'expiry']) test(`perceive ${ending} permits unc
   assert.equal(hasCard(await c.cards(), activity.id), false, 'release or time passing does not invent a scheduler');
   await c.square.join('Bob', { owner: 'perceive:bob' });
   await c.square.join('Bob', { owner: 'perceive:bob' });
-  assert.equal((await c.cards()).filter(card => card.key.includes(`#${activity.id}/`)).length, 1);
+  assert.equal((await c.cards()).filter(card => card.key[6] + '/' + card.key[7] === activity.id).length, 1);
   assert.deepEqual((await c.bob.pending()).activities.map(item => item.id), [activity.id]);
 });
 

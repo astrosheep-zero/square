@@ -78,7 +78,7 @@ async function fixture(t, options = {}) {
     await fs.rm(root, { recursive: true, force: true });
   });
   await event('session.start', {});
-  const post = (key, text = key, agent) => ledger.post({ owner: owner(agent), key, text });
+  const post = (key, text = key.join('/'), agent) => ledger.post({ owner: owner(agent), key, text });
   return { $, env, root, ledger, owner, event, post, effects, logs, requests, children, setSession: value => { sessionId = value; } };
 }
 
@@ -86,28 +86,28 @@ test('busy mod appends and logs each card once; exact native acceptance alone se
   const f = await fixture(t, { routes: [{ kind: 'http', address: { url: 'http://127.0.0.1:1' } }] });
   assert.deepEqual((await f.ledger.session(f.owner())).routes.map(route => route.kind), ['claude-mod']);
   await f.event('turn.start', { turnId: 'main' });
-  await f.post('one', 'full card one');
+  await f.post(["one"], 'full card one');
   await until(async () => (await f.ledger.receipts(f.owner())).length === 1);
   assert.equal(f.effects.length, 1);
   assert.equal(f.effects[0].kind, 'append');
   assert.equal(f.effects[0].input.agentId, undefined);
   assert.match(f.effects[0].input.message.content[0].text, /external notification[\s\S]*full card one/);
   assert.deepEqual(f.logs.filter(log => !log.debug).map(log => log.text), ['full card one']);
-  await f.post('one', 'full card one');
-  await f.post('two', 'full card two');
+  await f.post(["one"], 'full card one');
+  await f.post(["two"], 'full card two');
   await until(async () => (await f.ledger.receipts(f.owner())).length === 2);
   assert.deepEqual(f.effects.map(effect => effect.kind), ['append', 'append']);
 });
 
 test('idle mod submits an attributed prompt, never append plus submit, and rearms after normal completion', async t => {
   const f = await fixture(t);
-  await f.post('idle-one');
+  await f.post(["idle-one"]);
   await until(async () => (await f.ledger.receipts(f.owner())).length === 1);
   assert.equal(f.effects[0].kind, 'submit');
   assert.equal('asUser' in f.effects[0].input, false);
   assert.deepEqual(f.logs.filter(log => !log.debug), []);
   await f.event('turn.complete', { turnId: 'wake-one', isAborted: false });
-  await f.post('idle-two');
+  await f.post(["idle-two"]);
   await until(async () => (await f.ledger.receipts(f.owner())).length === 2);
   assert.deepEqual(f.effects.map(effect => effect.kind), ['submit', 'submit']);
 });
@@ -118,26 +118,26 @@ test('Stop fences an in-flight guard, suppresses its batch without receipts, and
     if (input.op === 'guard') { guarded.resolve(); await release.promise; }
   } });
   await f.event('turn.start', { turnId: 'before-stop' });
-  await f.post('cancelled');
+  await f.post(["cancelled"]);
   await guarded.promise;
   await f.event('turn.complete', { turnId: 'before-stop', isAborted: true });
   release.resolve();
-  await f.post('after-stop');
+  await f.post(["after-stop"]);
   await sleep(50);
   assert.deepEqual(f.effects, []);
   assert.deepEqual(await f.ledger.receipts(f.owner()), []);
   await f.event('turn.start', { turnId: 'new-user-turn' });
   await until(async () => (await f.ledger.receipts(f.owner())).length === 1);
-  assert.deepEqual((await f.ledger.receipts(f.owner())).map(row => row.key), ['after-stop']);
+  assert.deepEqual((await f.ledger.receipts(f.owner())).map(row => row.key), [["after-stop"]]);
 });
 
 test('native append uncertainty is held without submit fallback or false receipts', async t => {
   const f = await fixture(t, { append: async () => { throw new Error('native result lost'); } });
   await f.event('turn.start', { turnId: 'main' });
-  await f.post('uncertain');
+  await f.post(["uncertain"]);
   await until(async () => (await f.ledger.health(f.owner())).unknownAttempts.length === 1);
   await f.event('turn.complete', { isAborted: false });
-  await f.post('uncertain');
+  await f.post(["uncertain"]);
   await sleep(40);
   assert.deepEqual(f.effects.map(effect => effect.kind), ['append']);
   assert.deepEqual(await f.ledger.receipts(f.owner()), []);
@@ -146,16 +146,16 @@ test('native append uncertainty is held without submit fallback or false receipt
 test('rewritten append content is not reported as exact presentation', async t => {
   const f = await fixture(t, { append: async () => ({ uuid: randomUUID(), message: { content: [{ type: 'text', text: 'rewritten' }] } }) });
   await f.event('turn.start', { turnId: 'main' });
-  await f.post('rewritten');
+  await f.post(["rewritten"]);
   await until(async () => (await f.ledger.health(f.owner())).unknownAttempts.length === 1);
   assert.deepEqual(await f.ledger.receipts(f.owner()), []);
 });
 
 test('idle Escape refuses submit, cancels that batch, and does not keep retrying it', async t => {
   const f = await fixture(t, { submit: async () => ({ drop: 'the session was stopped and nobody has sent input since' }) });
-  await f.post('idle-stopped');
+  await f.post(["idle-stopped"]);
   await until(() => f.requests.some(request => request.op === 'state' && request.mode === 'stopped'));
-  await f.post('idle-stopped');
+  await f.post(["idle-stopped"]);
   await sleep(50);
   assert.deepEqual(f.effects.map(effect => effect.kind), ['submit']);
   assert.deepEqual(await f.ledger.receipts(f.owner()), []);
@@ -169,8 +169,8 @@ test('clear closes the captured attachment; the next prompt starts a new helper 
   f.setSession('after-clear');
   await f.event('prompt.submit', { text: 'new input' });
   await f.event('turn.start', { turnId: 'new-session' });
-  await f.ledger.post({ owner: oldOwner, key: 'old-session', text: 'must not leak' });
-  await f.post('new-session');
+  await f.ledger.post({ owner: oldOwner, key: ["old-session"], text: 'must not leak' });
+  await f.post(["new-session"]);
   await until(async () => (await f.ledger.receipts(f.owner())).length === 1);
   assert.equal(f.children.length, 2);
   assert.equal(f.effects.length, 1);
@@ -198,7 +198,7 @@ test('main and child MCP identities come from native tool metadata; collision de
   const denied = await f.event('tool.call', { tool: 'mcp__plugin_square_square__join', tool_use_id: 'foreign' }, () => assert.fail('collision must not invoke the MCP server'));
   assert.match(denied.deny, /identity is unavailable/);
   assert.deepEqual(await readClaudeMcpCall('foreign', f.env), foreign);
-  await f.post('child-card', 'only the child reads this', 'child-agent');
+  await f.post(["child-card"], 'only the child reads this', 'child-agent');
   await until(async () => (await f.ledger.receipts(f.owner('child-agent'))).length === 1);
   assert.equal(f.effects[0].input.agentId, 'child-agent');
   assert.deepEqual(await f.ledger.receipts(f.owner()), []);
@@ -207,7 +207,7 @@ test('main and child MCP identities come from native tool metadata; collision de
   await f.event('turn.start', { agentId: 'aborted-child' });
   await f.event('turn.complete', { agentId: 'aborted-child', isAborted: true });
   assert.equal((await f.ledger.session(f.owner('aborted-child'))).state, 'detached');
-  await f.post('after-child-abort');
+  await f.post(["after-child-abort"]);
   await until(async () => (await f.ledger.receipts(f.owner())).length === 1);
   assert.equal(f.effects.at(-1).input.agentId, undefined, 'Child cancellation must not stop the main receiver');
 });

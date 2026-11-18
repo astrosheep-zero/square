@@ -1,3 +1,4 @@
+import { copyDeliveryKey, type DeliveryKey } from './delivery-key.js';
 import type { DeliveryLedger, DeliveryRoute, DeliveryTransport, HandoffResult, PostResult } from './delivery-ledger.js';
 import type { Owner } from './owner.js';
 import { createDefaultDeliveryTransports } from './wake-transports.js';
@@ -23,7 +24,7 @@ export async function dispatchEligibleCards(ledger: DeliveryLedger, owner: Owner
 }
 
 /** Post, then best-effort dispatch without consulting producer storage. */
-export async function postAndDispatch(ledger: DeliveryLedger, input: { readonly owner: Owner; readonly key: string; readonly text: string; readonly details?: Readonly<Record<string, unknown>> }, options: {
+export async function postAndDispatch(ledger: DeliveryLedger, input: { readonly owner: Owner; readonly key: DeliveryKey; readonly text: string; readonly details?: Readonly<Record<string, unknown>> }, options: {
   readonly signal?: AbortSignal; readonly track?: (result: HandoffResult) => void;
   readonly transports?: readonly DeliveryTransport[];
 } = {}): Promise<PostResult> {
@@ -36,7 +37,8 @@ export async function postAndDispatch(ledger: DeliveryLedger, input: { readonly 
 }
 
 /** Best-effort dispatch after a card has been posted; never inspect producer storage. */
-export async function dispatchPostedCard(ledger: DeliveryLedger, owner: Owner, key: string, track: (result: HandoffResult) => void, signal?: AbortSignal, suppliedTransports?: readonly DeliveryTransport[]): Promise<void> {
+export async function dispatchPostedCard(ledger: DeliveryLedger, owner: Owner, key: DeliveryKey, track: (result: HandoffResult) => void, signal?: AbortSignal, suppliedTransports?: readonly DeliveryTransport[]): Promise<void> {
+  key = copyDeliveryKey(key);
   if (signal?.aborted) return;
   signal ??= AbortSignal.timeout(DEFAULT_DELIVERY_WAIT_MS);
   const session = await ledger.session(owner, signal);

@@ -146,7 +146,7 @@ try {
   evidence.session = await ledger.session(owner);
   evidence.nativeGate = await codexIdleAtStop({ harness: 'codex', sessionId: threadId, endpoint: env.SQUARE_CODEX_ENDPOINT, timeoutMs: 2000 }, firstStop.id);
   assert.equal(evidence.nativeGate, true, 'native helper recognizes verified completed idle turn');
-  await postAndDispatch(ledger, { owner, key: 'idle-card', text: 'NATIVE_IDLE_CARD_086c' }, { env });
+  await postAndDispatch(ledger, { owner, key: ["idle-card"], text: 'NATIVE_IDLE_CARD_086c' }, { env });
   await until(() => evidence.requests.length >= 2, 'idle self-queue woke next native turn');
   await until(idle, 'self-queued turn completed');
   assert.equal((await queues()).length, 1);
@@ -161,7 +161,7 @@ try {
   await until(() => held.has(3), 'busy native model request');
   await until(async () => (await readHooks()).some(row => row.child === nextWatcher.child && row.stage === 'exit'), 'prior watcher exited on active turn without pending card');
   assert.equal((await nativeRead()).thread.status.type, 'active');
-  await postAndDispatch(ledger, { owner, key: 'busy-card', text: 'NATIVE_BUSY_CARD_086c' }, { env });
+  await postAndDispatch(ledger, { owner, key: ["busy-card"], text: 'NATIVE_BUSY_CARD_086c' }, { env });
   await pause(1300);
   assert.equal((await queues()).length, 1);
   check('active native turn ended prior watcher even without pending work and blocked enqueue');
@@ -180,7 +180,7 @@ try {
   // Wait for the active-turn prompt hook to retire the idle watcher first: the
   // turn/start -> UserPromptSubmit window is otherwise a real admission race.
   await until(async () => (await readHooks()).some(row => row.event === 'UserPromptSubmit' && row.turn === interruptTurn.turn.id && row.stage === 'exit'), 'interrupt turn prompt hook');
-  await postAndDispatch(ledger, { owner, key: 'cancelled-card', text: 'NATIVE_CANCELLED_CARD_086c' }, { env });
+  await postAndDispatch(ledger, { owner, key: ["cancelled-card"], text: 'NATIVE_CANCELLED_CARD_086c' }, { env });
   await pause(1300);
   assert.equal((await queues()).length, 2, 'active turn leaves the cancelled card unqueued');
   await call('turn/interrupt', { threadId, turnId: interruptTurn.turn.id });
@@ -188,7 +188,7 @@ try {
   const session = await ledger.session(owner);
   assert.deepEqual(await ledger.pending(owner, { generation: session.generation }), []);
   check('native turn/interrupt hook cancelled captured pending batch');
-  await ledger.post({ owner, key: 'future-card', text: 'NATIVE_FUTURE_CARD_086c' });
+  await ledger.post({ owner, key: ["future-card"], text: 'NATIVE_FUTURE_CARD_086c' });
   // An interrupted turn emits no Stop, so no watcher is armed until a later Stop.
   await pause(1300);
   assert.equal((await queues()).length, 2);
@@ -197,7 +197,7 @@ try {
   // UserPromptSubmit presents the future card synchronously: no queue is needed.
   assert.match(JSON.stringify(evidence.requests[5].body), /NATIVE_FUTURE_CARD_086c/);
   assert.doesNotMatch(JSON.stringify(evidence.requests[5].body), /NATIVE_CANCELLED_CARD_086c/);
-  assert.equal((await ledger.receipts(owner, { keys: ['future-card'] })).length, 1);
+  assert.equal((await ledger.receipts(owner, { keys: [["future-card"]] })).length, 1);
   assert.equal((await queues()).length, 2);
   await until(idle, 'last native turn completed');
   check('UserPromptSubmit after interrupt presented future card; cancelled card did not revive');
@@ -205,14 +205,14 @@ try {
   holdNext = true;
   const toolTurn = await call('turn/start', { threadId, input: [{ type: 'text', text: 'native tool delivery', text_elements: [] }] });
   const toolRequest = await until(() => [...held.keys()].find(n => n > 6), 'held native tool request');
-  await postAndDispatch(ledger, { owner, key: 'active-card', text: 'NATIVE_ACTIVE_CARD_086c' }, { env });
+  await postAndDispatch(ledger, { owner, key: ["active-card"], text: 'NATIVE_ACTIVE_CARD_086c' }, { env });
   assert.equal((await queues()).length, 2);
   complete(held.get(toolRequest), toolRequest, true); held.delete(toolRequest);
   await until(() => evidence.requests.length > toolRequest, 'model request after native tool result');
   const afterTool = JSON.stringify(evidence.requests[toolRequest].body);
   assert.match(afterTool, /native_probe/);
   assert.match(afterTool, /NATIVE_ACTIVE_CARD_086c/);
-  assert.equal((await ledger.receipts(owner, { keys: ['active-card'] })).length, 1);
+  assert.equal((await ledger.receipts(owner, { keys: [["active-card"]] })).length, 1);
   assert.equal((await queues()).length, 2);
   assert.ok((await readHooks()).some(row => row.event === 'PostToolUse' && row.stage === 'exit' && row.code === 0));
   await until(idle, 'native tool turn completed');
