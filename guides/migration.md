@@ -70,17 +70,20 @@ remains an explicit host lifecycle action.
 
 ## Delivery ledger: Format4 → Format5
 
-Format5 replaces string identities with `DeliveryKey = readonly string[]`. The
-location stays `~/.square/delivery.v4.sqlite`; the filename does not select a new
-ledger or bypass the explicit cutover. Ordinary `DeliveryLedger.open` refuses an
-existing Format4 file read-only. It never migrates it, deletes it, or switches to
-a new filename. Ledger Format3 and other versions remain unsupported.
+Format5 replaces string identities with `DeliveryKey = readonly string[]` and
+uses `~/.square/delivery.v5.sqlite` by default. It does not touch
+`delivery.v4.sqlite`. When `SQUARE_DELIVERY` or an explicit location selects an
+existing Format4 file, `DeliveryLedger.open` refuses it read-only. Ledger Format3
+and other versions remain unsupported.
 
 Stop **all** processes writing or reading the ledger, including host delivery
 receivers, old Square binaries and external producers. Back up the offline ledger.
 Coordinate compatible producer/host releases before migration, then keep old
 writers stopped permanently. This is an SDK-only migration; the `square migrate`
-CLI continues to operate on `.square` artifacts, not delivery ledgers.
+CLI continues to operate on `.square` artifacts, not delivery ledgers. The SDK
+operation upgrades its explicit path in place. Afterward, configure every host
+and producer to use that migrated path, or move the offline migrated ledger to
+the new default path using SQLite-safe procedures.
 
 ```ts
 import { migrateDeliveryLedger } from '@astrosheep/square';
@@ -132,13 +135,23 @@ sequences/times, suppression ids/scopes/creation/expiry, and cancellation cutoff
 It does not normalize, garbage-collect, send, acknowledge, attach or infer that an
 uncertain card was presented. Already expired rows remain evidence during migration.
 
+### Starting with an empty ledger
+
+Do not point a live install at an empty ledger as a substitute for a coordinated
+cutover. Stop the old readers and writers first. When keeping existing Format13
+squares, clear their old receipt watermarks offline before attaching hosts to the
+new ledger. Otherwise, receipt sequences restart at 1 and previously recorded
+watermarks can cause new receipts to be skipped. This does not require changing
+the `.square` format or deleting activity. `square migrate` does not clear those
+watermarks. Old delivery records are not carried over; hosts must register with
+the new ledger. All callers still need to support array keys.
+
 ### Coordinated external producer prerequisite
 
 The external `/Users/astrosheep/Developer/keiyaku-v4/plugins/square/index.ts`
 currently posts `keiyaku/${akumaId}/${ref}`, suppresses exact outcomes, and holds
-`keiyaku/${id}/turn/` with renew/release. Its corresponding array-key producer and
-explicit exact/prefix converters must ship in coordination **before any real
-ledger cutover**. Square does not infer that namespace and this foundation does
-not modify that repository. Do not migrate a real ledger until every producer and
+`keiyaku/${id}/turn/` with renew/release. Its corresponding array-key producer
+must be ready before any real ledger cutover. Preserving the existing ledger also
+requires explicit exact/prefix converters. Square does not infer that namespace. Do not migrate a real ledger until every producer and
 host is ready; otherwise preserved custody could be orphaned or notifications
 resent under different identities.

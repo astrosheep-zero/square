@@ -1,7 +1,7 @@
 # Delivery ledger
 
 `@astrosheep/square/delivery-ledger` exports `DeliveryLedger` and its types, also available from the
-package root. The per-user ledger defaults to `~/.square/delivery.v4.sqlite` and stores producer-neutral,
+package root. The per-user ledger defaults to `~/.square/delivery.v5.sqlite` and stores producer-neutral,
 finished text cards, session attachment, routes, attempts and receipts. Producers own content and
 recipient selection; adapters own transport behavior. Routes contain only `{kind, address}`.
 A card may also carry producer-neutral presentation `details`:
@@ -81,8 +81,8 @@ temporary suppression. This does not consume Square activity; producer-owned exa
 in [square-api.md](square-api.md). The ledger does not match producer metadata. Ledger Format5
 and Square Format13 are the current runtime formats. Ordinary opens refuse older files read-only.
 The explicit offline Ledger4→5 and Square12→13 edges are described in [migration.md](migration.md).
-The ledger filename remains `delivery.v4.sqlite`: upgrading the format never silently selects a new
-filename. An old `delivery.v3.sqlite` is untouched and remains unsupported.
+The new default does not open or change older ledger files. `SQUARE_DELIVERY` still overrides the
+default; an explicitly selected file must have a supported format.
 
 `ledger.mute({durationMs}, signal?)` sets the one reserved null-owner `ledger-mute` hold from the
 ledger's configured clock and returns `{mutedUntil}`; `ledger.unmute(signal?)` idempotently releases only

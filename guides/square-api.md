@@ -200,13 +200,13 @@ requires an existing `.square` file. It never opens `Square`, resolves a deliver
 a host session. Every old logical row and revision stays unchanged; receipt watermarks start empty.
 See [migration](migration.md) for refusal, atomicity and departure backfill details.
 
-Ledger Format5 uses array-path identities and retains the default location `delivery.v4.sqlite`.
+Ledger Format5 uses array-path identities and defaults to `~/.square/delivery.v5.sqlite`.
 Its separate explicit offline Format4→5 edge is `migrateDeliveryLedger({location,
 convertOpaqueKey?, convertOpaquePrefix?}, {signal}?)`, exported through `square-api`, the package
 root and `@astrosheep/square/delivery-ledger`. All opaque producer identities require their own
 synchronous converters; known canonical Square keys convert directly. The migration preserves
 custody and receipts without sending, normalizing or collecting evidence. Ordinary opens never
-upgrade or select a new filename. Stop all hosts/producers and coordinate their array-key release
+upgrade an existing file. Stop all hosts/producers and coordinate their array-key release
 before any real ledger cutover; see [migration](migration.md).
 All other artifact versions and older ledgers are refused without conversion or deletion. Host start/resume
 and end attach/detach the ledger session, not Square seats. Host-confirmed deletion is reconciled to a

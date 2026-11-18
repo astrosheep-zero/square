@@ -267,14 +267,14 @@ test('opaque details round-trip across reopen, compare canonically, and do not c
     assert.throws(() => f.ledger.post({ owner, key: ["invalid"], text: 'x', details: invalid }), TypeError);
 });
 
-test('fresh format 5 keeps delivery.v4.sqlite and leaves an old v3 file untouched; overrides still win', async t => {
+test('format 5 defaults to delivery.v5.sqlite and leaves the old v4 ledger untouched; overrides still win', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'delivery-default-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const oldPath = path.join(root, '.square', 'delivery.v3.sqlite');
-  const defaultPath = path.join(root, '.square', 'delivery.v4.sqlite');
+  const oldPath = path.join(root, '.square', 'delivery.v4.sqlite');
+  const defaultPath = path.join(root, '.square', 'delivery.v5.sqlite');
   await fs.mkdir(path.dirname(oldPath));
   const old = new DatabaseSync(oldPath);
-  old.exec('PRAGMA application_id=1145849682; PRAGMA user_version=3; CREATE TABLE cards (text TEXT);');
+  old.exec('PRAGMA application_id=1145849682; PRAGMA user_version=4; CREATE TABLE cards (text TEXT);');
   old.close();
   const before = await fs.readFile(oldPath);
   const override = process.env.SQUARE_DELIVERY;
@@ -288,7 +288,7 @@ test('fresh format 5 keeps delivery.v4.sqlite and leaves an old v3 file untouche
     try { assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5); }
     finally { db.close(); }
     assert.deepEqual(await fs.readFile(oldPath), before);
-    assert.deepEqual(await fs.readdir(path.dirname(oldPath)), ['delivery.v3.sqlite', 'delivery.v4.sqlite']);
+    assert.deepEqual(await fs.readdir(path.dirname(oldPath)), ['delivery.v4.sqlite', 'delivery.v5.sqlite']);
     await assert.rejects(DeliveryLedger.open({ location: oldPath }), /Unsupported delivery ledger format/);
     assert.deepEqual(await fs.readFile(oldPath), before);
     process.env.SQUARE_DELIVERY = path.join(root, 'custom.sqlite');

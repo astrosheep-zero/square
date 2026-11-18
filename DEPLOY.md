@@ -76,7 +76,7 @@ existing installation and delivery paths.
 
 ## Square persistence
 
-The user-level delivery ledger (Ledger Format 5) defaults to `~/.square/delivery.v4.sqlite`. It holds
+The user-level delivery ledger (Ledger Format 5) defaults to `~/.square/delivery.v5.sqlite`. It holds
 neutral cards with array-path identities, host session lifecycle, suppression holds,
 attempts and receipts; Square content and producer waiting controls remain in the
 `.square` artifact. There is no discovery
@@ -97,17 +97,18 @@ This command preserves the existing artifact in place, atomically adds the two
 Format 13 producer tables, and validates Format 13 as a read-only no-op on repeat.
 It never opens, upgrades or attaches a host delivery ledger.
 
-The separate ledger upgrade is the explicit offline SDK operation
+The new default leaves `delivery.v4.sqlite` untouched. Existing files opened through
+`SQUARE_DELIVERY` or an explicit path must already be Format 5. To keep old delivery
+state, use the separate offline SDK operation
 `migrateDeliveryLedger({location, convertOpaqueKey?, convertOpaquePrefix?}, {signal}?)`
-for Format 4→5. Ordinary ledger opens refuse Format 4 read-only; there is no implicit
-migration, filename cutover, or fresh-ledger fallback. The default remains
-`delivery.v4.sqlite`. Ledger Format 3 and other versions remain unsupported.
+for Format 4→5, then point every caller at the migrated file. To start with an empty
+ledger instead, see [starting with an empty ledger](guides/migration.md#starting-with-an-empty-ledger).
 
 Before a real ledger cutover, stop all host receivers and external producers,
-back up the offline ledger, and coordinate array-key-capable builds and explicit
-converters for every opaque producer namespace. In particular, the external Keiyaku
-producer and its exact/prefix converters must be ready together. Keep old writers
-stopped after migration. The operation preserves card/session/attempt/receipt,
+back up the offline ledger, and coordinate array-key-capable builds, including
+the external Keiyaku producer. For an in-place migration, prepare explicit
+converters for every opaque producer namespace. Keep old writers stopped after
+migration. The operation preserves card/session/attempt/receipt,
 suppression and cancellation evidence atomically, without sending, acknowledging
 or garbage-collecting it. Repeating against a valid Format 5 is read-only and
 unchanged. See [offline migrations](guides/migration.md) for APIs, conversion
