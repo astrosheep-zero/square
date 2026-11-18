@@ -680,7 +680,7 @@ test('join rejects removed exhaustive history and bounds --last', async () => {
 test('CLI activity selectors accept only canonical textual ids', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
-    await alice.express('anchor', { force: true, reach: 'bell' });
+    await alice.express('anchor', { force: true });
   });
 
   const underscore = ['act', '1'].join('_');

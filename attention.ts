@@ -1,8 +1,9 @@
-export type AudienceRoute = 'mention' | 'reply' | 'attention' | 'bell';
+export type DirectedAudienceRoute = 'mention' | 'reply' | 'attention';
+export type AudienceRoute = DirectedAudienceRoute | 'bell';
 
 export interface AudienceRecipient {
   readonly recipient: string;
-  readonly route: AudienceRoute;
+  readonly route: DirectedAudienceRoute;
 }
 
 export interface AudienceInput {
@@ -10,7 +11,6 @@ export interface AudienceInput {
   readonly recipients: readonly string[];
   readonly mentions?: readonly string[];
   readonly replyAuthor?: string;
-  readonly reach?: 'bell';
   readonly incoming?: readonly { readonly listener: string; readonly kind: 'listen' | 'ignore' }[];
   readonly sameIdentity?: (a: string, b: string) => boolean;
 }
@@ -20,21 +20,17 @@ export function resolveAudience(input: AudienceInput): readonly AudienceRecipien
   const same = input.sameIdentity ?? ((a: string, b: string) => a === b);
   const incoming = input.incoming ?? [];
   const audience: AudienceRecipient[] = [];
-  const add = (requested: string, route: AudienceRoute) => {
+  const add = (requested: string, route: DirectedAudienceRoute) => {
     const recipient = input.recipients.find((item) => same(item, requested));
     if (recipient === undefined || same(recipient, input.actor)
       || audience.some((item) => same(item.recipient, recipient))) return;
-    if (input.reach !== 'bell' && incoming.some((item) => item.kind === 'ignore' && same(item.listener, recipient))) return;
+    if (incoming.some((item) => item.kind === 'ignore' && same(item.listener, recipient))) return;
     audience.push({ recipient, route });
   };
-  if (input.reach === 'bell') {
-    for (const recipient of input.recipients) add(recipient, 'bell');
-  } else {
-    for (const mention of input.mentions ?? []) add(mention, 'mention');
-    if (input.replyAuthor !== undefined) add(input.replyAuthor, 'reply');
-    for (const recipient of input.recipients) {
-      if (incoming.some((item) => item.kind === 'listen' && same(item.listener, recipient))) add(recipient, 'attention');
-    }
+  for (const mention of input.mentions ?? []) add(mention, 'mention');
+  if (input.replyAuthor !== undefined) add(input.replyAuthor, 'reply');
+  for (const recipient of input.recipients) {
+    if (incoming.some((item) => item.kind === 'listen' && same(item.listener, recipient))) add(recipient, 'attention');
   }
   return audience;
 }

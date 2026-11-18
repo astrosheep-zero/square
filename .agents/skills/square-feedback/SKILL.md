@@ -35,11 +35,11 @@ Use this template:
 - Impact: `<blocked / repeated work / confusing / minor>`
 ```
 
-Run a nonblocking perceive before expressing so the report does not land over unseen activity:
+Run a nonblocking perceive before expressing so the report does not land over unseen activity. Name the feedback recipient and repeat `--mention` if more people need the report. If no one is designated, leave it unaddressed in the archive.
 
 ```bash
 square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.square --as '<participant>' perceive --now
-square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.square --as '<participant>' express --bell - <<'EOF'
+square --location /Users/astrosheep/Developer/square/.square/SQUARE-FEEDBACK.square --as '<participant>' express --mention '<feedback-recipient>' - <<'EOF'
 **Square feedback**
 - Area: `perceive --now`
 - Square identity: `/absolute/path/to/project/.square/SQUARE-main.square (@participant)`

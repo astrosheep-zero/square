@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { resolveAudience } from '../dist/attention.js';
 
-test('attention resolves canonical recipients with precedence, ignore, and bell', () => {
+test('attention resolves canonical recipients with precedence and ignore', () => {
   const input = {
     actor: 'ALICE', recipients: ['Alice', 'Bob', 'BOB', 'Cara', 'Dan', 'Eve'],
     mentions: ['bob', 'alice', 'missing', 'cara', 'BOB'], replyAuthor: 'dan',
@@ -14,10 +14,6 @@ test('attention resolves canonical recipients with precedence, ignore, and bell'
   assert.deepEqual(resolveAudience(input), [
     { recipient: 'Bob', route: 'mention' }, { recipient: 'Dan', route: 'reply' },
     { recipient: 'Eve', route: 'attention' },
-  ]);
-  assert.deepEqual(resolveAudience({ ...input, reach: 'bell' }), [
-    { recipient: 'Bob', route: 'bell' }, { recipient: 'Cara', route: 'bell' },
-    { recipient: 'Dan', route: 'bell' }, { recipient: 'Eve', route: 'bell' },
   ]);
   assert.deepEqual({ ...input, sameIdentity: undefined }, before);
 });

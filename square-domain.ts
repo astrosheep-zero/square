@@ -25,7 +25,7 @@ export interface LandingFacts {
 export function deriveLanding(activity: ActDraft & { readonly index: number }, facts: LandingFacts): LandingEffect {
   const audience: LandedRecipient[] = activity.kind === 'say' ? resolveAudience({
     actor: activity.actor, recipients: facts.standing.map(item => item.name), mentions: activity.mentions,
-    replyAuthor: facts.replyAuthor, reach: activity.reach, incoming: facts.incoming, sameIdentity: sameName,
+    replyAuthor: facts.replyAuthor, incoming: facts.incoming, sameIdentity: sameName,
   }).map(recipient => {
     const seat = facts.seats.get(nameKey(recipient.recipient));
     return { ...recipient, ...(seat === undefined ? {} : { generation: seat.generation, owner: seat.owner }) };
@@ -134,7 +134,7 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
       const index = read.header().nextActIndex;
       if (!Number.isSafeInteger(index) || index < 0 || index >= Number.MAX_SAFE_INTEGER) throw new SquareError('invalid_args', 'Square activity index is exhausted.');
       const captured = authority.kind === 'takeover' && activity.kind === 'done' ? read.seat(name) : undefined;
-      const stored = { ...activity, index } as StoredAct;
+      const stored = { ...activity, index };
       writes.applyLanding(deriveLanding(stored, landingFacts(read, activity)));
       if (stored.kind === 'join') {
         if (authority.kind !== 'join' && authority.kind !== 'takeover') throw new SquareError('invalid_args', 'Seat authority cannot establish another seat.');

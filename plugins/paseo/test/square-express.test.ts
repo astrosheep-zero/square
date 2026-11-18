@@ -4,7 +4,7 @@ import { outgoingActivityLabel, parseSquareExpress } from "../shared/square-expr
 import { squareMessageSchema } from "../shared/message.ts";
 
 const input = { location: "/work/design.square", as: "rei", body: "**hello** @aoi",
-  mentions: ["aoi", "kei"], reply: "act/14", bell: false, force: true, noMention: true, noWait: true };
+  mentions: ["aoi", "kei"], reply: "act/14", force: true, noMention: true, noWait: true };
 const row = (name = "square_express", status = "running") => ({
   type: "tool_call", name, status,
   detail: { type: "unknown", input, output: "act/999, failed, or any other output" },
@@ -17,7 +17,7 @@ test("exact Pi and confirmed MCP tool names preserve speech input and map timeli
       const before = structuredClone(item);
       const outgoing = parseSquareExpress(item);
       assert.deepEqual(outgoing, { location: input.location, as: "rei", body: input.body,
-        mentions: ["aoi", "kei"], reply: "act/14", bell: false, status: expected });
+        mentions: ["aoi", "kei"], reply: "act/14", status: expected });
       assert.deepEqual(squareMessageSchema.parse({ outgoing }), { outgoing });
       assert.deepEqual(item, before);
     }
@@ -30,7 +30,7 @@ test("unrelated tools, invalid input, other detail shapes and unknown statuses s
   }
   for (const bad of [null, {}, { body: "hi" }, { location: "design" }, { ...input, body: 1 },
     { ...input, location: 1 }, { ...input, as: 1 }, { ...input, mentions: "aoi" },
-    { ...input, mentions: [1] }, { ...input, reply: 14 }, { ...input, bell: "yes" }]) {
+    { ...input, mentions: [1] }, { ...input, reply: 14 }]) {
     assert.equal(parseSquareExpress({ ...row(), detail: { type: "unknown", input: bad } }), undefined);
   }
   assert.equal(parseSquareExpress({ ...row(), type: "assistant_message" }), undefined);
@@ -48,7 +48,6 @@ test("optional attribution and actions come only from input, with no reference o
   assert.equal(outgoingActivityLabel({ ...base, mentions: ["rei"] }), "@rei");
   assert.equal(outgoingActivityLabel({ ...base, mentions: ["aoi", "kei"] }), "@aoi, @kei");
   assert.equal(outgoingActivityLabel({ ...base, reply: "act/14" }), "reply act/14");
-  assert.equal(outgoingActivityLabel({ ...base, bell: true }), "bell");
   assert.equal(outgoingActivityLabel({ ...base, mentions: ["aoi"], reply: "act/14" }), "@aoi · reply act/14");
   assert.equal(squareMessageSchema.safeParse({ outgoing: { ...base, status: "completed" } }).success, false);
 });

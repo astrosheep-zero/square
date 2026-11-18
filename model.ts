@@ -1,6 +1,6 @@
 // Shared model and constants for Square.
 
-import type { Act, ActivityId } from './square-core.js';
+import type { Act, ActivityId, Reach } from './square-core.js';
 import type { Owner } from './neutral.js';
 import type { WakeAddress } from './square-values.js';
 export { WAKE_ROUTE_KINDS, MESSAGE_METADATA_MAX_BYTES as ACTIVITY_METADATA_MAX_BYTES, MESSAGE_METADATA_MAX_DEPTH as ACTIVITY_METADATA_MAX_DEPTH, validateMessageMetadata as validateActivityMetadata, messageMetadataHasContent as activityMetadataHasContent, isWakeRouteKind, sameName, NAME_GRAPHEME_SOURCE, validateName } from './square-values.js';
@@ -32,10 +32,11 @@ export interface BuildOptions {
   throttlePerMinute?: number;
 }
 
+type Say = Extract<Act, { kind: 'say' }>;
 /** An upper publication draft: content and social facts before any index exists. */
 export type ActDraft = Act & { at: number };
-/** A landed activity owns its content and social facts. */
-export type StoredAct = Act & { index: number; at: number };
+/** A landed activity owns its content and social facts, including historical reach. */
+export type StoredAct = (Exclude<Act, Say> | Say & { reach?: Reach }) & { index: number; at: number };
 export type HydratedAct = StoredAct;
 
 export type ObservationState = 'seen';

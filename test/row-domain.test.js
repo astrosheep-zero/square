@@ -26,7 +26,7 @@ function stored(acts) {
   return acts.map((act, index) => ({ ...act, index, at: T0 + index }));
 }
 
-// Covers mention, reply, listen, ignore, bell, done, rejoin, case-variant
+// Covers mention, reply, listen, ignore, done, rejoin, case-variant
 // spellings, unknown/self mentions, a departed reply author, an ignored
 // mention target, a read activity used as a reply author, and a
 // case-variant actor that must fold onto the first spelling.
@@ -41,9 +41,9 @@ const SEQUENTIAL_SOURCE = [
   { kind: 'say', actor: 'Alice', body: 'a7' },
   { kind: 'ignore', actor: 'Bob', target: 'Alice' },
   { kind: 'say', actor: 'Alice', body: 'a9', mentions: ['bob', 'Carol'] },
-  { kind: 'say', actor: 'Alice', body: 'bell10', reach: 'bell' },
+  { kind: 'say', actor: 'Alice', body: 'a10' },
   { kind: 'done', actor: 'Bob', body: 'bye' },
-  { kind: 'say', actor: 'Alice', body: 'bell12', reach: 'bell' },
+  { kind: 'say', actor: 'Alice', body: 'a12', mentions: ['Bob', 'Carol'] },
   { kind: 'join', actor: 'Bob' },
   { kind: 'say', actor: 'Carol', body: 'a14', reply: 4 },
   { kind: 'done', actor: 'Carol' },
@@ -74,11 +74,11 @@ const GAPPED_ACTS = [
   { index: 3, at: T0 + 3, kind: 'join', actor: 'Bob' },
   { index: 5, at: T0 + 5, kind: 'say', actor: 'Alice', body: 'g5', mentions: ['Bob'] },
   { index: 8, at: T0 + 8, kind: 'listen', actor: 'Bob', target: 'Alice' },
-  { index: 11, at: T0 + 11, kind: 'say', actor: 'Alice', body: 'g11', reach: 'bell' },
+  { index: 11, at: T0 + 11, kind: 'say', actor: 'Alice', body: 'g11' },
   { index: 14, at: T0 + 14, kind: 'say', actor: 'Bob', body: 'g14', reply: 5 },
   { index: 20, at: T0 + 20, kind: 'say', actor: 'Alice', body: 'g20', reply: 18 },
   { index: 23, at: T0 + 23, kind: 'done', actor: 'Bob' },
-  { index: 25, at: T0 + 25, kind: 'say', actor: 'Alice', body: 'g25', reach: 'bell' },
+  { index: 25, at: T0 + 25, kind: 'say', actor: 'Alice', body: 'g25', mentions: ['Bob'] },
 ];
 
 // Cursor fixture: non-read 5/7/8, reads 6/9/10/11, and two
@@ -114,7 +114,7 @@ const REJOIN_ACTS = [
   { index: 8, at: T0 + 8, kind: 'say', actor: 'Bob', body: 'd8', mentions: ['alice'] },
 ];
 
-test('audience priority is bell > mention > reply > attention, with self and ignore rules', async () => {
+test('audience priority is mention > reply > attention, with self and ignore rules', async () => {
   const acts = stored(SEQUENTIAL_SOURCE);
   const port = createArtifactPort(':memory:', fixtureState(acts));
   try {
@@ -124,8 +124,7 @@ test('audience priority is bell > mention > reply > attention, with self and ign
     assert.deepEqual(await audience(5), [{ recipient: 'Alice', route: 'reply', generation: 'act/0' }]);
     assert.deepEqual(await audience(7), [{ recipient: 'Carol', route: 'attention', generation: 'act/2' }], 'listener-only edge');
     assert.deepEqual(await audience(9), [{ recipient: 'Carol', route: 'mention', generation: 'act/2' }], 'mention beats listening, ignoring sender is skipped');
-    assert.deepEqual(await audience(10), [{ recipient: 'Bob', route: 'bell', generation: 'act/1' }, { recipient: 'Carol', route: 'bell', generation: 'act/2' }], 'bell bypasses ignore');
-    assert.deepEqual(await audience(12), [{ recipient: 'Carol', route: 'bell', generation: 'act/2' }], 'departed peers are not reached');
+    assert.deepEqual(await audience(12), [{ recipient: 'Carol', route: 'mention', generation: 'act/2' }], 'departed peers are not reached');
     assert.deepEqual(await audience(14), [{ recipient: 'Alice', route: 'reply', generation: 'act/0' }]);
     assert.deepEqual(await audience(16), [], 'done mention target drops; ignoring target stays skipped after rejoin');
     assert.deepEqual(await audience(17), [], 'reply author who is no longer standing reaches nobody');

@@ -6,8 +6,8 @@ finished text cards, session attachment, routes, attempts and receipts. Producer
 recipient selection; adapters own transport behavior. Routes contain only `{kind, address}`.
 A card may also carry producer-neutral presentation `details`:
 `{kind: 'presentation', origin, author?, ref?, at, reach, body}`. `at` is the landing time in epoch
-milliseconds; `reach` is `mention`, `reply`, `attention`, or `bell`. `text` remains the bounded model-facing
-card; `body` holds the full Markdown for display. Receivers validate these details and render them
+milliseconds; `reach` is `mention`, `reply`, `attention`, or historical `bell`. `text` remains the bounded
+model-facing card; `body` holds the full Markdown for display. Receivers validate these details and render them
 without opening producer storage. Cards without valid presentation details remain plain text.
 
 Posting is idempotent by owner and key content. `DeliveryKey` is `readonly string[]`: nonempty

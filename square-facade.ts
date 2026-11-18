@@ -38,7 +38,6 @@ export interface ExpressOptions extends ObservationOptions {
   readonly metadata?: ActivityMetadata;
   readonly force?: boolean;
   readonly mentions?: readonly string[];
-  readonly reach?: Reach;
   readonly reply?: ActivityId;
   readonly noMention?: boolean;
   readonly noWait?: boolean;

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { gunzipSync } from 'node:zlib';
 
 import { readSquareSnapshot } from '../dist/artifact.js';
 import { readCursor } from '../dist/runtime.js';
@@ -301,43 +302,47 @@ test('an unread directed body is not leaked when express is blocked', async () =
   await closeSquare(square);
 });
 
-test('a bell remains directed while perceive filters still apply', async () => {
-  const time = tickingClock();
-  const square = Square.inMemory({ markdown: 'context', clock: time.now });
-  time.set(1000);
-  const alice = (await square.join('Alice', { owner: squareBody })).participant;
-  time.set(2000);
-  const bob = (await square.join('Bob', { owner: squareBody })).participant;
-  time.set(3000);
-  const cara = (await square.join('Cara', { owner: squareBody })).participant;
-  time.set(4000);
-  const bell = await alice.express('bell one', { force: true, reach: 'bell' });
-  const mentionWatch = await cara.perceive({ mention: true });
-  assert.equal(mentionWatch.activities.some((activity) => activity.body === 'bell one'), true);
-  const fromWatch = await bob.perceive({ from: ['Cara'] });
-  assert.equal(fromWatch.activities.some((activity) => activity.id === bell.activity.id), false);
-  assert.equal(((await square.history({ from: ['Cara'], limit: 100 })).activities).some((activity) => activity.body === 'bell one'), false);
-  time.set(7000);
-  await assert.rejects(
-    () => alice.express('bell two', { reach: 'bell' }),
-    (error) => error instanceof SquareError && error.code === 'bell_quota' && error.facts?.retryAfterMs > 0,
-  );
-  await closeSquare(square);
+test('historical Format13 bell keeps its archive bytes and original pending audience', async t => {
+  const file = tempSquarePath();
+  // Written by Square 0.5.1 (3c71ef69): Alice, Bob and Dee joined, Bob ignored
+  // Alice, Alice rang once via SDK, then Cara joined. No host ledger is retained.
+  const fixture = new URL('./fixtures/format13-historical-bell.square.gz', import.meta.url);
+  fs.writeFileSync(file, gunzipSync(fs.readFileSync(fixture)));
+  const square = await Square.at({ path: file, ledgerLocation: path.join(path.dirname(file), 'delivery.sqlite') });
+  t.after(async () => {
+    await square.close();
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
+  });
+  const id = 'act/4';
+  const expected = { id, at: 123456789, kind: 'say', actor: 'Alice', body: 'Historical **bell**.\n@Bob remains literal.\n', mentions: [], reach: 'bell' };
+  const archive = () => square.history({ at: [id] });
+  assert.deepEqual((await archive()).activities, [expected]);
+
+  const bob = await square.participant('Bob', { owner: 'archive:bob' });
+  const dee = await square.participant('Dee', { owner: 'archive:dee' });
+  const cara = await square.participant('Cara', { owner: 'archive:cara' });
+  const directed = { ...expected, perception: 'full', via: 'bell' };
+  assert.deepEqual((await bob.pending()).activities, [directed]);
+  assert.deepEqual((await bob.perceive({ mention: true, from: ['Cara'] })).activities, []);
+  assert.deepEqual((await cara.perceive({ mention: true })).activities, []);
+  assert.deepEqual((await bob.perceive({ mention: true, from: ['Alice'] })).activities, [directed]);
+  assert.deepEqual((await dee.perceive({ id })).activities, [directed]);
+  assert.deepEqual((await bob.pending()).activities, []);
+  assert.deepEqual((await archive()).activities, [expected]);
 });
 
-test('stored say omits mention reach while bell persists explicitly', async () => {
-  const squarePath = tempSquarePath();
-  const time = tickingClock();
-  const square = await Square.build({ path: squarePath, markdown: 'context', clock: time.tick });
-  const alice = (await square.join('Alice', { owner: squareBody })).participant;
-  const bob = (await square.join('Bob', { owner: squareBody })).participant;
-  await alice.express('mention @Bob', { force: true, mentions: ['Bob'] });
-  await bob.express('bell line', { force: true, reach: 'bell' });
-  await closeSquare(square);
-  const persisted = (await readSquareSnapshot(squarePath)).state;
-  assert.equal(persisted.acts[2].reach, undefined);
-  assert.equal(persisted.acts[3].reach, 'bell');
-  assert.doesNotMatch(JSON.stringify(persisted), /beside/);
+test('legacy SDK bell options refuse both express call forms before landing', async t => {
+  const square = Square.inMemory({ markdown: '' });
+  t.after(() => square.close());
+  const { participant: alice } = await square.join('Alice', { owner: squareBody });
+  await square.join('Bob', { owner: squareBody });
+  const before = await square.history();
+  for (const legacy of [{ reach: 'bell' }, { bell: true }]) {
+    const refusal = { code: 'invalid_args', operation: { operation: 'express', participant: 'Alice', subject: 'caller', expressEffect: 'unsent' } };
+    await assert.rejects(alice.express('obsolete', legacy), refusal);
+    await assert.rejects(alice.express({ body: 'obsolete', ...legacy }), refusal);
+  }
+  assert.deepEqual(await square.history(), before);
 });
 
 test('express reply preserves one causal activity reference', async () => {

@@ -17,7 +17,7 @@ are trusted, unsandboxed code running inside the Paseo app.
 
 Requires Paseo >=0.11.2 with custom-message tool rows (#6090). Structured notification
 cards use `details.items` with producer-neutral presentation facts: `kind: 'presentation'`, `origin`,
-`at` (landing time in epoch milliseconds), `reach` (`mention`, `reply`, `attention`, or `bell`),
+`at` (landing time in epoch milliseconds), `reach` (`mention`, `reply`, `attention`, or historical `bell`),
 optional `author` and `ref`, and the full Markdown `body`. Missing or malformed details fall
 back to the original plain text.
 

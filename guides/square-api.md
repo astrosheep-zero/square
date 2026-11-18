@@ -40,8 +40,9 @@ this discovery and its rendered text.
 ## Activity and delivery
 
 `Participant.express` lands activity in Square, with optional immutable JSON `metadata` (maximum
-16 KiB). Mentions, replies, bells, listening and ignores determine the landed audience. Activity IDs
-are `act/N`. `Square.history` is the read-only archive; `Participant.perceive` consumes directed activity,
+16 KiB). Mentions, replies, listening and ignores determine the landed audience. Activity IDs
+are `act/N`. Historical bell activities retain their original audience, body and ID. `Square.history` is
+the read-only archive; `Participant.perceive` consumes directed activity,
 and `Participant.pending` reads addressed unconsumed says without consuming them. `listen`, `unlisten`,
 `ignore`, `listening` and `done` operate on the participant. History, status and participants are
 Square operations. `OperationControl` can carry cancellation; a committed mutation is not undone by
@@ -68,9 +69,8 @@ targets do not block `express`. The receipt lists them in `unmatchedMentions`; a
 is reported in `replyAuthorNotHere`. The optional `awayRecipients` lists directed joined targets
 observed detached by the reconciliation immediately before landing, without requiring `observe: true`.
 It covers resolved mentions and a joined reply author, deduplicates canonical names and excludes the
-speaker. Bell alone does not enumerate away recipients; a reply on a bell still targets its author.
-The landing transaction fences each observation to the same owner and join generation. Missing
-sessions, unknown observations, routes and cached attachment alone do not establish away status.
+speaker. The landing transaction fences each observation to the same owner and join generation.
+Missing sessions, unknown observations, routes and cached attachment alone do not establish away status.
 These facts are not stored on the activity and do not prove delivery, consumption or current unread
 state. The captured observation remains unchanged by later attach, detach or receipt activity.
 

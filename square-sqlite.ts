@@ -33,7 +33,8 @@ export function emptyRuntimeState(nextActIndex = 0): SquareRuntimeState {
 }
 
 const ACTIVITY_KIND_CHECK = "kind IN ('join','done','say','read','listen','ignore','unlisten')";
-/** Square owns activity, audience, participant, and read-state facts. */
+/** Square owns activity, audience, participant, and read-state facts. Format13 framing
+ * retains the historical reach column and index; current landing never uses them. */
 export const AGORA_SCHEMA_SQL = `CREATE TABLE square_meta (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   next_act_index INTEGER NOT NULL CHECK (next_act_index BETWEEN 0 AND 9007199254740991),
@@ -397,13 +398,8 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
                 result[integer(r.act_index)] = integer(r.n, 1);
             return immutable(result);
         },
-        recentSayTimes(after, take, actor, bell) {
-            const args: SQLInputValue[] = [finite(after)];
-            let where = "kind='say' AND at>?";
-            if (actor !== undefined) { where += ' AND actor_key_json=?'; args.push(key(actor)); }
-            if (bell) where += " AND reach='bell'";
-            args.push(integer(take));
-            return immutable(all(`SELECT at FROM activities WHERE ${where} ORDER BY at DESC,act_index DESC LIMIT ?`, args).map(r => finite(r.at)).reverse());
+        recentSayTimes(after, take) {
+            return immutable(all("SELECT at FROM activities WHERE kind='say' AND at>? ORDER BY at DESC,act_index DESC LIMIT ?", [finite(after), integer(take)]).map(r => finite(r.at)).reverse());
         },
         audience(index) { return immutable(all('SELECT p.name_json,d.reason,d.generation_json,d.owner_json FROM landed_audience d JOIN participants p ON p.name_key_json=d.recipient_key_json WHERE d.act_index=? ORDER BY d.recipient_order', [integer(index)]).map(r => ({ recipient: decoded(r.name_json, true), route: routeKind(r.reason), ...(r.generation_json === null ? {} : { generation: endpointGeneration(decoded(r.generation_json, true)) }), ...(r.owner_json === null ? {} : { owner: decoded(r.owner_json, true) }) }))); },
         directed(recipient, filter, page) {
@@ -461,9 +457,10 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         },
         applyLanding(effect) {
             const a = validateStoredActivity(effect.activity);
+            requireFact(!('reach' in a), 'historical reach cannot be landed.');
             requireFact(a.index >= read.header().nextActIndex && a.index < Number.MAX_SAFE_INTEGER, 'activity index cannot advance.');
-            const { index, at, kind, actor, reach, reply, ...payload } = a as StoredAct & { reach?: string; reply?: number };
-            run('INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reach,reply_index,payload_json) VALUES(?,?,?,?,?,?,?,?)', [index, at, kind, encode(actor), key(actor), reach ?? null, reply ?? null, encode(payload)]);
+            const { index, at, kind, actor, reply, ...payload } = a as StoredAct & { reply?: number };
+            run('INSERT INTO activities(act_index,at,kind,actor_json,actor_key_json,reply_index,payload_json) VALUES(?,?,?,?,?,?,?)', [index, at, kind, encode(actor), key(actor), reply ?? null, encode(payload)]);
             effect.audience.forEach((address, order) => {
                 run('INSERT INTO landed_audience(act_index,recipient_key_json,recipient_order,reason,owner_json,generation_json) VALUES(?,?,?,?,?,?)', [index, key(address.recipient), order, address.route, address.owner === undefined ? null : encode(address.owner), address.generation === undefined ? null : encode(address.generation)]);
             });

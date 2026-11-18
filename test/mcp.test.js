@@ -360,7 +360,7 @@ test('MCP shares location and noMention parameters with native tools', async (t)
   try {
     await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'rei' } });
     await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'bob' } });
-    const bare = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: 'literal @bob', noMention: true, bell: false, force: true } });
+    const bare = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: 'literal @bob', noMention: true, force: true } });
     assert.match(bare.content[0].text, /your words land/);
     const other = await Square.build({ path: path.join(cwd, 'other.square'), markdown: 'Other square' });
     await other.close();
@@ -374,18 +374,17 @@ test('MCP shares location and noMention parameters with native tools', async (t)
       const directed = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@Eve', noMention: true, mentions: ['bob'], reply: bareActivity.id, force: true } });
       assert.match(directed.content[0].text, /you walk over to @bob/);
       assert.doesNotMatch(directed.content[0].text, /is not in this square/);
-      const bell = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@bob @Eve', bell: true, force: true } });
-      assert.match(bell.content[0].text, /you ring the bell/);
-      assert.doesNotMatch(bell.content[0].text, /is not in this square/);
-      const original = await client.callTool({ name: 'history', arguments: { location: squarePath } });
-      assert.match(original.content[0].text, /@bob @Eve/);
-      const activities = (await square.history()).activities;
+      const { tools } = await client.listTools();
+      assert.equal('bell' in tools.find(tool => tool.name === 'express').inputSchema.properties, false);
+      const before = await square.history();
+      const obsolete = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@bob @Eve', bell: true, force: true } });
+      assert.equal(obsolete.isError, true);
+      const after = await square.history();
+      assert.deepEqual(after, before);
       assert.deepEqual(bareActivity.mentions, []);
-      assert.equal(bareActivity.reach, undefined);
-      const landed = activities.find(a => a.body === '@Eve');
-      assert.deepEqual(landed.mentions, ['bob']);
-      assert.equal(landed.reply, bareActivity.id);
-      assert.deepEqual(activities.at(-1).mentions, []);
+      assert.equal(after.activities.at(-1).body, '@Eve');
+      assert.deepEqual(after.activities.at(-1).mentions, ['bob']);
+      assert.equal(after.activities.at(-1).reply, bareActivity.id);
     } finally { await square.close(); }
   } finally { await close(); }
 });

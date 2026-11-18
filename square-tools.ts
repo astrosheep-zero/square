@@ -158,20 +158,19 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     as: participant,
     body: z.string().describe('What you say or do. Markdown works; *asterisks* mark an action.'),
     mentions: stringArray.optional().describe('Who you are speaking to. An @name in the body that matches someone here counts too.'),
-    bell: z.boolean().optional().describe('Call everyone in the square.'),
     reply: activityId.optional().describe('The activity you are answering, like act/12.'),
     noMention: z.boolean().optional().describe('Leave @names in the body as plain text.'),
     force: z.boolean().optional().describe('Speak now, even if something reached you that you have not perceived yet.'),
     noWait: z.boolean().optional().describe('If you are speaking too fast, return at once instead of waiting.'),
-  }, async (square, { body, bell, as, ...options }, control, identity) =>
-    (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, ...(bell ? { reach: 'bell' } : {}), observe: true }, control),
+  }, async (square, { body, as, ...options }, control, identity) =>
+    (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, observe: true }, control),
     rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result, undefined, 'tool'))),
-  tool('perceive', 'Take in what reached you since you last looked: mentions, replies, bells, and words from those you listen to.', {
+  tool('perceive', 'Take in what reached you since you last looked: mentions, replies, and words from those you listen to.', {
     as: participant,
     id: activityId.optional().describe('Open this one activity in full, like act/12.'),
     idle: z.string().optional().describe('When nothing is waiting, wait for activity or this much quiet, like "30s".'),
     from: stringArray.optional().describe('Only what these participants said.'),
-    mention: z.boolean().optional().describe('Only what was addressed to you, and bells.'),
+    mention: z.boolean().optional().describe('Only what was addressed to you.'),
     limit: z.number().int().min(1).max(PERCEIVE_MAX_LIMIT).optional().describe('At most this many at once (default 10).'),
     takeover: z.boolean().optional().describe('Take over from another active idle perceive for this participant.'),
   }, async (square, { as, idle, ...args }, control, identity) => {
@@ -202,7 +201,7 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     return { ...(await square.history({ ...query, observe: true }, control)), query };
   },
     rendering((result: HistoryResult & { query: HistoryQuery }, args) => renderHistoryResult(result.observation?.location ?? '', result, { query: result.query, full: args.full === true, surface: 'tool' }))),
-  tool('attention', 'Turn toward someone or away from them. Listen: hear everything they say, even to others. Unlisten: stop listening to them. Ignore: hear nothing from them but bells.', {
+  tool('attention', 'Turn toward someone or away from them. Listen: hear everything they say, even to others. Unlisten: stop listening to them. Ignore: stop hearing their future activity.', {
     as: participant, action: z.enum(['listen', 'unlisten', 'ignore']).describe('"listen", "unlisten" or "ignore".'), target,
   }, async (square, { as, action, target }, control, identity) =>
     (await selectOwnSeat(square, identity.owner, as))[action](target, { observe: true }, control),

@@ -10,7 +10,6 @@ export type SquareErrorCode =
   | 'already_done'
   | 'capped'
   | 'throttled'
-  | 'bell_quota'
   | 'behind'
   | 'io'
   | 'unavailable';
@@ -33,7 +32,7 @@ export interface SquareErrorFacts {
   /** Express admission rejected before any activity was committed. */
   activityUnsent?: true;
   /** Refusal reason, including absent participants, conflicting reach, and inaccessible activities. */
-  reason?: 'never_joined' | 'not_standing' | 'bell_mention_conflict' | 'not_addressed' | 'invalid_reply' | 'invalid_done_body' | 'needs_seat';
+  reason?: 'never_joined' | 'not_standing' | 'not_addressed' | 'invalid_reply' | 'invalid_done_body' | 'needs_seat';
   /** The activity id a `perceive --id` refusal named. */
   activityId?: string;
   /** Requested recipient spellings, without parsing presentation copy. */

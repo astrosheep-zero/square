@@ -344,7 +344,7 @@ test('reply rejects an activity id that has not landed yet', async () => {
   }
 });
 
-test('admission refuses capped, throttled and quota-exhausted says', async () => {
+test('admission refuses capped and throttled says', async () => {
   const capped = memorySquare({ hardCap: 1, acts: [
     { kind: 'join', actor: 'Alice', at: 1 },
     { kind: 'say', actor: 'Alice', at: 2, body: 'one' },
@@ -353,23 +353,15 @@ test('admission refuses capped, throttled and quota-exhausted says', async () =>
     { kind: 'join', actor: 'Alice', at: 1 },
     { kind: 'say', actor: 'Alice', at: 10, body: 'one' },
   ] });
-  const bell = memorySquare({ acts: [
-    { kind: 'join', actor: 'Alice', at: 1 },
-    { kind: 'say', actor: 'Alice', at: 1000, body: 'hear me', reach: 'bell' },
-  ] });
   try {
-    const decide = (cell, now, extra = {}) => cell.read((facts) => decideAct(facts, { name: 'Alice', body: 'again', force: true, now, ...extra })).then((result) => result.value);
+    const decide = (cell, now) => cell.read((facts) => decideAct(facts, { name: 'Alice', body: 'again', force: true, now })).then((result) => result.value);
     assert.deepEqual(await decide(capped.cell, 20), { type: 'capped' });
     const throttledDecision = await decide(throttled.cell, 1000);
     assert.equal(throttledDecision.type, 'throttled');
     assert.equal(throttledDecision.delayMs, 10 + 60000 - 1000);
-    assert.deepEqual(await decide(bell.cell, 2000, { reach: 'bell' }), { type: 'bell_quota', nextAt: 1000 + 3600000 });
-    // The same bell becomes eligible exactly at the end of its quota window.
-    assert.equal((await decide(bell.cell, 1000 + 3600000, { reach: 'bell' })).type, 'sent');
   } finally {
     await capped.cell.close();
     await throttled.cell.close();
-    await bell.cell.close();
   }
 });
 

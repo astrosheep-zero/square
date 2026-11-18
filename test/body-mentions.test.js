@@ -138,22 +138,6 @@ test('noMention disables only body scanning, not explicit mentions or reply', as
   assert.equal(decision.unmatchedMentions, undefined);
 });
 
-test('a bell ignores all body candidates but rejects explicit mentions in core', async () => {
-  await assert.rejects(
-    () => decide(standingState(), { name: 'Alice', body: 'look @Bob', force: true, now: 10, reach: 'bell', mentions: ['Bob'] }),
-    (error) => error.facts?.reason === 'bell_mention_conflict',
-  );
-  const decision = await decide(standingState(), { name: 'Alice', body: 'look @Bob @decorator', force: true, now: 10, reach: 'bell', noMention: true, reply: 1 });
-  assert.equal(decision.type, 'sent');
-  assert.deepEqual(decision.act.mentions, []);
-  assert.equal(decision.act.reach, 'bell');
-  assert.equal(decision.act.reply, 1);
-  assert.equal(decision.unmatchedMentions, undefined);
-  const scannedOff = await decide(standingState(), { name: 'Alice', body: '@Bob @Eve', force: true, now: 10, reach: 'bell' });
-  assert.deepEqual(scannedOff.act.mentions, []);
-  assert.equal(scannedOff.unmatchedMentions, undefined);
-});
-
 test('body @names share the mention limit with --mention', async () => {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 0 },
@@ -225,11 +209,9 @@ test('departed mentions and replies land, reach standing targets, and never back
 test('activityRetryCommand preserves the caller reach instead of forcing --no-mention', () => {
   assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { noMention: true }), / --no-mention /);
   assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { mentions: ['Cara'], noMention: true }), / --mention 'Cara' --no-mention /);
-  assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { reach: 'bell', noMention: true }), / --bell --no-mention /);
   const derived = activityRetryCommand('/tmp/x.square', 'Alice', {});
-  assert.doesNotMatch(derived, /--no-mention|--mention|--bell/);
+  assert.doesNotMatch(derived, /--no-mention|--mention/);
   assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { mentions: ['Bob'] }), / --mention 'Bob'/);
-  assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { reach: 'bell' }), / --bell/);
 });
 
 test('the CLI lands matched and unmatched body @names without rewriting the body', async () => {

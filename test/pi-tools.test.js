@@ -64,7 +64,9 @@ test('Pi registers the shared contract as namespaced codemode tools', () => {
       assert.ok(schema.description?.length > 0, `${shared.name}.${name} explains its purpose`);
     }
   }
-  assert.equal(tools.get('square_express').parameters.properties.noMention.type, 'boolean');
+  const express = tools.get('square_express').parameters.properties;
+  assert.equal(express.noMention.type, 'boolean');
+  assert.equal('bell' in express, false);
 });
 
 test('Pi calls use live context, preserve environment, and return human text and failures', async (t) => {
@@ -123,9 +125,9 @@ test('Pi calls use live context, preserve environment, and return human text and
   const unmatched = await call('express', { as: 'rei', body: '@bob @Eve @eve', mentions: ['bob', 'Eve'], force: true });
   assert.match(unmatched.content[0].text, /you walk over to @bob/);
   assert.match(unmatched.content[0].text, /⚠ @Eve is not in this square\./);
-  const conflict = await call('express', { as: 'rei', body: '@bob', bell: true, mentions: ['bob'], force: true });
-  assert.equal(conflict.isError, true);
-  assert.match(conflict.content[0].text, /a bell cannot be combined with a mention/);
+  const obsolete = await call('express', { as: 'rei', body: 'obsolete broadcast', bell: true, force: true });
+  assert.equal(obsolete.isError, true);
+  assert.doesNotMatch((await call('history')).content[0].text, /obsolete broadcast/);
   assert.deepEqual({ ...process.env }, before);
 });
 

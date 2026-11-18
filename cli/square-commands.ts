@@ -1,5 +1,5 @@
 import { type BuildOptions, type HardCap, formatHardCap } from '../model.js';
-import type { Reach, ActivityMetadata } from '../square-facade.js';
+import type { ActivityMetadata } from '../square-facade.js';
 import {
   commandPrefix,
   participantCommandPrefix,
@@ -32,7 +32,6 @@ interface ActivityIntent {
   noWait: boolean;
   noMention: boolean;
   mentions: string[];
-  reach?: Reach;
   reply?: string;
   metadata?: ActivityMetadata;
   metadataJson?: string;
@@ -121,7 +120,6 @@ export const joinCommand: CommandSpec<JoinIntent, string> = {
 function parseActivity(argv: string[], context: CommandContext): ActivityIntent {
   let force = false;
   let noWait = false;
-  let bell = false;
   let noMention = false;
   const mentions: string[] = [];
   let reply: string | undefined;
@@ -133,8 +131,7 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     if (argument === '--json') continue;
     if (argument === '-f' || argument === '--force') force = true;
     else if (argument === '--no-wait') noWait = true;
-    else if (argument === '--beside') fail('✕ express does not know --beside\nsquare express --help');
-    else if (argument === '--bell') bell = true;
+    else if (argument === '--beside' || argument === '--bell') fail(`✕ express does not know ${argument}\nsquare express --help`);
     else if (argument === '--no-mention') noMention = true;
     else if (argument === '--mention') {
       mentions.push(requireValue(argv, index, argument));
@@ -150,13 +147,12 @@ function parseActivity(argv: string[], context: CommandContext): ActivityIntent 
     }
     else bodyArgs.push(argument);
   }
-  const reach = bell ? 'bell' : undefined;
   if (bodyArgs.length > 1) fail("express accepts one body argument (a quoted string or '-')");
   if (bodyArgs.length === 0 && metadataJson === undefined) {
     if (!process.stdin.isTTY) bodyArgs.push('-');
     else fail("express requires a body argument or --metadata <json>");
   }
-  return { activity: bodyArgs[0], force, noWait, noMention, mentions, reach, reply, metadata, metadataJson };
+  return { activity: bodyArgs[0], force, noWait, noMention, mentions, reply, metadata, metadataJson };
 }
 
 export const expressCommand: CommandSpec<ActivityIntent> = {
@@ -165,7 +161,7 @@ export const expressCommand: CommandSpec<ActivityIntent> = {
     const rawInput = intent.activity === undefined ? undefined : await resolveBody(intent.activity);
     await executeExpression((control) => Square.at(squareInput(context), control), requireSquarePath(context), context.name, rawInput, {
       force: intent.force, noWait: intent.noWait, noMention: intent.noMention,
-      mentions: intent.mentions, reach: intent.reach, reply: intent.reply, metadata: intent.metadata,
+      mentions: intent.mentions, reply: intent.reply, metadata: intent.metadata,
       recoveryOwner: context.owner ?? context.env.SQUARE_OWNER,
       metadataJson: intent.metadataJson, bodyProvided: intent.activity !== undefined,
     }, context.json, () => commandIdentity(context.env, context.owner).owner);

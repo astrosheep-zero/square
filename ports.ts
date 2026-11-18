@@ -68,7 +68,7 @@ export interface SquareRead extends ProducerRead {
   activityCount(filter: ActivityFilter): number;
   contextIndexes(centers: readonly ActivityIndex[], before: number, after: number): readonly ActivityIndex[];
   sayOrdinals(indexes: readonly ActivityIndex[]): Readonly<Record<number, number>>;
-  recentSayTimes(afterExclusive: number, takeLatest: number, actor?: string, bellOnly?: true): readonly number[];
+  recentSayTimes(afterExclusive: number, takeLatest: number): readonly number[];
   audience(index: ActivityIndex): readonly LandedRecipient[];
   directed(recipient: string, filter: DirectedFilter, page: IndexPage): FactPage<DirectedHead>;
   directedAt(recipient: string, index: ActivityIndex): DirectedHead | undefined;

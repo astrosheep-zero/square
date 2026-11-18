@@ -60,7 +60,7 @@ test('ledger deletion is overlaid on reads and lands done only on the next mutat
   assert.equal(done.length, 1);
 });
 
-test('away observations do not change ignore or bell audience, and a bell reply still targets its author', async t => {
+test('away observations do not override ignore and a reply still reaches its away author', async t => {
   const { square, ledger, alice, bob } = await setup(t);
   const question = await bob.express('question', { force: true });
   await bob.ignore('Alice');
@@ -69,15 +69,11 @@ test('away observations do not change ignore or bell audience, and a bell reply 
   const direct = await alice.express('@bob', { force: true });
   assert.deepEqual(direct.awayRecipients, ['Bob']);
   assert.equal((await square.participants({ local: true })).participants.find(p => p.name === 'Bob').unreadActivityCount, 0, 'ignore still excludes directed audience');
-  const bell = await alice.express('@bob @Missing', { reach: 'bell', force: true });
-  assert.equal(bell.awayRecipients, undefined, 'bell alone does not enumerate away participants');
-  assert.equal(bell.unmatchedMentions, undefined);
   const carol = (await square.join('Carol', { owner: 'test:carol' })).participant;
-  const reply = await carol.express('answer', { reach: 'bell', reply: question.activity.id, force: true });
+  const reply = await carol.express('answer', { reply: question.activity.id, force: true });
   assert.deepEqual(reply.awayRecipients, ['Bob']);
-  assert.equal((await square.participants({ local: true })).participants.find(p => p.name === 'Bob').unreadActivityCount, 2);
   await ledger.attach({ owner: 'test:bob', expectedGeneration: session.generation, routes: [] });
-  assert.deepEqual((await bob.perceive()).activities.map(a => a.id), [bell.activity.id, reply.activity.id]);
+  assert.deepEqual((await bob.perceive()).activities.map(a => a.id), [reply.activity.id]);
 });
 
 test('a missing session remains unknown even with a stale detached seat and never creates a session', async t => {

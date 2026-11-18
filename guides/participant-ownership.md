@@ -22,7 +22,7 @@ fenced at landing by owner and join generation. A missing session is unknown, an
 seat alone does not justify a warning. The shared CLI/tool text says `⚠ @Bob is away.`; it makes no
 claim about physical or network availability, delivery or current unread state. The activity still
 lands, and addressed joined recipients keep their audience and pending activity until consumption.
-Ignore continues to control audience independently; bell alone does not enumerate away warnings.
+Ignore continues to control audience independently.
 
 Participant handles capture owner and join generation; stale, departed or replaced custody refuses.
 Sandbox selection and exact ACK authorize against locally known World custody alone,

@@ -43,8 +43,7 @@ function replyArgument(reply: string | undefined): string {
 
 /** Retry choices are transport syntax, never a second admission decision. */
 export function activityRetryCommand(squarePath: string, name: string, opts: ActivityOptions, force = opts.force ?? false): string {
-  const reach = (opts.reach === 'bell' ? ' --bell' : '')
-    + (opts.mentions ?? []).map((target) => ` --mention ${quoteShell(target)}`).join('')
+  const reach = (opts.mentions ?? []).map((target) => ` --mention ${quoteShell(target)}`).join('')
     + (opts.noMention === true ? ' --no-mention' : '');
   const metadata = opts.metadataJson === undefined ? '' : ` --metadata ${quoteShell(opts.metadataJson)}`;
   const body = opts.bodyProvided === false ? '' : ' -';
@@ -120,15 +119,9 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
       process.stderr.write(formatRefusal(squarePath, lines, output));
       exitCode(2); return;
     }
-    const repair = reason === 'bell_mention_conflict';
-    if (isSquareError(error)) {
-      if (repair) {
-        lines.push('  · ring the bell without explicit mentions:',
-        `${activityRetryCommand(squarePath, name, { ...opts, mentions: [] })}${opts.bodyProvided === false ? '' : ` < ${quoteShell(draftPath)}`}`);
-      } else if (error.code === 'invalid_args' || error.code === 'invalid_name') {
-        if (opts.mentions?.length) lines.push(`${commandPrefix(squarePath)} status`);
-        if (opts.reply !== undefined && reason !== 'invalid_reply') lines.push(`${commandPrefix(squarePath)} history --limit 10`);
-      }
+    if (isSquareError(error) && (error.code === 'invalid_args' || error.code === 'invalid_name')) {
+      if (opts.mentions?.length) lines.push(`${commandPrefix(squarePath)} status`);
+      if (opts.reply !== undefined && reason !== 'invalid_reply') lines.push(`${commandPrefix(squarePath)} history --limit 10`);
     }
     if (reason === 'invalid_reply') {
       const withoutReply = { ...opts, reply: undefined };
@@ -136,7 +129,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
         '  · choose a valid --reply from history, or send without a reply using this repair:',
         `${activityRetryCommand(squarePath, name, withoutReply)}${withoutReply.bodyProvided === false ? '' : ` < ${quoteShell(draftPath)}`}`,
       );
-    } else if (!repair) {
+    } else {
       lines.push(
         '  · correct the problem above before retrying; keep your intended recipients and reply:',
         `${retryInput}`,

@@ -117,9 +117,9 @@ test('Pi renders generic details after producer storage disappears and falls bac
   const square = await Square.build({ path: path.join(f.ctx.cwd, 'deleted.square'), markdown: '' });
   const sender = (await square.join('sender', { owner: 'source:sender' })).participant;
   await square.join('recipient', { owner: f.owner });
-  await sender.express({ body: 'stored **body**', reach: 'bell' });
+  await sender.express({ body: 'stored **body**', mentions: ['recipient'] });
   const [posted] = await f.ledger.pending(f.owner, { generation: f.initial.generation });
-  assert.equal(posted.details.reach, 'bell');
+  assert.equal(posted.details.reach, 'mention');
   const external = { kind: 'presentation', origin: 'jobs', author: 'worker', ref: 'job/42', at: Date.now(), reach: 'attention', body: 'full external body' };
   await f.ledger.post({ owner: f.owner, key: ["external"], text: 'external preview', details: external });
   await f.ledger.post({ owner: f.owner, key: ["invalid"], text: 'invalid fallback', details: { ...external, body: 7 } });

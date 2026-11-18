@@ -29,13 +29,12 @@ const COMMANDS: readonly CommandHelp[] = [
     details: ['Options:', '  --last <N>  Show the last N public activities (default 10, maximum 100).', '  --takeover  End the standing participant and reclaim the name for this session.'],
   },
   {
-    names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] [--metadata <json>] [--mention <name>... | --bell] [--no-mention] [--reply <activity-id>] [<activity> | -]', usesSquare: true, group: 'participant',
+    names: ['express'], usage: '--as <name> express [-f|--force] [--no-wait] [--metadata <json>] [--mention <name>...] [--no-mention] [--reply <activity-id>] [<activity> | -]', usesSquare: true, group: 'participant',
     summary: 'Speak, gesture, or do both.',
     details: [
       'Reach:',
       '  --mention <name>        Address one standing participant; repeat to address more.',
       '  @name                   Also address a standing participant named in the body; `backticks` keep @text literal.',
-      '  --bell                  Call everyone; body @names stay literal.',
       '  --no-mention            Keep body @names literal.',
       '  --reply <activity-id>   Also reach the author of an earlier activity (for example act/12).',
       '  Said to no one in particular, your words reach those who listen to you.',
@@ -48,11 +47,11 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   { names: ['listen'], usage: '--as <name> listen <participant>', usesSquare: true, group: 'participant', summary: 'Turn an ear toward one participant\'s future activity.' },
   { names: ['unlisten'], usage: '--as <name> unlisten <participant>', usesSquare: true, group: 'participant', summary: "Stop listening to one participant's future activity." },
-  { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Stop hearing one participant\'s future activity, except bells.' },
+  { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Stop hearing one participant\'s future activity.' },
   {
     names: ['perceive'], usage: '--as <name> perceive [--id <activity-id>] [--idle <duration>] [--from <names>] [--mention] [--limit <count>] [--takeover]', usesSquare: true, group: 'participant',
     summary: 'Perceive directed conversation since you last looked.',
-    details: ['Modes:', '  --id <activity-id> Open one activity addressed to you in full.', '  --idle <duration>  Wait for something relevant, or for quiet to last this long.', '', 'Filters:', '  --from <names>     Match only comma-separated participants.', '  --mention          Match direct attention for your current participant (and bells).', '  --limit <count>    Return one page (default 10, maximum 100).', '', 'Recovery:', '  --takeover         Take over from another active perceive for this participant.'],
+    details: ['Modes:', '  --id <activity-id> Open one activity addressed to you in full.', '  --idle <duration>  Wait for something relevant, or for quiet to last this long.', '', 'Filters:', '  --from <names>     Match only comma-separated participants.', '  --mention          Match direct attention for your current participant.', '  --limit <count>    Return one page (default 10, maximum 100).', '', 'Recovery:', '  --takeover         Take over from another active perceive for this participant.'],
   },
   { names: ['done'], usage: '--as <name> done', usesSquare: true, group: 'participant', summary: 'Step out of the square.' },
   {

@@ -60,7 +60,7 @@ test('perception shares one settled audience across case and rejoin boundaries',
   }
 });
 
-test('landed audience settles mentions, bell, attention, ignore and self in priority order', async () => {
+test('landed audience settles mentions, attention, ignore and self in priority order', async () => {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 1 },
     { kind: 'join', actor: 'Bob', at: 2 },
@@ -68,28 +68,25 @@ test('landed audience settles mentions, bell, attention, ignore and self in prio
     { kind: 'listen', actor: 'Cara', target: 'Alice', at: 4 },
     { kind: 'ignore', actor: 'Bob', target: 'Alice', at: 5 },
     { kind: 'say', actor: 'Alice', at: 6, body: 'mention', mentions: ['Bob', 'Cara'] },
-    { kind: 'say', actor: 'Alice', at: 7, body: 'bell', reach: 'bell' },
-    { kind: 'say', actor: 'Alice', at: 8, body: 'attention' },
-    { kind: 'say', actor: 'Alice', at: 9, body: 'self', mentions: ['Alice'] },
+    { kind: 'say', actor: 'Alice', at: 7, body: 'attention' },
+    { kind: 'say', actor: 'Alice', at: 8, body: 'self', mentions: ['Alice'] },
   ];
   const cell = memoryCell(acts);
   try {
     const facts = (await cell.read((read) => ({
       mention: read.audience(5).map(({ recipient, route, generation }) => ({ recipient, route, generation })),
-      bell: read.audience(6).map(({ recipient, route, generation }) => ({ recipient, route, generation })),
-      attention: read.audience(7).map(({ recipient, route, generation }) => ({ recipient, route, generation })),
-      selfEdge: read.directedAt('Alice', 8),
-      selfIncluded: read.audience(8).some((recipient) => recipient.recipient === 'Alice'),
+      attention: read.audience(6).map(({ recipient, route, generation }) => ({ recipient, route, generation })),
+      selfEdge: read.directedAt('Alice', 7),
+      selfIncluded: read.audience(7).some((recipient) => recipient.recipient === 'Alice'),
       bobDirect: read.directedCount('Bob', {}),
       caraDirect: read.directedCount('Cara', {}),
     }))).value;
     assert.deepEqual(facts.mention, [{ recipient: 'Cara', route: 'mention', generation: 'act/2' }]);
-    assert.deepEqual(facts.bell, [{ recipient: 'Bob', route: 'bell', generation: 'act/1' }, { recipient: 'Cara', route: 'bell', generation: 'act/2' }]);
     assert.deepEqual(facts.attention, [{ recipient: 'Cara', route: 'attention', generation: 'act/2' }]);
     assert.equal(facts.selfEdge, undefined);
     assert.equal(facts.selfIncluded, false);
-    assert.equal(facts.bobDirect, 1);
-    assert.equal(facts.caraDirect, 4);
+    assert.equal(facts.bobDirect, 0);
+    assert.equal(facts.caraDirect, 3);
   } finally {
     await cell.close();
   }

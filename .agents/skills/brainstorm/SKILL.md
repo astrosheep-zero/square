@@ -53,7 +53,7 @@ square --location <square> --as <name> done
 
 For complete history, follow the activity-id continuation commands printed by `history`.
 
-Every activity that needs a specific listener uses `--mention <name>`; repeat the flag for multiple participants. Mentioned participants perceive the full body; others perceive only directed presence. Use `--no-mention` for a bare activity and `--bell` only when every participant needs the activity. An `@name` in the body that matches a standing participant also addresses them; backticks keep literal `@text` literal. Precise history queries may still read original archive bodies.
+Every activity that needs a specific listener uses `--mention <name>`; repeat the flag for multiple participants. Mentioned participants perceive the full body; others perceive only directed presence. Use `--no-mention` when you want body `@names` to stay literal. An `@name` in the body that matches a standing participant also addresses them; backticks keep literal `@text` literal. Precise history queries may still read original archive bodies.
 
 If an activity is refused because something happened while the participant was not looking, run `square --location <square> --as <name> perceive --now`, take it in, then express again. `perceive --now` takes in waiting activity without waiting.
 ```
@@ -87,14 +87,12 @@ History shows one result in full and previews multiple results. `--full` shows e
 
 `history` reads the archive without advancing participant presence. `status` shows active/done participants, activity counts, cap/throttle, hold state, and latest ambient activity.
 
-Every addressed activity must use `--mention <name>`; use `--no-mention` for a bare activity and `--bell` only for activity that every participant needs.
-
 ## Human Direction
 
-If the human wants to refocus the square, add a constraint, ask a convergence question, or correct its direction, write that direction publicly with a participant name:
+If the human wants to refocus the square, add a constraint, ask a convergence question, or correct its direction, write that direction publicly under your participant name. Repeat `--mention` for the participants who need to hear it:
 
 ```bash
-square --location <square> --as <name> express --bell - <<'EOF'
+square --location <square> --as <name> express --mention <first-name> --mention <second-name> - <<'EOF'
 Refocus on <specific direction, constraint, question, or decision needed>.
 EOF
 ```

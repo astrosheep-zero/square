@@ -247,6 +247,8 @@ export class SqliteSquare {
       let landedId: ExpressResult['activity']['id'] | undefined;
       try {
         checkControl(control);
+        if ('reach' in options || 'bell' in options)
+          throw new SquareError('invalid_args', 'Express no longer accepts bell reach. Use named mentions instead.', { activityUnsent: true });
         await square.reconcile(control?.signal);
         name = (await square.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
         const seat = this.seat;
@@ -268,27 +270,24 @@ export class SqliteSquare {
             const committed = (await square.artifact.transactAs(participantAuthority(seat), facts => {
               // Decoding selected rows is storage work, not proof of safe admission refusal.
               const proposed = decideAct(facts, { name, body, force: options.force ?? false, metadata: options.metadata, now, mentions: options.mentions,
-                ...(options.reach === undefined ? {} : { reach: options.reach }), ...(options.noMention === undefined ? {} : { noMention: options.noMention }), ...(reply === undefined ? {} : { reply }) });
+                noMention: options.noMention, reply });
               const decision = rejectUnsentActivity(() => {
                 if (proposed.type === 'blocked') throw new SquareError('behind', `${participantIdentity(name)} has pending activity`, { activitySummaries: proposed.activitySummaries });
                 if (proposed.type === 'capped') throw new SquareError('capped', `${participantIdentity(name)} reached the activity cap`, { spoken: facts.participant(name)!.sayCount, ...(facts.header().hardCap == null ? {} : { hardCap: facts.header().hardCap! }) });
                 if (proposed.type === 'throttled') throw new SquareError('throttled', `${name} is throttled`, { retryAfterMs: proposed.delayMs });
-                if (proposed.type === 'bell_quota') throw new SquareError('bell_quota', `${participantIdentity(name)} cannot ring the bell yet`, { retryAfterMs: Math.max(1, proposed.nextAt - now) });
                 return proposed;
               });
               const stored = facts.land(decision.act);
               const awayRecipients: string[] = [];
-              if (decision.act.kind === 'say') {
-                const replyAuthor = decision.act.reply === undefined ? undefined : facts.activity(decision.act.reply)?.actor;
-                const targets = new Set([...(decision.act.mentions ?? []), ...(replyAuthor === undefined ? [] : [replyAuthor])].map(nameKey));
-                for (const target of targets) {
-                  if (target === nameKey(name)) continue;
-                  const observed = awayByName.get(target);
-                  if (observed === undefined) continue;
-                  const current = facts.seat(target);
-                  if (facts.participant(target)?.joined && current?.owner === observed.owner && current.generation === observed.generation)
-                    awayRecipients.push(current.participant);
-                }
+              const replyAuthor = decision.act.reply === undefined ? undefined : facts.activity(decision.act.reply)?.actor;
+              const targets = new Set([...(decision.act.mentions ?? []), ...(replyAuthor === undefined ? [] : [replyAuthor])].map(nameKey));
+              for (const target of targets) {
+                if (target === nameKey(name)) continue;
+                const observed = awayByName.get(target);
+                if (observed === undefined) continue;
+                const current = facts.seat(target);
+                if (facts.participant(target)?.joined && current?.owner === observed.owner && current.generation === observed.generation)
+                  awayRecipients.push(current.participant);
               }
               return { stored, standingCount: inSquareCount(facts),
                 ...(awayRecipients.length === 0 ? {} : { awayRecipients }),
@@ -313,7 +312,7 @@ export class SqliteSquare {
           }
         }
       } catch (error) {
-        const recipient = isSquareError(error) && ['not_standing', 'bell_mention_conflict'].includes(error.facts?.reason ?? '');
+        const recipient = isSquareError(error) && error.facts?.reason === 'not_standing';
         throw failure(error, { operation: 'express', participant: name, subject: recipient ? 'recipient' : 'caller', expressEffect: effect,
           ...(landedId === undefined ? {} : { landedId }) });
       }

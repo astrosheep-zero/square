@@ -119,44 +119,6 @@ test('invalid reply recovery retains body candidates without forcing a bare sele
   }
 });
 
-test('explicit bell conflict repairs flags without asking for body edits', shellReplay, async () => {
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    await square.join('Alice', { owner: body, wakeAddress });
-    await square.join('Bob', { owner: body, wakeAddress });
-  });
-  const body = '@Bob @Eve\n';
-  const saved = recovery(run(withName(file, 'Alice', ['express', '--bell', '--no-mention', '--mention', 'Bob', '--reply', 'act/1', '-']), { input: body }), body);
-  assert.match(saved.output, /a bell cannot be combined with a mention/);
-  assert.doesNotMatch(saved.output, /edit the draft|removed or wrapped/);
-  assert.match(saved.commands[0], /--bell --no-mention --reply act\/1/);
-  assert.doesNotMatch(saved.commands[0], /--mention /);
-  const retry = executeRecovery(saved.commands[0]);
-  assert.equal(retry.status, 0, retry.stdout + retry.stderr);
-  assert.doesNotMatch(retry.stdout, /is not in this square/);
-  assert.equal((await says(file)).at(-1).reach, 'bell');
-});
-
-test('bell quota preserves a retryable draft, bell reach, reply and no-wait', shellReplay, async () => {
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
-    await square.join('Bob', { owner: body, wakeAddress });
-    await alice.express('first bell', { reach: 'bell' });
-  });
-  const body = 'second bell\n';
-  const saved = recovery(run(withName(file, 'Alice', ['express', '--no-wait', '--bell', '--reply', 'act/0', '-']), {
-    input: body, env: { SQUARE_NOW_MS: '7000' },
-  }), body);
-  assert.match(saved.output, /the bell stays quiet for now/);
-  assert.match(saved.commands[0], /express --no-wait --bell --reply act\/0 -/);
-  assert.doesNotMatch(saved.commands[0], /--force/);
-  const retry = executeRecovery(saved.commands[0], { SQUARE_NOW_MS: String((await says(file))[0].at + 3600001) });
-  assert.equal(retry.status, 0, retry.stdout + retry.stderr);
-  const last = (await says(file)).at(-1);
-  assert.equal(last.body, body.trim());
-  assert.equal(last.reach, 'bell');
-  assert.equal(last.reply, 'act/0');
-});
-
 test('throttle recovery remains no-wait and does not add force', shellReplay, async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;

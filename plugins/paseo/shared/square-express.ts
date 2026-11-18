@@ -6,7 +6,6 @@ const expressInputSchema = z.object({
   body: z.string(),
   mentions: z.array(z.string()).optional(),
   reply: z.string().optional(),
-  bell: z.boolean().optional(),
 });
 
 export const squareOutgoingSchema = expressInputSchema.extend({
@@ -34,7 +33,6 @@ export function outgoingActivityLabel(outgoing: SquareOutgoing): string {
   const actions = [
     outgoing.mentions?.length ? `${outgoing.as ? "→ " : ""}${outgoing.mentions.map(name => `@${name}`).join(", ")}` : undefined,
     outgoing.reply === undefined ? undefined : `reply ${outgoing.reply}`,
-    outgoing.bell ? "bell" : undefined,
   ].filter(Boolean);
   return actions.join(" · ") || "express";
 }

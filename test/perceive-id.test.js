@@ -51,15 +51,12 @@ test('exact perceive refuses unavailable activities and incompatible library opt
   assert.equal((await bob.perceive()).activities.length, 2);
 });
 
-test('exact perceive preserves bell and standing-listener audience after listening changes', async (t) => {
+test('exact perceive preserves the landed listener audience after listening changes', async (t) => {
   const { bob, alice } = await setup(t);
   await bob.listen('Alice');
   const bare = await alice.express('heard while listening', { force: true });
   await bob.ignore('Alice');
-  const bell = await alice.express('bell', { force: true, reach: 'bell' });
-  for (const activity of [bare.activity, bell.activity]) {
-    assert.equal((await bob.perceive({ id: activity.id })).activities[0].body, activity.body);
-  }
+  assert.equal((await bob.perceive({ id: bare.activity.id })).activities[0].body, bare.activity.body);
 });
 
 test('CLI exact perceive returns the full body and rejects conflicting flags before consumption', async (t) => {

@@ -555,18 +555,10 @@ test('history expands one result, previews multiple results, and --full expands 
   assert.match(expanded.stdout, new RegExp(secondTail));
 });
 
-test('bell quota refusal prints the next timestamp and express help keeps --bell', async () => {
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
-    await square.join('Bob', { owner: body, wakeAddress });
-    await square.join('Cara', { owner: body, wakeAddress });
-    await alice.express('bell one', { force: true, reach: 'bell' });
-  }, { manualClock: true });
-
-  const secondBell = run(withName(file, 'Alice', ['express', '--bell', 'bell two']), { env: { SQUARE_NOW_MS: '7000' } });
-  assert.equal(secondBell.status, 1, secondBell.stderr);
-  assert.match(secondBell.stdout, /the bell stays quiet for now/);
-  assert.match(secondBell.stdout, /you can ring it again in 59m 53s/);
+test('express rejects obsolete --beside and documents the reply coordinate', async () => {
+  const file = await persistSquare(async ({ square, body }) => {
+    await square.join('Alice', { owner: body });
+  });
 
   const removed = run(withName(file, 'Alice', ['express', '--force', '--beside', 'Bob', 'gone @Bob']));
   assert.notEqual(removed.status, 0);
@@ -576,7 +568,6 @@ test('bell quota refusal prints the next timestamp and express help keeps --bell
   const help = run(['express', '--help']);
   assert.equal(help.status, 0, help.stderr);
   assert.doesNotMatch(help.stdout, /beside/);
-  assert.match(help.stdout, /--bell/);
   assert.match(help.stdout, /--reply <activity-id>/);
   assert.match(help.stdout, /act\/12/);
   assert.doesNotMatch(help.stdout, /act\/N/);

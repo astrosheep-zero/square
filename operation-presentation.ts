@@ -112,11 +112,9 @@ export function renderExpression(squarePath: string, data: ExpressResult, owner?
   const ownCount = projection.ownActivityCount;
   const capCount = projection.hardCap === null ? '' : ` · ${ownCount}/${projection.hardCap}`;
   const activity = data.activity;
-  const confirmation = activity.reach === 'bell'
-    ? `● you ring the bell — everyone turns · ${activity.id}${style('dim', capCount)}`
-    : `● ${activity.mentions.length > 0
-      ? `you walk over to ${activity.mentions.map((target) => participantIdentity(target)).join(', ')}`
-      : activity.metadata !== undefined && (activity.body ?? '').trim() === '' ? 'structured activity lands' : isGestureOnly(activity.body ?? '') ? 'your gesture lands' : 'your words land'} — ${activity.id}${style('dim', capCount)}`;
+  const confirmation = `● ${activity.mentions.length > 0
+    ? `you walk over to ${activity.mentions.map((target) => participantIdentity(target)).join(', ')}`
+    : activity.metadata !== undefined && (activity.body ?? '').trim() === '' ? 'structured activity lands' : isGestureOnly(activity.body ?? '') ? 'your gesture lands' : 'your words land'} — ${activity.id}${style('dim', capCount)}`;
   const notReached = [...(data.unmatchedMentions ?? []), ...(data.replyAuthorNotHere === undefined ? [] : [data.replyAuthorNotHere])]
     .filter((name, index, names) => names.findIndex((other) => sameName(name, other)) === index);
   const reachNotice = notReached.map(name => `\n⚠ ${participantIdentity(name)} is not in this square.`).join('');
@@ -335,10 +333,10 @@ export function renderListenerChange(squarePath: string, verb: ListenerVerb, dat
   const target = participantIdentity(projection.target);
   const action = data.activity !== null
     ? verb === 'listen' ? `${actor} turns an ear toward ${target}`
-      : verb === 'ignore' ? `${actor} turns away from ${target} — only bells will reach you from them`
+      : verb === 'ignore' ? `${actor} turns away from ${target}`
         : `${actor} stops listening to ${target} — direct mentions and replies still reach you unless ignored`
     : verb === 'listen' ? `${actor} already turns an ear toward ${target}`
-      : verb === 'ignore' ? `${actor} already ignores ${target} — only bells will reach you from them`
+      : verb === 'ignore' ? `${actor} already ignores ${target}`
         : `${actor} is not listening to ${target}`;
   return withPathOutput(squarePath, `${data.activity === null ? '○' : '·'} ${action}`, {
     participantCount: projection.standingCount,
@@ -384,7 +382,7 @@ interface FailureOptions {
 
 /** Express gates are physics, not mistakes: one scene for every surface, then that surface's next action. */
 export function isExpressGate(code: string): boolean {
-  return code === 'behind' || code === 'capped' || code === 'throttled' || code === 'bell_quota';
+  return code === 'behind' || code === 'capped' || code === 'throttled';
 }
 
 function expressGateLines(failure: FailureReport, options: FailureOptions): string[] | undefined {
@@ -396,9 +394,7 @@ function expressGateLines(failure: FailureReport, options: FailureOptions): stri
     ? ['✕ your words stay unsent — someone spoke while you were away', ...renderUnreadSummary(facts?.activitySummaries ?? [])]
     : failure.code === 'capped'
       ? [`✕ you’ve reached your speaking cap${facts?.spoken !== undefined && facts.hardCap !== undefined ? ` — ${facts.spoken}/${facts.hardCap} spoken` : ''}`]
-      : failure.code === 'throttled'
-        ? ['✕ the square is packed — shoulder to shoulder', `  · a lull opens in ${formatDuration(facts?.retryAfterMs ?? 1)}`]
-        : ['✕ the bell stays quiet for now', `  · you can ring it again in ${formatDuration(facts?.retryAfterMs ?? 1)}`];
+      : ['✕ the square is packed — shoulder to shoulder', `  · a lull opens in ${formatDuration(facts?.retryAfterMs ?? 1)}`];
   const lines = [...scene, ...(options.draftPath === undefined ? [] : [style('dim', `· draft kept: ${options.draftPath}`)])];
   if (squarePath === undefined || name === undefined) return lines;
   const action = (verb: 'perceive' | 'done') => tool
@@ -406,7 +402,6 @@ function expressGateLines(failure: FailureReport, options: FailureOptions): stri
     : `${participantCommandPrefix(squarePath, name, owner)} ${verb}`;
   if (failure.code === 'behind') lines.push(...(tool ? ['Take it in, then express again:', action('perceive')] : [action('perceive'), '  · take it in, then retry:']));
   if (failure.code === 'capped') lines.push('  · your words stay unsent; done only steps out', action('done'));
-  if (failure.code === 'bell_quota' && !tool) lines.push('  · retry when the bell is ready:');
   if (failure.code !== 'capped' && options.retry !== undefined) lines.push(options.retry);
   return lines;
 }
@@ -420,12 +415,11 @@ export function renderFailureLines(failure: FailureReport, options: FailureOptio
   if (gate !== undefined) return gate;
   const marked = reason === 'never_joined' || reason === 'not_standing';
   const lines = marked ? failure.message.split('\n').map((line) => `✕ ${line}`) : [failure.message];
-  if (reason === 'bell_mention_conflict' || reason === 'invalid_reply') {
-    lines[0] = reason === 'bell_mention_conflict' ? '✕ a bell cannot be combined with a mention'
-      : `Invalid ${options.surface === 'tool' ? 'reply' : '--reply'}: ${facts?.activityExists === false ? `${facts.activityId ?? options.reply ?? 'that activity'} is not in this square's history` : 'expected an activity id like act/12'}`;
+  if (reason === 'invalid_reply') {
+    lines[0] = `Invalid ${options.surface === 'tool' ? 'reply' : '--reply'}: ${facts?.activityExists === false ? `${facts.activityId ?? options.reply ?? 'that activity'} is not in this square's history` : 'expected an activity id like act/12'}`;
     if (squarePath !== undefined) lines.push(options.surface === 'tool'
-      ? formatToolAction(reason === 'invalid_reply' ? 'history' : 'status', { location: displayPath(squarePath), ...(reason === 'invalid_reply' ? { limit: 10 } : {}) })
-      : reason === 'invalid_reply' ? `${commandPrefix(squarePath)} history --limit 10` : `${commandPrefix(squarePath)} status`);
+      ? formatToolAction('history', { location: displayPath(squarePath), limit: 10 })
+      : `${commandPrefix(squarePath)} history --limit 10`);
   } else if (reason === 'needs_seat' && squarePath !== undefined && name !== undefined) {
     lines.splice(0, 1, `✕ ${failure.message}`);
     lines.push(options.surface === 'tool' ? formatToolAction('join', { location: displayPath(squarePath), as: name }) : joinRecoveryCommand(squarePath, name, owner));

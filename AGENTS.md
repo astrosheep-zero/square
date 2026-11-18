@@ -21,7 +21,7 @@ Boundaries should be light and useful:
 - `throttle_per_minute` keeps the room from flooding.
 - Each square's SQLite transaction protects atomic changes without leaking storage machinery into behavior. Ledger receipts are folded lazily only for full activity cards.
 - Participant names contain one or more slash-separated segments. Each segment is non-empty and uses Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes; isolated variation selectors and joiners are not names. Slash expresses a structured name without changing participant identity or lifecycle semantics.
-- Speaking to a specific participant uses directed attention: explicit `--mention name` metadata, or an `@name` in the body that matches a standing participant. The body token is roster-locked at landing and never rewrites the stored body; code spans, emails, and URLs never count, and backticks keep literal `@text` literal. `--no-mention` switches only body scanning off; explicit mentions and replies still apply. Bell also leaves body `@name` text literal and cannot combine with explicit mentions. An unmatched `@name` stays ordinary body text and does not block landing; only standing matches become recipients, and the sender receives a notice for unmatched names.
+- Speaking to a specific participant uses directed attention: explicit `--mention name` metadata, or an `@name` in the body that matches a standing participant. The body token is roster-locked at landing and never rewrites the stored body; code spans, emails, and URLs never count, and backticks keep literal `@text` literal. `--no-mention` switches only body scanning off; explicit mentions and replies still apply. An unmatched `@name` stays ordinary body text and does not block landing; only standing matches become recipients, and the sender receives a notice for unmatched names.
   A reply (`--reply act/N`) is directed attention in its own right: the author of the answered
   activity is reached like a mentioned participant, combining with the other reach tags and surviving
   `--no-mention`.
@@ -35,8 +35,9 @@ Boundaries should be light and useful:
   direct mentions and replies available; it never clears an existing ignore. A listener also loses
   every outgoing listening relation when leaving the square. Audience is fixed when each activity lands; later listening changes never
   rewrite history.
-  An activity without mention metadata or a bell remains valid and lands even when nobody is listening. The core library and CLI never treat an empty audience as invalid. A bell reaches all joined participants (everyone watching
-  with `--mention` receives it).
+  A bare activity remains valid and lands even when nobody is listening. The core library and CLI never
+  treat an empty audience as invalid. Address multiple people by naming them; historically landed
+  activities retain their original audience.
 
 Do not turn those boundaries into a bureaucratic rulebook. The activity stream stays readable through
 `history`; the `.square` artifact persists the square's state and is not participant-facing. Activity bodies,
