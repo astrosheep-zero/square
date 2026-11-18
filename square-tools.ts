@@ -73,8 +73,8 @@ interface LedgerToolDefinition {
 }
 type ToolDefinition = SingleSquareToolDefinition | DiscoveryToolDefinition | LedgerToolDefinition;
 
-const location = z.string().describe('Path to the .square file, relative to the working directory.');
-const participant = z.string().optional().describe('Your name in the square. Leave it out if you hold exactly one name here.');
+const location = z.string().describe('Path to the .square file.');
+const participant = z.string().optional().describe('Your name in the square.');
 const activityId = z.string().regex(/^act\/(0|[1-9][0-9]*)$/) as z.ZodType<ActivityId>;
 const stringArray = z.array(z.string());
 
@@ -140,7 +140,7 @@ const listSchema = z.object({
 
 export const SQUARE_TOOLS: readonly ToolDefinition[] = [
   {
-    name: 'list', description: 'Find nearby squares, including your joined names and what is waiting for them. Start here to choose a location.',
+    name: 'list', description: 'Find nearby squares, including your joined names and what is waiting for them.',
     inputSchema: listSchema,
     async runDiscovery(args, control, binding) {
       const options = listSchema.parse(args);
@@ -148,31 +148,31 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
       return renderSquareList(result, { now: (binding.now ?? Date.now)(), depth: options.depth ?? DEFAULT_LIST_DEPTH, limit: options.limit ?? DEFAULT_LIST_LIMIT, surface: 'tool' });
     },
   },
-  tool('join', 'Step into the square under your name. Do this once before you speak or perceive. You arrive seeing what was said most recently.', {
+  tool('join', 'Step into the square under your name and see what was said most recently.', {
     as: z.string().describe('Your name in the square.'),
-    takeover: z.boolean().optional().describe('Claim this name even though another session holds it now. That session loses it.'),
+    takeover: z.boolean().optional().describe('Claim this name from another session.'),
     last: z.number().int().min(1).max(HISTORY_MAX_LIMIT).optional().describe('How many recent public activities to show on arrival (default 10).'),
   }, (square, { as, takeover, last }, control, identity) => square.join(requireJoinName(as), { ...identity, owner: requireOwner(identity.owner), takeover, last, observe: true }, control),
     rendering((result: JoinPresentation) => renderJoinResult(result, undefined, 'tool'))),
-  tool('express', 'Speak or act in the square. Plain words, half-formed ideas and *actions* all belong here. Mention or reply to someone to be heard by them; ring the bell to be heard by everyone. Said to no one in particular, your words reach those who listen to you.', {
+  tool('express', 'Speak or act in the square. Plain words, half-formed ideas and *actions* all belong here. Said to no one in particular, your words reach those who listen to you.', {
     as: participant,
     body: z.string().describe('What you say or do. Markdown works; *asterisks* mark an action.'),
-    mentions: stringArray.optional().describe('Who you are speaking to. An @name in the body that matches someone here counts too. Absent targets do not block the activity; you are told who was not reached.'),
-    bell: z.boolean().optional().describe('Call everyone in the square. Not with mentions.'),
-    reply: activityId.optional().describe('The activity you are answering, like act/12. Its author hears you if still here.'),
-    noMention: z.boolean().optional().describe('Leave @names in the body as plain text. Mentions and reply still reach people.'),
+    mentions: stringArray.optional().describe('Who you are speaking to. An @name in the body that matches someone here counts too.'),
+    bell: z.boolean().optional().describe('Call everyone in the square.'),
+    reply: activityId.optional().describe('The activity you are answering, like act/12.'),
+    noMention: z.boolean().optional().describe('Leave @names in the body as plain text.'),
     force: z.boolean().optional().describe('Speak now, even if something reached you that you have not perceived yet.'),
     noWait: z.boolean().optional().describe('If you are speaking too fast, return at once instead of waiting.'),
   }, async (square, { body, bell, as, ...options }, control, identity) =>
     (await selectOwnSeat(square, identity.owner, as)).express(body, { ...options, ...(bell ? { reach: 'bell' } : {}), observe: true }, control),
     rendering((result: ExpressResult) => renderExpression(result.observation?.location ?? '', result, undefined, 'tool'))),
-  tool('perceive', 'Take in what reached you since you last looked: mentions, replies, bells, and words from those you listen to. What you perceive no longer waits for you; history lets you look back.', {
+  tool('perceive', 'Take in what reached you since you last looked: mentions, replies, bells, and words from those you listen to.', {
     as: participant,
-    id: activityId.optional().describe('Open this one activity in full, like act/12. Use it alone.'),
-    idle: z.string().optional().describe('When nothing is waiting, wait for activity or this much quiet, like "30s". Leave it out to return at once.'),
+    id: activityId.optional().describe('Open this one activity in full, like act/12.'),
+    idle: z.string().optional().describe('When nothing is waiting, wait for activity or this much quiet, like "30s".'),
     from: stringArray.optional().describe('Only what these participants said.'),
     mention: z.boolean().optional().describe('Only what was addressed to you, and bells.'),
-    limit: z.number().int().min(1).max(PERCEIVE_MAX_LIMIT).optional().describe('At most this many at once (default 10). The rest keeps waiting.'),
+    limit: z.number().int().min(1).max(PERCEIVE_MAX_LIMIT).optional().describe('At most this many at once (default 10).'),
     takeover: z.boolean().optional().describe('Take over from another active idle perceive for this participant.'),
   }, async (square, { as, idle, ...args }, control, identity) => {
     const options: PerceiveOptions = { ...args, ...(idle === undefined ? {} : { idle: parseDurationMs(idle, 'idle') }) };
@@ -184,7 +184,7 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
       const renderOptions = options.id === undefined ? { ...options, limit: options.limit ?? PERCEIVE_DEFAULT_LIMIT } : options;
       return renderPerceiveOutcome(result.observation?.location ?? '', result, renderOptions, undefined, 'tool').stdout;
     })),
-  tool('history', 'Look back at what was said. Reading here takes nothing in: whatever waits for perceive keeps waiting. Page with before or after.', {
+  tool('history', 'Look back at what was said without taking anything in.', {
     limit: z.number().int().min(1).max(HISTORY_MAX_LIMIT).optional().describe('How many per page (default 10).'),
     order: z.enum(['asc', 'desc']).optional().describe('"asc" for oldest first (default), "desc" for newest first.'),
     before: activityId.optional().describe('The page just before this activity, like act/12.'),
@@ -202,16 +202,16 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     return { ...(await square.history({ ...query, observe: true }, control)), query };
   },
     rendering((result: HistoryResult & { query: HistoryQuery }, args) => renderHistoryResult(result.observation?.location ?? '', result, { query: result.query, full: args.full === true, surface: 'tool' }))),
-  tool('attention', 'Turn toward someone or away from them, from now on. Listen: hear everything they say, even to others. Unlisten: stop listening without clearing an ignore; mentions and replies still reach you unless ignored. Ignore: hear nothing from them but bells. What was already said stays as it was.', {
-    as: participant, action: z.enum(['listen', 'unlisten', 'ignore']).describe('"listen", "unlisten" or "ignore". Listening again ends an ignore.'), target,
+  tool('attention', 'Turn toward someone or away from them. Listen: hear everything they say, even to others. Unlisten: stop listening to them. Ignore: hear nothing from them but bells.', {
+    as: participant, action: z.enum(['listen', 'unlisten', 'ignore']).describe('"listen", "unlisten" or "ignore".'), target,
   }, async (square, { as, action, target }, control, identity) =>
     (await selectOwnSeat(square, identity.owner, as))[action](target, { observe: true }, control),
   rendering((result: ListenerChangeResult, args) => renderListenerChange(result.observation?.location ?? '', args.action as ListenerVerb, result))),
-  tool('done', 'Step out of the square. Everyone sees you leave, and you stop listening to anyone. Leaving carries no words, so say goodbye with express first. Stay instead if someone may still need you; you can join again later.', { as: participant },
+  tool('done', 'Step out of the square.', { as: participant },
     async (square, { as }, control, identity) => (await selectOwnSeat(square, identity.owner, as)).done(undefined, { observe: true }, control),
     rendering((result: LifecycleResult) => renderLifecycleResult(result.observation?.location ?? '', result))),
   tool('status', 'Look around the square: who is here, the latest activity, and who you listen to.', {
-    as: z.string().optional().describe('Whose listening to show. Leave it out if you hold exactly one name here.'),
+    as: z.string().optional().describe('Whose listening to show.'),
   }, async (square, { as }, control, identity) => {
     const viewer = (await selectOwnSeat(square, identity.owner, as, { optional: true }))?.name;
     return square.status({ viewer, observe: true }, control);

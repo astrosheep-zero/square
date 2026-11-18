@@ -120,7 +120,7 @@ test('bare activities land without an audience and listeners receive later bare 
   assert.match(absent.stdout, /already ignores @Alice/);
 });
 
-test('listener and perceive help teach future-only directed attention', () => {
+test('listener help keeps future-only attention and perceive help names directed attention', () => {
   for (const command of ['listen', 'ignore', 'unlisten', 'perceive']) {
     const result = run([command, '--help']);
     assert.equal(result.status, 0, result.stderr);
@@ -128,7 +128,8 @@ test('listener and perceive help teach future-only directed attention', () => {
   }
   const perceiveHelp = run(['perceive', '--help']);
   assert.doesNotMatch(perceiveHelp.stdout, /what others have said or done/);
-  assert.match(perceiveHelp.stdout, /fixed when each say lands/);
+  assert.doesNotMatch(perceiveHelp.stdout, /fixed when each say lands/);
+  assert.match(perceiveHelp.stdout, /--mention\s+Match direct attention/);
 });
 
 test('perceive limit is bounded and mention is boolean', () => {

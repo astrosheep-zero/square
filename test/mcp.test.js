@@ -179,7 +179,7 @@ test('one MCP server accepts per-call participants without a configured default'
     for (const name of ['join', 'express', 'perceive', 'attention', 'done', 'status']) {
       const schema = tools.find((tool) => tool.name === name).inputSchema;
       assert.equal(schema.properties.as.type, 'string');
-      assert.equal(schema.properties.as.description, name === 'status' ? 'Whose listening to show. Leave it out if you hold exactly one name here.' : name === 'join' ? 'Your name in the square.' : 'Your name in the square. Leave it out if you hold exactly one name here.');
+      assert.equal(schema.properties.as.description, name === 'status' ? 'Whose listening to show.' : 'Your name in the square.');
       assert.equal(schema.required?.includes('as') ?? false, name === 'join');
       assert.equal('session' in schema.properties, false);
     }
