@@ -304,6 +304,9 @@ const integrationEdges = new Map([
   ['cli/observation-commands.ts -> codex-hook.ts', ['runCodexHook', 'runCodexInterrupt']],
   ['cli/observation-commands.ts -> codex-watch.ts', ['runCodexWatch']],
   ['mcp.ts -> claude-mcp-context.ts', ['readClaudeMcpCall']],
+  ['cli/context.ts -> participant-identity.ts', ['akumaActorFromEnvironment', 'harnessSessionSources', 'resolveParticipantIdentity']],
+  ['cli/mcp-server-command.ts -> participant-identity.ts', ['akumaActorFromEnvironment']],
+  ['mcp.ts -> participant-identity.ts', ['resolveParticipantIdentity']],
   ['cli/ledger-command.ts -> ledger-maintenance.ts', ['gcHostLedger']],
 ]);
 const pureBindings = new Map([
@@ -319,6 +322,7 @@ const pureTypeBindings = new Map([
 ]);
 const integrationTypeBindings = new Map([
   ['cli/harness-command.ts -> harness.ts', ['HarnessAction', 'HarnessTargetResult']],
+  ['mcp.ts -> participant-identity.ts', ['AkumaActor']],
   ['cli/ledger-command.ts -> ledger-maintenance.ts', ['LedgerMaintenanceReport']],
 ]);
 const presentationHelpers = new Set(['presentation.ts', 'operation-presentation.ts', 'time.ts', 'tty-style.ts', 'help.ts', 'identity.ts']);
@@ -383,7 +387,7 @@ test('transport boundary detects hidden execution behind helpers and limits nati
   ]);
   assert.deepEqual(transportLeaks(sources, ['cli/program.ts', 'presentation.ts', 'mcp.ts']), [
     'integration exception exceeded: mcp.ts -> claude-mcp-context.ts (beginClaudeMcpCall)',
-    'private binding: mcp.ts -> participant-identity.ts (*)',
+    'integration exception exceeded: mcp.ts -> participant-identity.ts (*)',
     'private binding: presentation.ts -> square-core.ts (audienceIncludes)',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> artifact.ts',
     'private execution import: cli/program.ts -> cli/nested.ts -> cli/render.ts -> views.ts',

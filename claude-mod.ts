@@ -6,6 +6,7 @@ import { z } from 'zod/v4';
 import { DeliveryLedger, deliveryLedgerLocation, type DeliveryTransport, type TransportOutcome } from './delivery-ledger.js';
 import { retainDeliveryLedger } from './delivery-lifetime.js';
 import { harnessOwner } from './owner.js';
+import { akumaActorFromEnvironment } from './participant-identity.js';
 import { attachDeliverySession, detachDeliverySession } from './session-lifecycle.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from './claude-mcp-context.js';
 import { renderDeliveryReminder } from './delivery-frame.js';
@@ -96,7 +97,12 @@ export async function runClaudeMod(
           // actual tool event is still authoritative, never its model arguments.
           if (receiver?.mode === 'stopped' || !await state(data.agentId, 'busy')) throw new Error('Square MCP call identity unavailable');
         }
-        return beginClaudeMcpCall({ toolUseId: data.toolUseId, sessionId, cwd: data.cwd, agentId: data.agentId }, env, lifetimeSignal);
+        // The helper may inherit an enclosing actor. Bind that pair only for the
+        // exact launcher-owned main session, never for a native child or a switch.
+        const actor = data.agentId === undefined && env.KEIYAKU_CLAUDE_ACTOR_SESSION === sessionId
+          ? akumaActorFromEnvironment(env) : undefined;
+        return beginClaudeMcpCall({ toolUseId: data.toolUseId, sessionId, cwd: data.cwd, agentId: data.agentId,
+          ...(actor === undefined ? {} : { actor }) }, env, lifetimeSignal);
       }
       case 'mcp-end': await endClaudeMcpCall(data.toolUseId, data.token, env); return { ok: true };
       case 'close':

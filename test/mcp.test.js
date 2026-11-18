@@ -9,6 +9,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { akumaDeliveryOwner } from '../dist/index.js';
 import { Square, selectOwnSeat, discover } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { createSquareMcpServer } from '../dist/mcp.js';
@@ -302,6 +304,39 @@ test('MCP call-local identities supply distinct bodies and keep configured body 
     assert.equal(configured.isError, undefined, JSON.stringify(configured));
     await recognizes(configuredBody, 'Configured');
   } finally { await close(); }
+});
+
+test('only dedicated stdio binds its launcher actor; shared MCP still uses native call ownership', async t => {
+  const { cwd, squarePath, env } = await fixture();
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const actor = { world: fs.realpathSync(cwd), akuId: 'aku/alpha/1234abcd' };
+  const inherited = { ...env, KEIYAKU_ACTOR_WORLD: actor.world, KEIYAKU_ACTOR_ID: actor.akuId };
+  const cli = path.resolve('dist/square.js');
+  const launch = async () => {
+    const client = new Client({ name: 'square-dedicated-test', version: '1.0.0' });
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [cli, 'mcp-server'], cwd, env: inherited }));
+    return client;
+  };
+  const run = (client, name, as) => client.callTool({ name, arguments: { location: squarePath, as },
+    _meta: { 'ai.opencode/sessionID': 'native-sibling' } });
+  const first = await launch();
+  try {
+    const joined = await run(first, 'join', 'Dedicated');
+    assert.equal(joined.isError, undefined, joined.content[0].text);
+  } finally { await first.close(); }
+  const second = await launch();
+  try {
+    const perceived = await run(second, 'perceive', 'Dedicated');
+    assert.equal(perceived.isError, undefined, perceived.content[0].text);
+  } finally { await second.close(); }
+  const shared = await connectedClient(createSquareMcpServer({ cwd, env: inherited }));
+  const square = await Square.at({ path: squarePath });
+  try {
+    assert.equal((await run(shared.client, 'perceive', 'Dedicated')).isError, true);
+    assert.equal((await run(shared.client, 'join', 'Shared')).isError, undefined);
+    assert.equal((await selectOwnSeat(square, akumaDeliveryOwner(actor))).name, 'Dedicated');
+    assert.equal((await selectOwnSeat(square, 'opencode:native-sibling')).name, 'Shared');
+  } finally { await shared.close(); await square.close(); }
 });
 
 test('MCP Claude child call body retains agent ownership', async (t) => {

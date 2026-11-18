@@ -5,11 +5,16 @@ import { deliveryLedgerLocation } from './delivery-ledger.js';
 import { z } from 'zod/v4';
 import { withFileLock } from './file-lock.js';
 import { SquareError } from './model.js';
+import { requireAkumaActor } from './owner.js';
 
 const LEASE_MS = 10 * 60 * 1000;
 const text = z.string().max(4096).refine(value => value.trim().length > 0 && !/[\x00-\x1f\x7f]/u.test(value));
+const actor = z.unknown().transform((value, context) => {
+  try { return requireAkumaActor(value); }
+  catch { context.addIssue({ code: 'custom', message: 'Invalid Keiyaku actor identity' }); return z.NEVER; }
+});
 const coordinate = z.object({
-  toolUseId: text, sessionId: text, cwd: text.refine(path.isAbsolute), agentId: text.optional(),
+  toolUseId: text, sessionId: text, cwd: text.refine(path.isAbsolute), agentId: text.optional(), actor: actor.optional(),
 });
 const record = coordinate.extend({ token: z.string().regex(/^[a-f0-9]{64}$/u), expiresAt: z.number() });
 type ClaudeMcpCall = z.infer<typeof coordinate>;

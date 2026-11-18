@@ -1,6 +1,6 @@
 import os from 'node:os';
 import { harnessOwner, localUserOwner, type Owner } from '../square-api.js';
-import { harnessSessionSources } from '../participant-identity.js';
+import { akumaActorFromEnvironment, harnessSessionSources, resolveParticipantIdentity } from '../participant-identity.js';
 import { codexWakeAddress } from '../codex-address.js';
 
 import { commandUsageHint } from '../help.js';
@@ -174,8 +174,12 @@ export function squareInput(context: CommandContext) {
 }
 
 export function commandIdentity(env: NodeJS.ProcessEnv, explicit?: Owner): { owner: Owner; wakeAddress?: WakeAddress } {
-  if (explicit !== undefined) return { owner: explicit };
-  if (env.SQUARE_OWNER !== undefined) return { owner: env.SQUARE_OWNER };
+  const selected = explicit ?? env.SQUARE_OWNER;
+  if (selected !== undefined) return { owner: selected };
+  return resolveParticipantIdentity(akumaActorFromEnvironment(env), () => nativeCommandIdentity(env));
+}
+
+export function nativeCommandIdentity(env: NodeJS.ProcessEnv): { owner: Owner; wakeAddress?: WakeAddress } {
   if (env.CLAUDE_CODE_CHILD_SESSION === '1') throw new Error('Harness identity is incomplete; provide --owner explicitly.');
   const selected = harnessSessionSources.flatMap(({ variable, channel }) => env[variable]?.trim() ? [{ channel, session: env[variable]!.trim() }] : []);
   const native = selected.filter(source => source.channel !== 'paseo');

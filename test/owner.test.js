@@ -4,10 +4,38 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { Square, SquareError, harnessOwner, decodeHarnessOwner, localUserOwner, inbox } from '../dist/index.js';
+import { Square, SquareError, akumaDeliveryOwner, harnessOwner, decodeHarnessOwner, localUserOwner, inbox } from '../dist/index.js';
 import { validateOwner } from '../dist/model.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { commandIdentity } from '../dist/cli/context.js';
+import { requestPiAkumaActor } from '../dist/participant-identity.js';
+
+test('a complete actor supersedes native routes, but explicit CLI ownership still wins', () => {
+  const pair = { world: '/one:world', akuId: 'aku/alpha/1234abcd' };
+  const env = { KEIYAKU_ACTOR_WORLD: pair.world, KEIYAKU_ACTOR_ID: pair.akuId,
+    PI_SESSION_ID: 'physical', PASEO_AGENT_ID: 'managed' };
+  const owner = akumaDeliveryOwner(pair);
+  assert.deepEqual(commandIdentity(env), { owner, wakeAddress: { kind: 'keiyaku', address: pair } });
+  assert.deepEqual(commandIdentity(env, 'explicit'), { owner: 'explicit' });
+  assert.notEqual(owner, akumaDeliveryOwner({ ...pair, world: '/one' }));
+  assert.notEqual(owner, akumaDeliveryOwner({ ...pair, akuId: 'aku/alpha/1234abce' }));
+  assert.throws(() => commandIdentity({ ...env, KEIYAKU_ACTOR_ID: undefined }), /full AkuId/);
+  assert.throws(() => commandIdentity({ ...env, CLAUDE_CODE_CHILD_SESSION: '1' }), /incomplete/);
+  assert.throws(() => akumaDeliveryOwner({ ...pair, world: '/one/../two' }), /canonical absolute/);
+});
+
+test('the Pi identity request only captures one synchronous complete reply', () => {
+  const pair = { world: '/world', akuId: 'aku/alpha/1234abcd' };
+  let late;
+  assert.equal(requestPiAkumaActor({ emit(topic, { reply }) {
+    assert.equal(topic, 'keiyaku:actor:request');
+    late = reply;
+  } }), undefined);
+  late(pair);
+  assert.deepEqual(requestPiAkumaActor({ emit(_topic, { reply }) { reply(pair); } }), pair);
+  assert.throws(() => requestPiAkumaActor({ emit(_topic, { reply }) { reply(pair); reply(pair); } }), /ambiguous/);
+  assert.throws(() => requestPiAkumaActor({ emit(_topic, { reply }) { reply(undefined); } }), /Invalid/);
+});
 
 const cli = path.resolve(import.meta.dirname, '../dist/square.js');
 

@@ -30,6 +30,14 @@ without requiring access to the user ledger. This is not proof of current host a
 detach or deletion is learned at the next privileged producer reconciliation. A local control never
 grants host delivery authority or revives a deleted session; export checks the actual ledger state.
 
+A Keiyaku-bound join uses `akumaDeliveryOwner({world, akuId})` from the package root. It derives
+one opaque owner from the exact canonical physical World root and full AkuId supplied by the host;
+both coordinates matter, and display names, aliases, working directories, and native session IDs do
+not. The owner remains attached across native Body exits: the exiting host detaches only its own
+physical owner. `done` and takeover still affect only the captured seat. Confirmed Akuma retirement
+can mark an existing generation deleted through the ledger; the next privileged operation in each
+square reconciles the usual fenced `done`. Exit, kill, a missing World or failed wake is not that proof.
+
 Exact future ACK is producer-owned and recipient-scoped; see [square-api.md](square-api.md).
 Proactive delivery suppression belongs in the host delivery ledger; see
 [delivery-primitives.md](delivery-primitives.md).

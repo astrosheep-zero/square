@@ -10,6 +10,19 @@ milliseconds; `reach` is `mention`, `reply`, `attention`, or historical `bell`. 
 model-facing card; `body` holds the full Markdown for display. Receivers validate these details and render them
 without opening producer storage. Cards without valid presentation details remain plain text.
 
+When Square lands an `act/N` in a file-backed square, it may dispatch a Tell only to seats whose
+stored audience reason for that activity is `mention`. One activity may address several named seats;
+each eligible seat has its own delivery key. The producer selects from those landed facts, never
+from card wording or presentation details. Replies, listens, notices and other producers' cards
+cannot start a Tell. The transport proves the target World and full AkuId, checks the route's stable
+owner, and sends only awareness with the square, recipient and `act/N` to perceive. Tell is not
+addressed back to the recipient as a Keiyaku initiator. A confirmed admission creates custody, not
+a presentation receipt; uncertain admission is held, not replayed. The route is optional. The producer resolves the public
+`@astrosheep/keiyaku` SDK from the installed Square package, or from an absolute SDK entry point
+chosen by the launcher in `SQUARE_KEIYAKU_SDK`. It never loads a module or executable named in a
+route or consults the sender's working directory for one. An absent SDK does not reject the activity
+or mark it seen. See [the paired witness](keiyaku-wake-witness.md) for native verification.
+
 Posting is idempotent by owner and key content. `DeliveryKey` is `readonly string[]`: nonempty
 arrays for exact identities, with verbatim string segments (including empty strings and arbitrary UTF-16).
 Prefixes may be `[]`, which selects every key in the chosen scope. String keys, sparse arrays, nested

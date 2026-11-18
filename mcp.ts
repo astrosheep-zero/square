@@ -4,8 +4,8 @@ import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, createSquareToolRunner, squareT
 import { codexWakeAddress } from './codex-address.js';
 import { readClaudeMcpCall } from './claude-mcp-context.js';
 import { SQUARE_IDENTITY } from './identity.js';
-import { Square, deliveryLedgerLocation, discover, muteDeliveryLedger, unmuteDeliveryLedger } from './square-api.js';
-import { harnessOwner, type Owner } from './square-api.js';
+import { Square, deliveryLedgerLocation, discover, harnessOwner, muteDeliveryLedger, unmuteDeliveryLedger, type Owner } from './square-api.js';
+import { resolveParticipantIdentity, type AkumaActor } from './participant-identity.js';
 import type { SquareAtInput } from './square-facade.js';
 import type { WakeAddress } from './model.js';
 
@@ -14,11 +14,13 @@ export interface SquareMcpOptions extends Omit<SquareAtInput, 'path'> {
   readonly env?: NodeJS.ProcessEnv;
   readonly owner?: Owner;
   readonly wakeAddress?: WakeAddress;
+  /** Only a launcher-bound, single-actor stdio server can supply this. */
+  readonly dedicatedActor?: AkumaActor;
 }
 export type SquareMcpServer = McpServer;
 
 export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServer {
-  const { owner: configuredOwner, wakeAddress, ...resourceOptions } = options;
+  const { owner: configuredOwner, wakeAddress, dedicatedActor, ...resourceOptions } = options;
   const baseEnv = { ...(resourceOptions.env ?? process.env) };
   const clock = resourceOptions.clock ?? Date.now;
   const ledgerLocation = resourceOptions.ledgerLocation ?? deliveryLedgerLocation(baseEnv);
@@ -36,20 +38,23 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
         const claude = baseEnv.SQUARE_CLAUDE_MCP_CONTEXT === '1'
           ? await readClaudeMcpCall(extra._meta?.['claudecode/toolUseId'], baseEnv)
           : undefined;
-        const owner = claude !== undefined
-          ? harnessOwner({ channel: 'claude-code', session: claude.sessionId, ...(claude.agentId === undefined ? {} : { agent: claude.agentId }) })
-          : typeof threadId === 'string' && threadId.trim()
-            ? harnessOwner({ channel: 'codex', session: threadId })
+        const identity = resolveParticipantIdentity(claude === undefined ? dedicatedActor : claude.actor, () => {
+          if (claude === undefined && typeof threadId === 'string' && threadId.trim()) {
+            return { owner: harnessOwner({ channel: 'codex', session: threadId }),
+              wakeAddress: { ...codexWakeAddress(threadId, baseEnv), kind: 'codex-queue' as const } };
+          }
+          const owner = claude !== undefined
+            ? harnessOwner({ channel: 'claude-code', session: claude.sessionId, agent: claude.agentId })
             : typeof opencodeSessionId === 'string' && opencodeSessionId.trim()
-              ? harnessOwner({ channel: 'opencode', session: opencodeSessionId })
-              : configuredOwner;
-        const callWake = wakeAddress !== undefined && (owner === configuredOwner
-          || wakeAddress.kind === 'paseo' && wakeAddress.address.agentId === baseEnv.PASEO_AGENT_ID
-          || wakeAddress.kind === 'opencode-server' && wakeAddress.address.sessionId === opencodeSessionId)
-          ? wakeAddress : undefined;
+              ? harnessOwner({ channel: 'opencode', session: opencodeSessionId }) : configuredOwner;
+          const callWake = wakeAddress !== undefined && (owner === configuredOwner
+            || wakeAddress.kind === 'paseo' && wakeAddress.address.agentId === baseEnv.PASEO_AGENT_ID
+            || wakeAddress.kind === 'opencode-server' && wakeAddress.address.sessionId === opencodeSessionId)
+            ? wakeAddress : undefined;
+          return { owner, wakeAddress: callWake };
+        });
         return {
-          identity: { owner, wakeAddress: claude === undefined && typeof threadId === 'string' && threadId.trim()
-            ? { ...codexWakeAddress(threadId, baseEnv), kind: 'codex-queue' as const } : callWake },
+          identity,
           now: clock,
           open: (location, control) => Square.at({ ...resourceOptions, ledgerLocation,
             cwd: claude?.cwd ?? resourceOptions.cwd, path: location, clock }, control),

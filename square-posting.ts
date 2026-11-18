@@ -200,7 +200,9 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
         .flatMap(card => { const id = parseSquarePostKey(location, card.key); return id ? [id] : []; });
       const posts = (await artifact.read(facts => facts.postsAt(pending)
         .filter(post => post.owner === owner && !post.consumed && currentPost(facts, post)), signal)).value;
-      for (const post of posts) await dispatchPostedCard(ledger, owner, squarePostKey(location, post), result => lifetime?.track(result), signal);
+      for (const post of posts) await dispatchPostedCard(ledger, owner, squarePostKey(location, post), {
+        signal, track: result => lifetime?.track(result), squareMention: post.kind === 'activity' && post.route === 'mention',
+      });
     }
   } catch {
     // Unsettled/uncertain producer work is retried with its stable key at the next mutation.

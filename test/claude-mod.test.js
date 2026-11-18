@@ -20,7 +20,7 @@ async function until(check) {
 
 async function fixture(t, options = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-claude-mod-'));
-  const env = { SQUARE_DELIVERY: path.join(root, 'delivery.sqlite') };
+  const env = { ...options.env, SQUARE_DELIVERY: path.join(root, 'delivery.sqlite') };
   const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
   const module = await import(`../plugins/claude/hooks/register.js?test=${randomUUID()}`);
   const hooks = new Map(), children = [], effects = [], logs = [], requests = [];
@@ -176,6 +176,23 @@ test('clear closes the captured attachment; the next prompt starts a new helper 
   assert.equal(f.effects.length, 1);
   assert.match(f.effects[0].input.message.content[0].text, /new-session/);
   assert.doesNotMatch(f.effects[0].input.message.content[0].text, /must not leak/);
+});
+
+test('a launcher actor is correlated only to the matching Claude main session, not a child or a switched session', async t => {
+  const actor = { world: '/bound-world', akuId: 'aku/claude/1234abcd' };
+  const f = await fixture(t, { env: { KEIYAKU_CLAUDE_ACTOR_SESSION: 'native-session',
+    KEIYAKU_ACTOR_WORLD: actor.world, KEIYAKU_ACTOR_ID: actor.akuId } });
+  const run = async (agentId, expected) => {
+    const tool_use_id = randomUUID();
+    const result = await f.event('tool.call', { tool_use_id, agentId }, async () => {
+      assert.deepEqual((await readClaudeMcpCall(tool_use_id, f.env)).actor, expected);
+      return 'called';
+    });
+    assert.equal(result, 'called');
+  };
+  await Promise.all([run(undefined, actor), run('child-agent', undefined)]);
+  f.setSession('new-session');
+  await run(undefined, undefined);
 });
 
 test('main and child MCP identities come from native tool metadata; collision denies and finally cleans the exact call', async t => {

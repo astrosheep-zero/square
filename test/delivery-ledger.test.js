@@ -1206,9 +1206,11 @@ test('notification helper snapshots the key before its first session await', asy
   await f.post(['helper', 'card']);
   const key = ['helper', 'card'];
   const tracked = [];
-  const sending = dispatchPostedCard(f.ledger, owner, key, result => tracked.push(result), undefined, [{ kind: push.kind, send: async card => {
-    assert.deepEqual(card.key, ['helper', 'card']); return 'presented';
-  } }]);
+  const sending = dispatchPostedCard(f.ledger, owner, key, {
+    track: result => tracked.push(result), transports: [{ kind: push.kind, send: async card => {
+      assert.deepEqual(card.key, ['helper', 'card']); return 'presented';
+    } }],
+  });
   key[0] = 'changed';
   await sending;
   assert.equal(tracked[0].outcome, 'presented');

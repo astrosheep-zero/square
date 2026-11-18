@@ -8,24 +8,25 @@ import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { SQUARE_TOOLS } from '../dist/square-tools.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { akumaDeliveryOwner } from '../dist/index.js';
 
-function registeredTools() {
+function registeredTools(events) {
   const tools = new Map();
   squarePiExtension({
     registerTool(tool) { tools.set(tool.name, tool); },
-    registerFlag() {}, getFlag() {}, on() {},
+    registerFlag() {}, getFlag() {}, on() {}, events,
     sendMessage() { throw new Error('registration must not send messages'); },
   });
   return tools;
 }
 
-async function fixture(t, options = {}) {
+async function fixture(t, options = {}, events) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-pi-tools-'));
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const squarePath = path.join(cwd, 'test.square');
   const square = await Square.build({ path: squarePath, markdown: 'Native tool scene', ...options });
   await square.close();
-  const tools = registeredTools();
+  const tools = registeredTools(events);
   const context = (id = 'pi-tools-first', directory = cwd) => ({ cwd: directory, sessionManager: { getSessionId: () => id } });
   const call = async (name, args = {}, ctx = context(), signal) => {
     const result = await tools.get(`square_${name}`).execute('test', { ...(name !== 'list' ? { location: 'test.square' } : {}), ...args }, signal, undefined, ctx);
@@ -152,6 +153,27 @@ test('Pi express reports absent and away targets once, while addressed activity 
   await call('express', { as: 'Alice', body: 'resume check', noMention: true, force: true });
   const perceived = await call('perceive', { as: 'Bob' }, bobContext);
   assert.match(perceived.content[0].text, /@bob @BOB @Nobody @nobody/);
+});
+
+test('Pi tool bindings come from each session bus, not the process or native session label', async t => {
+  const actor = { world: '/bound-world', akuId: 'aku/alpha/1234abcd' };
+  const principal = await fixture(t, {}, { emit(_topic, { reply }) { reply(actor); } });
+  const ordinary = registeredTools(); // another extension instance in the same process
+  const as = 'alpha';
+  const joined = await principal.call('join', { as });
+  assert.equal(joined.isError, undefined, joined.content[0].text);
+  const seat = await readSeat(principal.squarePath, as);
+  assert.equal(seat.owner, akumaDeliveryOwner(actor));
+  const ledger = await DeliveryLedger.open({ location: process.env.SQUARE_DELIVERY });
+  try {
+    assert.deepEqual((await ledger.session(seat.owner)).routes, [{ kind: 'keiyaku', address: actor }]);
+    const ordinaryAttempt = await ordinary.get('square_perceive').execute('test',
+      { location: principal.squarePath, as }, undefined, undefined, principal.context());
+    assert.equal(ordinaryAttempt.isError, true);
+    const successor = await principal.call('perceive', { as }, principal.context('another-native-session'));
+    assert.equal(successor.isError, undefined, successor.content[0].text);
+    assert.equal((await readSeat(principal.squarePath, as)).generation, seat.generation);
+  } finally { await ledger.close(); }
 });
 
 test('Pi list uses live owner and cwd, while single-square calls require location', async t => {

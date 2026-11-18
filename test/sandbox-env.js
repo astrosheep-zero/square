@@ -17,6 +17,10 @@ process.env.PASEO_HOST = `unix://${path.join(paseoHome, 'daemon.sock')}`;
 delete process.env.PASEO_PASSWORD;
 
 delete process.env.SQUARE_OWNER;
+delete process.env.SQUARE_KEIYAKU_SDK;
+delete process.env.KEIYAKU_ACTOR_WORLD;
+delete process.env.KEIYAKU_ACTOR_ID;
+delete process.env.KEIYAKU_CLAUDE_ACTOR_SESSION;
 process.env.PI_SESSION_ID = '';
 process.env.CLAUDE_CODE_SESSION_ID = '';
 process.env.CLAUDE_CODE_CHILD_SESSION = '';

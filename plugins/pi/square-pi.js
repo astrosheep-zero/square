@@ -4,6 +4,7 @@ import { z } from 'zod/v4';
 
 import { Square, deliveryLedgerLocation, discover, muteDeliveryLedger, unmuteDeliveryLedger } from '../../dist/square-api.js';
 import { harnessOwner } from '../../dist/owner.js';
+import { requestPiAkumaActor, resolveParticipantIdentity } from '../../dist/participant-identity.js';
 import { DeliveryLedger } from '../../dist/delivery-ledger.js';
 import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/delivery-frame.js';
 import { isCardPresentation } from '../../dist/card-presentation.js';
@@ -120,7 +121,8 @@ export default function squarePiExtension(pi) {
           const sessionId = ctx.sessionManager.getSessionId();
           const ledgerLocation = deliveryLedgerLocation(process.env), clock = () => Date.now();
           return {
-            identity: { owner: harnessOwner({ channel: 'pi', session: sessionId }) },
+            identity: resolveParticipantIdentity(requestPiAkumaActor(pi.events),
+              () => ({ owner: harnessOwner({ channel: 'pi', session: sessionId }) })),
             open: (location, control) => Square.at({ cwd: ctx.cwd, path: location, ledgerLocation, clock }, control),
             discover: (options, control) => discover({ cwd: ctx.cwd }, { ...options, ledgerLocation, clock }, control),
             ledger: {

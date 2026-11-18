@@ -24,7 +24,12 @@ The helper emits its randomly authenticated loopback address only to the owning 
 
 ## MCP call identity
 
-The bundled MCP server gets session, cwd and subagent attribution from the mod's native `tool.call` wrapper, matched only to Square MCP tools. Before calling the real tool, it captures the native `tool_use_id`, session and `agentId` in the call-local association keyed by Claude's `claudecode/toolUseId` metadata. A `finally` block removes only that exact association after the tool finishes, including failure. Calls interrupted before cleanup expire after ten minutes.
+The bundled MCP server gets session, cwd and subagent attribution from the mod's native `tool.call` wrapper, matched only to Square MCP tools. Before calling the real tool, it captures the native `tool_use_id`, session and `agentId` in the call-local association keyed by Claude's `claudecode/toolUseId` metadata. If the launcher identifies
+the same native main session (`KEIYAKU_CLAUDE_ACTOR_SESSION`) and supplies a complete Keiyaku
+actor pair, the helper includes that pair in this exact record. A child or a switched session cannot borrow the enclosing actor; when there
+is no such proof the call remains native. The bundled server never reads an actor from its own
+startup environment. A `finally` block removes only that exact association after the tool finishes,
+including failure. Calls interrupted before cleanup expire after ten minutes.
 
 Missing, duplicate, expired or mismatched identity fails closed before the MCP server runs. Models cannot supply identity as tool arguments. Main and child identities stay separate even when their calls overlap; no ordinary non-Square tool launches an identity command.
 

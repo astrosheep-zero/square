@@ -1,3 +1,43 @@
+import { akumaDeliveryOwner, requireAkumaActor, type AkumaActor, type Owner } from './owner.js';
+import type { WakeAddress } from './square-values.js';
+
+export type { AkumaActor } from './owner.js';
+
+/** Use only at a boundary whose process represents one actual invoking actor. */
+export function akumaActorFromEnvironment(env: NodeJS.ProcessEnv): AkumaActor | undefined {
+  // A Claude subagent can inherit its parent's environment; that proves nothing about the child.
+  if (env.CLAUDE_CODE_CHILD_SESSION === '1') return undefined;
+  const { KEIYAKU_ACTOR_WORLD: world, KEIYAKU_ACTOR_ID: akuId } = env;
+  return world === undefined && akuId === undefined ? undefined : requireAkumaActor({ world, akuId });
+}
+
+/** A complete actor binding replaces the native pair, never just its owner or its route. */
+export function resolveParticipantIdentity<T>(
+  actor: AkumaActor | undefined, native: () => T,
+): T | { owner: Owner; wakeAddress: WakeAddress } {
+  if (actor === undefined) return native();
+  const address = requireAkumaActor(actor);
+  return { owner: akumaDeliveryOwner(address), wakeAddress: { kind: 'keiyaku', address: { ...address } } };
+}
+
+interface ActorRequestBus {
+  emit(topic: string, request: { reply(pair: unknown): void }): void;
+}
+
+/** A reply is invocation-local, synchronous and unambiguous, or there is no usable binding. */
+export function requestPiAkumaActor(bus: ActorRequestBus | undefined): AkumaActor | undefined {
+  let replies = 0, pair: AkumaActor | undefined, invalid = false, open = true;
+  try {
+    bus?.emit('keiyaku:actor:request', { reply(value) {
+      if (!open) return;
+      replies++;
+      try { pair = requireAkumaActor(value); } catch { invalid = true; }
+    } });
+  } finally { open = false; }
+  if (replies > 1 || invalid) throw new Error('Invalid or ambiguous Keiyaku actor identity for this Pi call.');
+  return pair;
+}
+
 export function participantIdentity(name: string): string {
   return `@${name}`;
 }

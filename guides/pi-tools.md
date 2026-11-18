@@ -22,9 +22,12 @@ counts. It accepts optional `depth` (0–16, default 4), `limit` (1–100, defau
 relative-path cursor. Join requires an explicit `as`. For later participant operations, an explicit `as` must name a current attached
 seat of the live Pi owner; without it, exactly one such seat is required. Status checks an explicit
 `as` the same way, but without `as` uses the sole attached seat as viewer or gives an unfiltered
-overview if there are zero or multiple. The extension encodes the live Pi session with
-`harnessOwner({channel: 'pi', session})`, never a model-provided session id, without mutating
-the process environment.
+overview if there are zero or multiple. An ordinary call uses `harnessOwner({channel: 'pi', session})`.
+A Keiyaku-hosted call instead uses the stable actor owner and Tell route if the invocation's own
+Pi event bus answers `keiyaku:actor:request` with one synchronous `reply({world, akuId})`. Missing
+provider preserves native ownership; malformed or multiple replies refuse. Neither model arguments
+nor ambient Keiyaku environment supply Pi tool identity. The native watcher still attaches and
+detaches only the physical Pi owner, so it does not inject a second copy of Akuma delivery.
 
 All ten tools return the CLI's human-readable text, without an `outputSchema` or
 `structuredContent`. In Pi codemode, a successful call resolves to a `string`:
@@ -42,7 +45,7 @@ come from the tool descriptions, shared with MCP through `square-tools.ts`.
 
 Each single-square operation opens and closes its own connection, including failure and cancellation cleanup.
 Discovery runs without opening a single `Square` resource.
-Pi `session_shutdown` detaches that exact owner's ledger session without ending membership: no `done`
+The Pi extension's `session_shutdown` detaches the exact physical Pi owner's ledger session without ending membership: no `done`
 lands, listens and the read horizon remain, and mentions received while away stay unread. Detached
 participants cannot write or receive proactive delivery. `session_start` attaches the same owner in the
 ledger before watching; it does not restore individual seats. New/forked harness owners do not inherit

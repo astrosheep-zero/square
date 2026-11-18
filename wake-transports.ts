@@ -4,9 +4,10 @@ export type WakeTransports = readonly DeliveryTransport[];
 
 /** Native receivers own their effects; producers never target Claude's private helper. */
 export async function createDefaultDeliveryTransports(): Promise<WakeTransports> {
-  const [{ HttpWakeTransport }, { PaseoWakeTransport }] = await Promise.all([
+  const [{ HttpWakeTransport }, { PaseoWakeTransport }, { KeiyakuWakeTransport }] = await Promise.all([
     import('./http-delivery.js'),
     import('./paseo-delivery.js'),
+    import('./keiyaku-delivery.js'),
   ]);
-  return [new HttpWakeTransport(), new PaseoWakeTransport()];
+  return [new HttpWakeTransport(), new PaseoWakeTransport(), new KeiyakuWakeTransport()];
 }
