@@ -84,6 +84,14 @@ The explicit offline Ledger4→5 and Square12→13 edges are described in [migra
 The ledger filename remains `delivery.v4.sqlite`: upgrading the format never silently selects a new
 filename. An old `delivery.v3.sqlite` is untouched and remains unsupported.
 
+`ledger.mute({durationMs}, signal?)` sets the one reserved null-owner `ledger-mute` hold from the
+ledger's configured clock and returns `{mutedUntil}`; `ledger.unmute(signal?)` idempotently releases only
+that row, and `ledger.mutedUntil(signal?)` reads its active deadline or `null`. Repeating mute replaces
+its own expiry even when shortening it. Unmute repairs no custody and dispatches nothing; independent
+seat, exact, prefix and permanent holds survive. Expiry is observed by ordinary reads and the existing
+eligibility paths, without a scheduler or clock event. `DeliveryLedger.open({readOnly: true})` validates an
+existing ledger without creating one.
+
 `ledger.setSuppression({owner, id, key, scope, expiresAt}, signal?)` atomically sets one named finite
 hold. A repeated id must match owner, key content and scope and already be timed; otherwise the
 operation refuses without changes. Matching expired holds can be replaced, and a collected id is
@@ -99,7 +107,8 @@ with finite expiry. Its reserved id cannot be used by an owner hold. One row fen
 post status, pending selection, presentation/handoff claims and final send guards. Suppressed new
 cards are retained under the usual cap and retention; a later normal pull can resume after expiry
 without another producer write. Holds do not recall external custody or invalidate truthful late
-receipts. This storage/API foundation does not add user-facing mute commands or timers.
+receipts. The global and Square-seat mute operations are thin callers of this row; they add no second
+persisted mute fact, scheduler or clock event.
 
 Permanent suppression retention drains through a partial `created_at` index. Pending producer selection
 still searches retained say/audience history, withdrawn-claim selection searches posting rows, and

@@ -4,7 +4,7 @@ import { canonicalPath } from './canonical-path.js';
 import { squareLocation } from './square-location.js';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { deliveryLedgerLocation } from './delivery-ledger.js';
+import { DeliveryLedger, deliveryLedgerLocation } from './delivery-ledger.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { InternalSquareError, SquareError, isSquareError, nameKey, validateName, type Owner, type Seat, type WatchOptions } from './model.js';
 import { checkControl, failure } from './operation-control.js';
@@ -25,6 +25,8 @@ import { createArtifactPort, createSquare, diagnoseSquareFile, prepareSquareBuil
 import type { SquareArtifactPort, SquareRead } from './ports.js';
 import { activityQueryFilter } from './activity-query.js';
 import { discoverSquares } from './list.js';
+import { readSquareHostObservations, seatMuteId, seatMuteKey, seatMutePrefix } from './square-notification-mute.js';
+import { muteDeadline } from './time.js';
 import { streamSquare } from './stream.js';
 import type {
   PerceiveOptions, PerceiveResult, PerceiveReason,
@@ -32,7 +34,7 @@ import type {
   ListeningResult, LifecycleResult, ObservationOptions, OperationControl, Participant, SquareAtInput,
   SquareBuildInput, SquareObservation, SquareLocation, StatusOptions, StatusResult, ParticipantsResult,
   RecoveryResult, DiscoveryOptions, InboxOptions, InboxResult, StreamOptions, StreamRecord, Activity, PerceivedActivity, ExpressInput,
-  SendInput, SendResult, FutureAck, PendingOptions, PendingResult, AckResult, ActivityId,
+  SendInput, SendResult, FutureAck, PendingOptions, PendingResult, AckResult, ActivityId, MuteResult,
 } from './square-facade.js';
 
 export type * from './square-facade.js';
@@ -157,11 +159,16 @@ export class SqliteSquare {
   private async contextObservation(participant?: string, control?: OperationControl): Promise<SquareObservation> {
     return (await this.artifact.read(facts => this.observation(inSquareCount(facts), participant), control?.signal)).value;
   }
-  /** Host liveness is a read-only, non-atomic overlay; it never changes membership. */
-  private async withHostPresence<T>(select: (facts: SquareRead, deliveryAvailable: (name: string) => boolean) => T, control?: OperationControl): Promise<T> {
+  /** Host liveness and mute deadlines are read-only overlays fenced by captured seats. */
+  private async withHostPresence<T>(select: (facts: SquareRead, deliveryAvailable: (name: string) => boolean,
+    mutes: { readonly ledgerMutedUntil?: number; readonly seat: (name: string) => number | undefined }) => T,
+  control?: OperationControl, includeMutes = false): Promise<T> {
     const seats = (await this.artifact.read(facts => facts.roster().filter(person => person.joined)
       .flatMap(person => { const seat = facts.seat(person.name); return seat === undefined ? [] : [seat]; }), control?.signal)).value;
-    const sessions = await readSquareSessions(seats, control?.signal, this.ledgerLocation);
+    const observations = includeMutes
+      ? await readSquareHostObservations(this.canonicalLocation, seats, this.clock, control?.signal, this.ledgerLocation)
+      : { sessions: await readSquareSessions(seats, control?.signal, this.ledgerLocation, this.clock),
+        seatMutedUntil: new Map<string, number>() };
     const captured = new Map(seats.map(seat => [nameKey(seat.participant), seat]));
     return (await this.artifact.read(facts => {
       const seat = (name: string): Seat | undefined => {
@@ -169,14 +176,58 @@ export class SqliteSquare {
         if (current === undefined) return undefined;
         const before = captured.get(nameKey(current.participant));
         const attached = before?.owner === current.owner && before.generation === current.generation
-          && sessions.get(current.owner)?.state === 'attached';
+          && observations.sessions.get(current.owner)?.state === 'attached';
         return { ...current, attachment: attached ? 'attached' : 'detached' };
+      };
+      const mutedUntil = (name: string): number | undefined => {
+        const current = seat(name);
+        if (current === undefined) return undefined;
+        const before = captured.get(nameKey(current.participant));
+        if (before?.owner !== current.owner || before.generation !== current.generation) return undefined;
+        return observations.seatMutedUntil.get(seatMuteKey(current));
       };
       return select(Object.assign({}, facts, { seat }), name => {
         const current = seat(name);
-        return current?.attachment === 'attached' && (sessions.get(current.owner)?.routes.length ?? 0) > 0;
+        return current?.attachment === 'attached' && (observations.sessions.get(current.owner)?.routes.length ?? 0) > 0;
+      }, {
+        ...(observations.ledgerMutedUntil === undefined ? {} : { ledgerMutedUntil: observations.ledgerMutedUntil }),
+        seat: mutedUntil,
       });
     }, control?.signal)).value;
+  }
+  /** Install or release only this captured seat generation's named hold. */
+  private async changeSeatMute(seat: Seat, verb: 'mute' | 'unmute', durationMs: number | undefined, options: ObservationOptions, control?: OperationControl): Promise<MuteResult> {
+    checkControl(control);
+    const now = this.clock();
+    const expiresAt = verb === 'mute' ? muteDeadline(now, durationMs!) : undefined;
+    const prefix = seatMutePrefix(this.canonicalLocation, seat);
+    const id = seatMuteId(seat.owner, prefix);
+    const assertCaptured = async (): Promise<void> => {
+      await this.artifact.read(facts => {
+        assertCurrentSeat(facts, asSeatRef(seat));
+        if (!facts.participant(seat.participant)?.joined)
+          throw new SquareError('already_joined', 'This participant is no longer standing here.', { reason: 'needs_seat' });
+      }, control?.signal);
+    };
+    await assertCaptured();
+    const ledger = await DeliveryLedger.open({ location: this.ledgerLocation, clock: this.clock, signal: control?.signal });
+    try {
+      if (verb === 'mute') await ledger.setSuppression({ owner: seat.owner, id, key: prefix, scope: 'prefix', expiresAt: expiresAt! }, control?.signal);
+      else await ledger.releaseSuppression({ owner: seat.owner, id }, control?.signal);
+      try { await assertCaptured(); }
+      catch (error) {
+        if (verb === 'mute' && isSquareError(error) && error.code === 'already_joined')
+          await ledger.releaseSuppression({ owner: seat.owner, id }, control?.signal).catch(() => undefined);
+        throw error;
+      }
+    } finally { await ledger.close(); }
+    let observation;
+    if (options.observe) {
+      try {
+        observation = (await this.artifact.read(facts => this.observation(inSquareCount(facts), seat.participant, now), control?.signal)).value;
+      } catch { /* The hold is committed; optional facts cannot turn it into a retry. */ }
+    }
+    return { mutedUntil: verb === 'mute' ? expiresAt! : null, ...(observation === undefined ? {} : { observation }) };
   }
   private handle(seat: Seat): Participant { return new SqliteSquare.ParticipantHandle(seat.participant, this, seat); }
 
@@ -294,6 +345,12 @@ export class SqliteSquare {
         const name = resolveKnownName(facts, this.name);
         return { listening: coreListening(facts, name), ...(!options.observe ? {} : { observation: square.observation(inSquareCount(facts), name) }) };
       }, control?.signal)).value;
+    }
+    mute(input: { readonly durationMs: number }, options: ObservationOptions = {}, control?: OperationControl): Promise<MuteResult> {
+      return this.owner.changeSeatMute(this.seat, 'mute', input?.durationMs, options, control);
+    }
+    unmute(options: ObservationOptions = {}, control?: OperationControl): Promise<MuteResult> {
+      return this.owner.changeSeatMute(this.seat, 'unmute', undefined, options, control);
     }
 
     /** Receipt selection rechecks the lease inside the writer, not at its last heartbeat. */
@@ -481,7 +538,7 @@ export class SqliteSquare {
       name = requireJoinName(requested);
       const last = options.last ?? HISTORY_DEFAULT_LIMIT;
       if (!Number.isSafeInteger(last) || last < 1 || last > HISTORY_MAX_LIMIT) throw new SquareError('invalid_args', 'Join history limit must be between 1 and 100');
-      if (!await ensureInitialDeliverySession(requireOwner(options.owner), options.wakeAddress, control?.signal, this.ledgerLocation))
+      if (!await ensureInitialDeliverySession(requireOwner(options.owner), options.wakeAddress, control?.signal, this.ledgerLocation, this.clock))
         throw new SquareError('already_joined', `${participantIdentity(name)} is away; resume the host session first`, { reason: 'needs_seat' });
       await this.reconcile(control?.signal);
       const committed = await this.joinSeat(name, options, control);
@@ -532,10 +589,17 @@ export class SqliteSquare {
     }, control?.signal)).value;
   }
   async status(options: StatusOptions = {}, control?: OperationControl): Promise<StatusResult> {
-    return this.withHostPresence((facts, available) => {
+    return this.withHostPresence((facts, available, mutes) => {
       const result = queryStatus(facts, { location: this.location, now: this.clock() }, options.viewer, options.observe === true);
-      return { ...result, participants: result.participants.map(person => ({ ...person, deliveryAvailable: available(person.name) })) };
-    }, control);
+      return {
+        ...result,
+        ...(mutes.ledgerMutedUntil === undefined ? {} : { ledgerMutedUntil: mutes.ledgerMutedUntil }),
+        participants: result.participants.map(person => {
+          const mutedUntil = mutes.seat(person.name);
+          return { ...person, deliveryAvailable: available(person.name), ...(mutedUntil === undefined ? {} : { mutedUntil }) };
+        }),
+      };
+    }, control, true);
   }
   /** Local mode reads only World-known facts; it does not verify host attachment. */
   async participants(options: ObservationOptions & { readonly local?: boolean } = {}, control?: OperationControl): Promise<ParticipantsResult> {
@@ -543,10 +607,13 @@ export class SqliteSquare {
       const result = queryParticipants(facts, { location: this.location, now: this.clock() }, options.observe === true);
       return { ...result, participants: result.participants.map(person => ({ ...person, deliveryAvailable: false })) };
     }, control?.signal)).value;
-    return this.withHostPresence((facts, available) => {
+    return this.withHostPresence((facts, available, mutes) => {
       const result = queryParticipants(facts, { location: this.location, now: this.clock() }, options.observe === true);
-      return { ...result, participants: result.participants.map(person => ({ ...person, deliveryAvailable: available(person.name) })) };
-    }, control);
+      return { ...result, participants: result.participants.map(person => {
+        const mutedUntil = mutes.seat(person.name);
+        return { ...person, deliveryAvailable: available(person.name), ...(mutedUntil === undefined ? {} : { mutedUntil }) };
+      }) };
+    }, control, true);
   }
   async recovery(requested?: string, control?: OperationControl): Promise<RecoveryResult> {
     const facts = requested === undefined ? undefined : (await this.artifact.read(facts => recoveryObservation(facts, requested, this.clock()), control?.signal).catch(() => undefined))?.value;
@@ -572,7 +639,11 @@ export class SqliteSquare {
 export function diagnoseSquare(input: SquareLocation, control?: OperationControl) { checkControl(control); return diagnoseSquareFile(squareLocation(input)); }
 export function discover(input: SquareLocation, options: DiscoveryOptions = {}, control?: OperationControl) {
   if (input.path !== undefined) squareLocation(input);
-  return discoverSquares(input.cwd ?? process.cwd(), options, control);
+  return discoverSquares(input.cwd ?? process.cwd(), {
+    ...options,
+    ledgerLocation: options.ledgerLocation ?? deliveryLedgerLocation(),
+    clock: options.clock ?? Date.now,
+  }, control);
 }
 export async function inbox(input: SquareLocation, owner: Owner, options: InboxOptions = {}, control?: OperationControl): Promise<InboxResult> {
   checkControl(control);

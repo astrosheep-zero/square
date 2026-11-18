@@ -89,11 +89,12 @@ test('MCP tools validate JSON arguments and return only CLI text', async () => {
     assert.deepEqual(client.getServerVersion(), { name: 'square', version: packageVersion });
     const tools = (await client.listTools()).tools;
     assert.deepEqual(tools.map((tool) => tool.name), [
-      'list', 'join', 'express', 'perceive', 'history', 'attention', 'done', 'status',
+      'list', 'join', 'express', 'perceive', 'history', 'attention', 'done', 'status', 'mute', 'unmute',
     ]);
     for (const tool of tools) {
       assert.equal(tool.outputSchema, undefined);
-      assert.equal(tool.inputSchema.required?.includes('location') ?? false, tool.name !== 'list');
+      const locationRequired = !['list', 'mute', 'unmute'].includes(tool.name);
+      assert.equal(tool.inputSchema.required?.includes('location') ?? false, locationRequired);
       assert.equal('location' in tool.inputSchema.properties, tool.name !== 'list');
     }
     for (const name of ['join', 'perceive', 'history', 'attention', 'done', 'status']) {

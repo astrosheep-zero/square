@@ -17,20 +17,23 @@ const DAY = 24 * 60 * 60 * 1000;
 async function setup(t, route) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-export-recovery-'));
   const ledgerLocation = path.join(root, 'delivery.sqlite');
+  let ledgerNow = 1000;
+  const clock = () => ledgerNow;
   const square = await Square.build({ path: path.join(root, 'world.square'), ledgerLocation, markdown: '', clock: () => 1000 });
   const owner = `recipient:${root}`;
   const bob = (await square.join('Bob', { owner, ...(route ? { wakeAddress: route } : {}) })).participant;
   const artifact = createArtifactPort(await fs.realpath(square.location));
-  const ledger = await DeliveryLedger.open({ location: ledgerLocation, clock: () => Date.now() });
+  const ledger = await DeliveryLedger.open({ location: ledgerLocation, clock });
   t.after(async () => { await artifact.close(); await square.close(); await ledger.close(); await fs.rm(root, { recursive: true, force: true }); });
   const session = await ledger.session(owner);
-  return { root, ledgerLocation, square, bob, owner, artifact, ledger, session,
+  return { root, ledgerLocation, square, bob, owner, artifact, ledger, session, clock,
+    setNow: value => { ledgerNow = value; },
     cards: () => ledger.pending(owner, { generation: session.generation }),
     insert: body => artifact.transactAs({ kind: 'send', actor: 'notice' }, facts => facts.insertNotice({ from: 'notice', to: 'Bob', body }, 1000)),
   };
 }
 async function exporter(t, c, stage) {
-  const child = fork(new URL('./fixtures/producer-export-crash.js', import.meta.url), [await fs.realpath(c.square.location), stage, c.ledgerLocation],
+  const child = fork(new URL('./fixtures/producer-export-crash.js', import.meta.url), [await fs.realpath(c.square.location), stage, c.ledgerLocation, String(c.clock())],
     { execArgv: [], stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   t.after(() => child.kill('SIGKILL'));
   let stderr = '';
@@ -118,6 +121,7 @@ test('crash uncertainty cannot resurrect a collected notification, and expired r
   await kill();
   const future = Date.now() + 31 * DAY;
   t.mock.method(Date, 'now', () => future);
+  c.setNow(1000 + 31 * DAY);
   await c.ledger.post({ owner: c.owner, key: ["gc-trigger"], text: 'unrelated card triggers bounded collection' });
   assert.equal((await c.ledger.receipts(c.owner)).length, 0);
   await c.square.join('Bob', { owner: c.owner });
@@ -148,6 +152,7 @@ for (const refusal of ['before-invocation', 'definite-refusal']) test(`known-uns
   finalCheck.mock.restore();
   const future = Date.now() + 31 * DAY;
   t.mock.method(Date, 'now', () => future);
+  c.setNow(1000 + 31 * DAY);
   await c.square.join('Bob', { owner: c.owner });
   await c.square.join('Bob', { owner: c.owner });
   assert.equal(postCalls, refusal === 'before-invocation' ? 1 : 2);
@@ -182,6 +187,7 @@ test('an unsent recovery cannot erase an earlier uncertain insertion or resurrec
   assert.equal(await claim.settle('presented'), true);
   const future = Date.now() + 31 * DAY;
   t.mock.method(Date, 'now', () => future);
+  c.setNow(1000 + 31 * DAY);
   await originalPost.call(c.ledger, { owner: c.owner, key: ["collect"], text: 'collect retained evidence' });
   const count = t.mock.method(DeliveryLedger.prototype, 'post', async function (input) { calls++; return originalPost.call(this, input); });
   await c.square.join('Bob', { owner: c.owner });

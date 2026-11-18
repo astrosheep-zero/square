@@ -78,6 +78,12 @@ const COMMANDS: readonly CommandHelp[] = [
   },
   { names: ['status'], usage: '[--as <name>] status', usesSquare: true, group: 'participant', summary: 'Show who is present and what happened most recently.' },
   {
+    names: ['mute'], usage: 'mute <duration>', usesSquare: true, group: 'participant',
+    summary: 'Step back from notifications for a while. Whatever reaches you stays waiting for perceive.',
+    details: ['Duration:', '  <duration>  A positive whole number with ms, s, m or h (for example 30m).', '', 'Without --location, pauses automatic notifications for the entire ledger.', 'With --location, pauses only the selected participant seat.'],
+  },
+  { names: ['unmute'], usage: 'unmute', usesSquare: true, group: 'participant', summary: 'Resume automatic notifications early.' },
+  {
     names: ['install'], usage: 'install (--all | <target>...) [-f]', group: 'maintenance',
     summary: 'Install Square support for one or more agent hosts.',
     details: ['Targets:', '  claude, codex, opencode, pi', '', 'Options:', '  --all       Install every supported target.', '  -f, --force Replace existing managed links.'],
@@ -113,7 +119,7 @@ function isHelpFlag(value: string): boolean {
 
 export function renderGlobalHelp(): string {
   const groups: ReadonlyArray<{ key: NonNullable<CommandHelp['group']>; title: string; order: readonly string[] }> = [
-    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'perceive', 'history', 'status', 'done'] },
+    { key: 'participant', title: 'In the square:', order: ['join', 'express', 'listen', 'unlisten', 'ignore', 'perceive', 'history', 'status', 'mute', 'unmute', 'done'] },
     { key: 'host', title: 'Prepare and manage:', order: ['build', 'list'] },
     { key: 'maintenance', title: 'Setup:', order: ['install', 'uninstall', 'doctor', 'migrate'] },
   ];
@@ -127,9 +133,9 @@ export function renderGlobalHelp(): string {
   ]);
   return [
     'Usage: square [--location <square>] [--as <name>] [--owner <id>] <command> [args...]',
-    'Location: square-accessing commands require --location <square>. Use square list to find nearby squares and your joined names; use --as to select a participant.',
+    'Location: square-accessing commands require --location <square>. Use square list to find nearby squares and your joined names; use --as to select a participant. mute and unmute are the exception: without a location they hold the whole ledger.',
     'Identity: --owner overrides SQUARE_OWNER, then a complete harness identity, then user:<OS user>@<host>. Incomplete or ambiguous harness identities refuse. Owners without wake use perceive --idle.',
-    'Output: --json on join, express, perceive, history, listen, ignore, unlisten, done, status and inbox prints the SDK result without observation; a participant handle becomes {name}.',
+    'Output: --json on join, express, perceive, history, listen, ignore, unlisten, done, status, inbox, mute and unmute prints the SDK result without observation; a participant handle becomes {name}.',
     'History emits one JSON document; stream --ndjson emits one SDK record per line.',
     '',
     ...commandLines,

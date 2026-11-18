@@ -155,14 +155,15 @@ test('status separates here from lingering and keeps the roster honest', async (
 });
 
 test('status shows who stepped in after the latest public act', async () => {
+  let latestAt;
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
     await alice.done();
     await square.join('Alice', { owner: body, wakeAddress });
-    await square.join('Bob', { owner: body, wakeAddress });
+    latestAt = (await square.join('Bob', { owner: body, wakeAddress })).activity.at;
   }, { hardCap: 100 });
 
-  const status = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: '22000' } });
+  const status = run(withPath(file, ['status']), { env: { SQUARE_NOW_MS: String(latestAt + 15_000) } });
   assert.equal(status.status, 0, status.stderr);
   assert.match(status.stdout, /@Alice stepped out of the square — done/);
   assert.match(status.stdout, /→ @Alice stepped back in · \d+s ago/);

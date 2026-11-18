@@ -1,5 +1,15 @@
 import { SquareError } from './model.js';
 
+/** Validate one finite named mute deadline from an operation-entry clock. */
+export function muteDeadline(now: number, durationMs: number): number {
+  if (!Number.isFinite(now)) throw new RangeError('Expected finite clock time');
+  if (!Number.isSafeInteger(durationMs) || durationMs <= 0) throw new RangeError('Expected a positive safe integer mute duration');
+  const expiresAt = now + durationMs;
+  if (!Number.isSafeInteger(expiresAt) || Number.isNaN(new Date(expiresAt).getTime()))
+    throw new RangeError('Mute expiry is outside the representable epoch range');
+  return expiresAt;
+}
+
 export function parseDurationMs(value: string, label: string): number {
   const match = value.match(/^([1-9]\d*)(ms|s|m|h)$/);
   if (!match) throw new SquareError('invalid_args', `✕ invalid ${label}: expected a positive duration with unit ms, s, m, or h (for example 500ms, 30s, 3m, 1h)`);

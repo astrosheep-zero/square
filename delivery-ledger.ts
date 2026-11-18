@@ -7,6 +7,7 @@ import { LedgerStore } from './delivery-ledger-sqlite.js';
 import { copyDeliveryKey, type DeliveryKey } from './delivery-key.js';
 export { copyDeliveryKey, encodeDeliveryKey, deliveryKeyEqual, deliveryKeyPrefix, type DeliveryKey } from './delivery-key.js';
 import { redactCurrentDiagnostic } from './diagnostic-redaction.js';
+import { muteDeadline } from './time.js';
 
 export interface DeliveryRoute {
   readonly kind: string;
@@ -155,13 +156,13 @@ function encodeDetails(details: Readonly<Record<string, unknown>>): string {
 export class DeliveryLedger {
   private readonly settlements = new Set<Promise<unknown>>();
   private retired = false;
-  private constructor(private readonly store: LedgerStore, private readonly leaseMs: number) {}
-  static async open(options: { readonly location?: string; readonly clock?: () => number; readonly leaseMs?: number; readonly signal?: AbortSignal } = {}): Promise<DeliveryLedger> {
+  private constructor(private readonly store: LedgerStore, private readonly leaseMs: number, private readonly clock: () => number) {}
+  static async open(options: { readonly location?: string; readonly clock?: () => number; readonly leaseMs?: number; readonly signal?: AbortSignal; readonly readOnly?: boolean } = {}): Promise<DeliveryLedger> {
     const location = options.location ?? deliveryLedgerLocation();
     if (!path.isAbsolute(location)) throw new TypeError('Delivery location must be absolute');
-    const leaseMs = options.leaseMs ?? 30_000;
+    const leaseMs = options.leaseMs ?? 30_000, clock = options.clock ?? Date.now;
     positive(leaseMs);
-    return new DeliveryLedger(await LedgerStore.open(location, options.clock ?? Date.now, options.signal), leaseMs);
+    return new DeliveryLedger(await LedgerStore.open(location, clock, options.signal, options.readOnly === true), leaseMs, clock);
   }
   close(): Promise<void> {
     this.retired = true;
@@ -251,6 +252,20 @@ export class DeliveryLedger {
   releaseSuppression(input: { readonly owner: Owner | null; readonly id: string }, signal?: AbortSignal): Promise<boolean> {
     if (input.owner !== null) validateOwner(input.owner);
     nonempty(input.id); return this.store.releaseSuppression(input, signal);
+  }
+  /** One named all-owner hold; no producer or seat layer is released. */
+  async mute(options: { readonly durationMs: number }, signal?: AbortSignal): Promise<{ readonly mutedUntil: number | null }> {
+    const expiresAt = muteDeadline(this.clock(), options?.durationMs);
+    await this.store.setSuppression({ owner: null, id: 'ledger-mute', key: [], scope: 'prefix', expiresAt }, signal);
+    return { mutedUntil: expiresAt };
+  }
+  /** Idempotent release of only the all-owner hold; it never dispatches. */
+  async unmute(signal?: AbortSignal): Promise<{ readonly mutedUntil: number | null }> {
+    await this.store.releaseSuppression({ owner: null, id: 'ledger-mute' }, signal);
+    return { mutedUntil: null };
+  }
+  async mutedUntil(signal?: AbortSignal): Promise<number | null> {
+    return (await this.store.suppression({ owner: null, id: 'ledger-mute' }, signal))?.expiresAt ?? null;
   }
   cancel(input: { readonly owner: Owner; readonly generation: string }, signal?: AbortSignal): Promise<boolean> {
     validateOwner(input.owner); nonempty(input.generation); return this.store.cancel(input, signal);

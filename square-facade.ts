@@ -66,6 +66,10 @@ export interface ListeningResult {
   readonly listening: readonly string[];
   readonly observation?: SquareObservation;
 }
+export interface MuteResult {
+  readonly mutedUntil: number | null;
+  readonly observation?: SquareObservation;
+}
 export interface LifecycleResult {
   readonly activity: Activity;
   readonly observation?: SquareObservation;
@@ -157,6 +161,8 @@ export interface Participant {
   ignore(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   unlisten(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   listening(options?: ObservationOptions, control?: OperationControl): Promise<ListeningResult>;
+  mute(input: { readonly durationMs: number }, options?: ObservationOptions, control?: OperationControl): Promise<MuteResult>;
+  unmute(options?: ObservationOptions, control?: OperationControl): Promise<MuteResult>;
   perceive(options?: PerceiveOptions, control?: OperationControl): Promise<PerceiveResult>;
   pending(options?: PendingOptions, control?: OperationControl): Promise<PendingResult>;
   /** Local custody only: ledger-only detach/delete is observed on privileged reconciliation. */
@@ -176,6 +182,8 @@ export interface ParticipantSummary {
   readonly presence: ParticipantPresence;
   readonly unreadActivityCount: number;
   readonly pendingMentionCount: number;
+  /** Active automatic-notification hold for this current owner/join seat. */
+  readonly mutedUntil?: number;
 }
 export interface StatusOptions extends ObservationOptions {
   readonly viewer?: string;
@@ -188,6 +196,8 @@ export interface StatusResult {
   readonly now: number;
   readonly throttlePerMinute?: number;
   readonly latestActivity?: Activity;
+  /** Active all-owner delivery hold; seats may still have independent holds. */
+  readonly ledgerMutedUntil?: number;
   readonly observation?: StatusObservation;
 }
 export interface ParticipantsResult {
@@ -199,9 +209,12 @@ export interface DiscoveryOptions {
   readonly depth?: number;
   readonly limit?: number;
   readonly after?: string;
+  /** Explicit host ledger for mute enrichment; adapters resolve their own configured location. */
+  readonly ledgerLocation?: string;
+  readonly clock?: () => number;
 }
 export interface SquareListItem {
-  readonly joined?: readonly { readonly name: string; readonly pending: number }[];
+  readonly joined?: readonly { readonly name: string; readonly pending: number; readonly mutedUntil?: number }[];
   readonly path: string;
   readonly lastActiveAt: number;
   readonly context: readonly string[];
@@ -214,6 +227,8 @@ export interface DiscoveryResult {
   readonly total: number;
   readonly remaining: number;
   readonly next?: string;
+  /** Active all-owner delivery hold, when an explicit ledger was read. */
+  readonly ledgerMutedUntil?: number;
 }
 export interface InboxOptions {
   readonly limit?: number;

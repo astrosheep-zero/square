@@ -4,6 +4,7 @@ import { type CommandContext, type CommandSpec } from './context.js';
 import { harnessCommand, installCommand, uninstallCommand } from './harness-command.js';
 import { helpCommand, versionCommand } from './meta-commands.js';
 import { mcpServerCommand } from './mcp-server-command.js';
+import { muteCommand, unmuteCommand } from './notification-commands.js';
 import { JSON_COMMANDS } from './json.js';
 import {
   perceiveCommand,
@@ -47,6 +48,8 @@ export const commandRegistry: readonly RegisteredCommand[] = [
   { names: ['migrate'], spec: migrateCommand },
   { names: ['history'], spec: historyCommand },
   { names: ['status'], spec: statusCommand },
+  { names: ['mute'], spec: muteCommand },
+  { names: ['unmute'], spec: unmuteCommand },
   { names: ['help'], spec: helpCommand },
   { names: ['version', '--version', '-v'], spec: versionCommand },
   { names: ['mcp-server'], spec: mcpServerCommand },

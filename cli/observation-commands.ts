@@ -18,7 +18,7 @@ import {
   renderSquareList,
 } from '../operation-presentation.js';
 import { formatTimestamp, parseTimeOrRelative } from '../time.js';
-import { discover, inbox, formatActivityId, parseActivityId, PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../square-api.js';
+import { deliveryLedgerLocation, discover, inbox, formatActivityId, parseActivityId, PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../square-api.js';
 import { renderPerceiveOutcome, renderPerceiveProgress } from './perceive-presentation.js';
 import { selectOwnSeat } from '../square-api.js';
 import { jsonResult } from './json.js';
@@ -26,7 +26,7 @@ import { jsonResult } from './json.js';
 import {
   type CommandContext,
   type CommandSpec,
-  withSquare, squareInput, now,
+  withSquare, squareInput, now, commandClock,
   fail,
   parseBoundedLimit,
   parseDurationMs,
@@ -79,7 +79,8 @@ export const listCommand: CommandSpec<DiscoveryOptions, string> = {
     let owner;
     try { owner = commandIdentity(context.env, context.owner).owner; }
     catch { /* Discovery stays available without a complete harness identity. */ }
-    const result = await discover(squareInput(context), { ...intent, owner });
+    const result = await discover(squareInput(context), { ...intent, owner,
+      ledgerLocation: deliveryLedgerLocation(context.env, context.homeDir), clock: commandClock(context) });
     return renderSquareList(result, { now: now(context), depth: intent.depth ?? DEFAULT_LIST_DEPTH, limit: intent.limit ?? DEFAULT_LIST_LIMIT });
   },
   present: (result) => process.stdout.write(result),

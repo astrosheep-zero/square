@@ -55,7 +55,8 @@ test('Pi registers the shared contract as namespaced codemode tools', () => {
     assert.equal(tool.description, shared.description);
     assert.equal(tool.parameters.type, 'object');
     assert.equal(tool.parameters.additionalProperties, false);
-    assert.equal(tool.parameters.required?.includes('location') ?? false, shared.name !== 'list');
+    const locationRequired = !['list', 'mute', 'unmute'].includes(shared.name);
+    assert.equal(tool.parameters.required?.includes('location') ?? false, locationRequired);
     assert.equal('location' in tool.parameters.properties, shared.name !== 'list');
     assert.equal('session' in tool.parameters.properties, false);
     assert.equal(tool.outputSchema, undefined);

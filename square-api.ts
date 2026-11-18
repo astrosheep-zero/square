@@ -1,9 +1,13 @@
 import { SqliteSquare } from './sqlite-square.js';
 import { SquareError, type Owner } from './model.js';
 import { requireOwner } from './seats.js';
+import { DeliveryLedger, deliveryLedgerLocation } from './delivery-ledger.js';
+import { openReadOnlyDeliveryLedger } from './notification-mute.js';
+import { muteDeadline } from './time.js';
 import type { OperationControl, Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
 
 export { migrateDeliveryLedger, type MigrateDeliveryLedgerInput, type MigrateDeliveryLedgerResult } from './migrate-delivery-ledger.js';
+export { DeliveryLedger, deliveryLedgerLocation } from './delivery-ledger.js';
 export { migrateSquare, type MigrateSquareResult } from './migrate.js';
 export type Square = SqliteSquare;
 export const Square = { at: (input: SquareAtInput, control?: OperationControl) => SqliteSquare.at(input, control),
@@ -27,6 +31,37 @@ export async function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | '
       : 'Square needs one unambiguous participant name');
   }
   return square.participant(seats[0].name, { owner: caller });
+}
+export interface DeliveryMuteOptions {
+  readonly ledgerLocation?: string;
+  readonly clock?: () => number;
+}
+async function withDeliveryLedger<T>(input: DeliveryMuteOptions, control: OperationControl | undefined, run: (ledger: DeliveryLedger) => Promise<T>): Promise<T> {
+  const ledger = await DeliveryLedger.open({
+    location: input.ledgerLocation ?? deliveryLedgerLocation(),
+    clock: input.clock,
+    signal: control?.signal,
+  });
+  try { return await run(ledger); }
+  finally { await ledger.close(); }
+}
+/** Pause automatic notifications for the entire resolved delivery ledger. */
+export async function muteDeliveryLedger(input: DeliveryMuteOptions & { readonly durationMs: number }, control?: OperationControl): Promise<{ readonly mutedUntil: number | null }> {
+  const now = (input.clock ?? Date.now)();
+  muteDeadline(now, input.durationMs);
+  return withDeliveryLedger({ ...input, clock: () => now }, control,
+    ledger => ledger.mute({ durationMs: input.durationMs }, control?.signal));
+}
+/** Release only the all-owner hold; independent seat and producer holds remain. */
+export function unmuteDeliveryLedger(input: DeliveryMuteOptions = {}, control?: OperationControl): Promise<{ readonly mutedUntil: number | null }> {
+  return withDeliveryLedger(input, control, ledger => ledger.unmute(control?.signal));
+}
+/** Read the active all-owner hold without creating an absent ledger. */
+export async function deliveryLedgerMutedUntil(input: DeliveryMuteOptions = {}, control?: OperationControl): Promise<number | null> {
+  const ledger = await openReadOnlyDeliveryLedger(input.ledgerLocation ?? deliveryLedgerLocation(), input.clock ?? Date.now, control?.signal);
+  if (ledger === undefined) return null;
+  try { return await ledger.mutedUntil(control?.signal); }
+  finally { await ledger.close(); }
 }
 export { ACTIVITY_METADATA_MAX_BYTES } from './model.js';
 export { localUserOwner, harnessOwner, decodeHarnessOwner } from './owner.js';

@@ -89,11 +89,12 @@ export class LedgerStore {
   private readonly ordinaryCancellation = new AbortController();
   private closing?: Promise<void>;
   private constructor(readonly location: string, private readonly db: DatabaseSync, private readonly clock: () => number) {}
-  static async open(location: string, clock: () => number, signal?: AbortSignal): Promise<LedgerStore> {
+  static async open(location: string, clock: () => number, signal?: AbortSignal, readOnly = false): Promise<LedgerStore> {
     signal?.throwIfAborted();
     try { await fs.access(location); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (readOnly) throw error;
       await fs.mkdir(path.dirname(location), { recursive: true, mode: 0o700 });
       const temporary = location + '.' + randomUUID() + '.tmp';
       let initial: DatabaseSync | undefined;
@@ -117,9 +118,12 @@ export class LedgerStore {
     // Existing formats are inspected on a read-only connection before any writable open.
     const probe = await retrySqliteBusy(() => new DatabaseSync(location, { readOnly: true }), signal);
     try { await retrySqliteBusy(() => validate(probe, location), signal); } finally { probe.close(); }
-    const db = await retrySqliteBusy(() => new DatabaseSync(location), signal);
+    const db = await retrySqliteBusy(() => new DatabaseSync(location, { readOnly }), signal);
     try {
-      await retrySqliteBusy(() => { validate(db, location); db.exec('PRAGMA busy_timeout=0; PRAGMA synchronous=FULL'); }, signal);
+      await retrySqliteBusy(() => {
+        validate(db, location);
+        db.exec(readOnly ? 'PRAGMA busy_timeout=0; PRAGMA query_only=ON' : 'PRAGMA busy_timeout=0; PRAGMA synchronous=FULL');
+      }, signal);
       return new LedgerStore(location, db, clock);
     }
     catch (error) { db.close(); throw error; }

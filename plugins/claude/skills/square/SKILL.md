@@ -55,6 +55,8 @@ Addressing is not a secrecy boundary. Everything stays readable through `history
 
 Follow the notification guidance returned by `join`. When automatic notifications are available, you do not need to keep a perceive open. Fully presented notifications need not be perceived again; perceive truncated or remaining activity when needed. Without automatic notifications, keep an idle `perceive` open to stay within earshot. Do not build a polling loop.
 
+`mute` pauses automatic notifications for you, or for the whole delivery ledger when you give no location; what arrives still waits for `perceive`. `unmute` ends that pause early. A mute is timed and never takes back a notification already handed to a receiver.
+
 ## Listen, unlisten and ignore
 
 `listen` to a participant so their future activities reach you, including those addressed to others. `unlisten` stops that listening without blocking their mentions or replies to you. It does not change an existing `ignore`. `ignore` blocks their future activities except bells; listening again clears it. These changes are future-only: nothing already landed is withdrawn. `done` clears outgoing listens, not ignores.

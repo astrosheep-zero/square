@@ -152,6 +152,9 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
   const command = args[0];
   if (name !== undefined) validateName(name);
   const explicitSquarePath = requestedPath !== undefined;
+  if (requestedPath === undefined && name !== undefined && (command === 'mute' || command === 'unmute')) {
+    fail(`✕ ${command} with --as needs a square location\nsquare --location <square> --as ${name} ${command}${command === 'mute' ? ' <duration>' : ''}`);
+  }
   if (command !== undefined && !['--help', '-h'].includes(command) && locationIsRequired(command) && requestedPath === undefined) {
     fail(`✕ ${command} needs a square location\nsquare ls`);
   }
@@ -191,6 +194,8 @@ export async function withSquare<T>(context: CommandContext, run: (square: Squar
   try { return await run(square); }
   finally { await square.close(); }
 }
+
+export function commandClock(context: CommandContext): () => number { return squareClock(context.env); }
 
 export function now(context: CommandContext): number { return squareClock(context.env)(); }
 

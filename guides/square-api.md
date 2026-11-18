@@ -47,6 +47,22 @@ and `Participant.pending` reads addressed unconsumed says without consuming them
 Square operations. `OperationControl` can carry cancellation; a committed mutation is not undone by
 later cancellation.
 
+`Participant.mute({durationMs}, options?, control?)` installs one timed hold for the handle's captured
+owner, name and join generation; `Participant.unmute` releases only that named seat hold. Duration is a
+positive safe integer in milliseconds. The Square clock sets the deadline, a stale handle cannot affect a
+newer join, and repeat mute replaces only its own deadline. Independent seats, other squares and producer
+holds are untouched. No activity lands and no pending card is dispatched by installing a hold.
+
+The standalone global helpers `muteDeliveryLedger({durationMs, ledgerLocation?, clock?}, control?)`,
+`unmuteDeliveryLedger(...)` and `deliveryLedgerMutedUntil(...)` operate on the resolved host delivery
+ledger and need no owner or `.square` file. They use exactly the null-owner `ledger-mute` row; global and
+seat holds never release one another. `StatusResult.ledgerMutedUntil` and `DiscoveryResult.ledgerMutedUntil`
+carry an active global deadline, and `ParticipantSummary.mutedUntil` / each owner-held
+`SquareListItem.joined[].mutedUntil` carry an active captured-seat deadline. Expired rows are omitted by
+the configured clock. Read-only status/list enrichment opens an existing ledger without creating one;
+`participants({local: true})` stays artifact-only. Callers own polling and timers: expiry has no event or
+daemon, and a hold never recalls custody already handed to a receiver.
+
 Explicit mentions and body `@name` candidates share soft recipient resolution: absent or unknown
 targets do not block `express`. The receipt lists them in `unmatchedMentions`; a departed reply author
 is reported in `replyAuthorNotHere`. The optional `awayRecipients` lists directed joined targets
@@ -201,5 +217,5 @@ The package exports `DeliveryLedger` and its types from both the root and
 the ledger does not match producer metadata. Every key is a `readonly string[]` compared by content;
 whole-element prefixes may be `[]`. Proactive delivery suppression uses exact or prefix `suppress`
 with optional expiry, or finite independent named holds through `setSuppression`. The reserved
-null-owner `ledger-mute` hold applies globally without per-owner rows; this is a persistence/API
-foundation, not a user-facing mute command. See [delivery-primitives.md](delivery-primitives.md).
+null-owner `ledger-mute` hold applies globally without per-owner rows and is installed or released by
+the mute helpers above. See [delivery-primitives.md](delivery-primitives.md).

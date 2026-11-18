@@ -4,7 +4,7 @@ import { formatActivityId } from './square-core.js';
 import type {
   PerceiveOptions, PerceiveResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
   JoinResult, LifecycleResult, ListenerChangeResult, OperationFailureDetail, SquareErrorFacts,
-  StatusResult, DiscoveryResult,
+  StatusResult, DiscoveryResult, MuteResult,
 } from './square-facade.js';
 import {
   type PresentationSurface, displayPath, formatToolAction, commandPrefix, joinRecoveryCommand, participantCommandPrefix, participantIdentity,
@@ -24,9 +24,13 @@ function listDisplay(value: string): string {
 export function renderSquareList(data: DiscoveryResult, projection: { now: number; depth: number; limit: number; surface?: PresentationSurface }): string {
   const { items, stopped, remaining, next } = data;
   if (data.total === 0) {
-    return ['(no squares found)', ...(stopped ? [style('dim', '○ the walk stopped early — deeper squares may still be hiding')] : [])].join('\n') + '\n';
+    return ['(no squares found)',
+      ...(data.ledgerMutedUntil === undefined ? [] : [style('dim', `  · notifications paused until ${formatTimestamp(data.ledgerMutedUntil)}`)]),
+      ...(stopped ? [style('dim', '○ the walk stopped early — deeper squares may still be hiding')] : [])].join('\n') + '\n';
   }
   const lines = ['squares'];
+  if (data.ledgerMutedUntil !== undefined)
+    lines.push(style('dim', `  · notifications paused until ${formatTimestamp(data.ledgerMutedUntil)}`));
   for (const item of items) {
     const glyph = item.activities > 0 ? '●' : style('dim', '○');
     lines.push(`${glyph} ${listDisplay(item.path)}${style('dim', ` · ${formatRelativeTime(item.lastActiveAt, projection.now)} · ${item.participants.length} in the square · ${item.activities} ${item.activities === 1 ? 'activity' : 'activities'}`)}`);
@@ -41,7 +45,11 @@ export function renderSquareList(data: DiscoveryResult, projection: { now: numbe
     const hidden = item.participants.length - participants.length;
     const names = participants.length === 0 ? 'nobody' : participants.map((name) => participantIdentity(listDisplay(name))).join(' · ');
     lines.push(`  ${style('dim', 'participants')} · ${names}${hidden > 0 ? style('dim', ` · … ${hidden} more`) : ''}`);
-    if (item.joined?.length) lines.push(`  ${style('dim', 'joined')} · ${item.joined.map(seat => `${participantIdentity(listDisplay(seat.name))}${seat.pending > 0 ? style('dim', ` (${seat.pending} waiting)`) : ''}`).join(' · ')}`);
+    if (item.joined?.length) lines.push(`  ${style('dim', 'joined')} · ${item.joined.map(seat => {
+      const state = [seat.pending > 0 ? `${seat.pending} waiting` : undefined,
+        seat.mutedUntil === undefined ? undefined : `muted until ${formatTimestamp(seat.mutedUntil)}`].filter(Boolean).join(' · ');
+      return `${participantIdentity(listDisplay(seat.name))}${state === '' ? '' : style('dim', ` (${state})`)}`;
+    }).join(' · ')}`);
   }
   if (remaining > 0) {
     lines.push(style('dim', stopped ? '  … more squares' : `  … ${remaining} more ${remaining === 1 ? 'square' : 'squares'}`));
@@ -266,7 +274,8 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
           : participant.unreadActivityCount > 0
             ? `${participant.unreadActivityCount} change${participant.unreadActivityCount === 1 ? '' : 's'} waiting`
             : 'up to date';
-      return `  ${glyph} ${participantIdentity(participant.name)}${style('dim', ` ${summary}${attention === '' ? '' : ` · ${attention}`}`)}`;
+      const muted = participant.mutedUntil === undefined ? '' : ` · muted until ${formatTimestamp(participant.mutedUntil)}`;
+      return `  ${glyph} ${participantIdentity(participant.name)}${style('dim', ` ${summary}${muted}${attention === '' ? '' : ` · ${attention}`}`)}`;
     }));
     people.push(...away.slice(0, STATUS_PARTICIPANT_PREVIEW_LIMIT).map(participant => `  ○ ${participantIdentity(participant.name)}${style('dim', ' · away')}`));
     if (away.length > STATUS_PARTICIPANT_PREVIEW_LIMIT) people.push(`  ○ … ${away.length - STATUS_PARTICIPANT_PREVIEW_LIMIT} more away`);
@@ -307,6 +316,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
   ].join(' · ');
   const output = [
     style('dim', counts),
+    ...(data.ledgerMutedUntil === undefined ? [] : [style('dim', `  · notifications paused until ${formatTimestamp(data.ledgerMutedUntil)}`)]),
     '', style('dim', 'around the square'), ...people, '', style('dim', 'latest'), ...latest,
     ...(data.listening === undefined ? [] : [
       '', style('dim', 'you listen to'),
@@ -333,6 +343,16 @@ export function renderListenerChange(squarePath: string, verb: ListenerVerb, dat
   return withPathOutput(squarePath, `${data.activity === null ? '○' : '·'} ${action}`, {
     participantCount: projection.standingCount,
   });
+}
+
+export function renderMuteResult(squarePath: string | undefined, verb: 'mute' | 'unmute', data: MuteResult): string {
+  const name = data.observation?.participant;
+  const until = data.mutedUntil === null ? '' : ` until ${formatTimestamp(data.mutedUntil)}`;
+  const line = verb === 'mute'
+    ? name === undefined ? `○ notifications pause${until}` : `○ ${participantIdentity(name)} steps back from notifications${until}`
+    : name === undefined ? '● the notification hold ends' : `● ${participantIdentity(name)} ends their notification hold`;
+  return squarePath === undefined ? `${line}\n`
+    : withPathOutput(squarePath, line, { participantCount: data.observation?.standingCount });
 }
 
 export function renderLifecycleResult(squarePath: string, data: LifecycleResult): string | undefined {

@@ -2,7 +2,7 @@ import { Box, Markdown, stripTerminalSequences, truncateToWidth, visibleWidth } 
 import { activityLabel, reachLabel, shortOrigin, timeLabel } from '../../dist/card-format.js';
 import { z } from 'zod/v4';
 
-import { Square, discover } from '../../dist/square-api.js';
+import { Square, deliveryLedgerLocation, discover, muteDeliveryLedger, unmuteDeliveryLedger } from '../../dist/square-api.js';
 import { harnessOwner } from '../../dist/owner.js';
 import { DeliveryLedger } from '../../dist/delivery-ledger.js';
 import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/delivery-frame.js';
@@ -118,10 +118,15 @@ export default function squarePiExtension(pi) {
       async execute(_id, args, signal, _onUpdate, ctx) {
         const { text, isError } = await invoke(tool, args, { signal }, () => {
           const sessionId = ctx.sessionManager.getSessionId();
+          const ledgerLocation = deliveryLedgerLocation(process.env), clock = () => Date.now();
           return {
             identity: { owner: harnessOwner({ channel: 'pi', session: sessionId }) },
-            open: (location, control) => Square.at({ cwd: ctx.cwd, path: location }, control),
-            discover: (options, control) => discover({ cwd: ctx.cwd }, options, control),
+            open: (location, control) => Square.at({ cwd: ctx.cwd, path: location, ledgerLocation, clock }, control),
+            discover: (options, control) => discover({ cwd: ctx.cwd }, { ...options, ledgerLocation, clock }, control),
+            ledger: {
+              mute: (durationMs, control) => muteDeliveryLedger({ durationMs, ledgerLocation, clock }, control),
+              unmute: control => unmuteDeliveryLedger({ ledgerLocation, clock }, control),
+            },
           };
         });
         return { ...(isError ? { isError } : {}), content: [{ type: 'text', text }] };
@@ -247,6 +252,7 @@ export default function squarePiExtension(pi) {
     const sessionId = ctx.sessionManager.getSessionId();
     const owner = harnessOwner({ channel: 'pi', session: sessionId });
     const signal = AbortSignal.timeout(5000);
+    const ledgerLocation = deliveryLedgerLocation(process.env);
     const attached = await attachDeliverySessionRoutes(owner, process.env, [{ kind: 'pi-native', address: { sessionId } }], signal);
     if (!attached) return;
     if (token !== epoch) {
@@ -255,7 +261,7 @@ export default function squarePiExtension(pi) {
     }
     let ledger;
     try {
-      ledger = await DeliveryLedger.open({ signal });
+      ledger = await DeliveryLedger.open({ location: ledgerLocation, signal });
       if (token !== epoch) {
         await detachDeliverySession(owner, attached.generation, process.env, AbortSignal.timeout(5000));
         await ledger.close();

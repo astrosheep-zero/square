@@ -4,22 +4,27 @@ import { requireOwner, requireJoinName, selectOwnSeat, HISTORY_MAX_LIMIT, PERCEI
 import { parseDurationMs, parseTimeOrRelative } from './time.js';
 import type {
   Owner, WakeAddress, ActivityId, PerceiveOptions, PerceiveResult, ExpressResult, HistoryQuery, HistoryResult,
-  LifecycleResult, ListenerChangeResult, OperationControl, OperationFailureDetail, StatusResult, DiscoveryOptions, DiscoveryResult,
+  LifecycleResult, ListenerChangeResult, OperationControl, OperationFailureDetail, StatusResult, DiscoveryOptions, DiscoveryResult, MuteResult,
 } from './square-facade.js';
 import {
   renderPerceiveOutcome, renderExpression, renderFailureLines, renderHistoryResult, renderJoinResult, type ListenerVerb,
-  renderLifecycleResult, renderListenerChange, renderStatusResult, renderSquareList,
+  renderLifecycleResult, renderListenerChange, renderMuteResult, renderStatusResult, renderSquareList,
   type FailureReport, type JoinPresentation,
 } from './operation-presentation.js';
 
 export interface ToolIdentity { readonly owner?: Owner; readonly wakeAddress?: WakeAddress }
 type JsonObject = Record<string, unknown>;
 
+interface LedgerToolBinding {
+  mute(durationMs: number, control: OperationControl): Promise<MuteResult>;
+  unmute(control: OperationControl): Promise<MuteResult>;
+}
 interface ToolBinding {
   identity: ToolIdentity;
   readonly now?: () => number;
   open(location: string | undefined, control: OperationControl): Promise<Square>;
   discover(options: DiscoveryOptions, control: OperationControl): Promise<DiscoveryResult>;
+  readonly ledger: LedgerToolBinding;
 }
 
 export function createSquareToolRunner() {
@@ -30,6 +35,7 @@ export function createSquareToolRunner() {
     try {
       const binding = await bind();
       if ('runDiscovery' in tool) return { text: await tool.runDiscovery(args, control, binding) };
+      if ('runLedger' in tool) return { text: await tool.runLedger(args, control, binding) };
       square = await binding.open(args.location as string | undefined, control);
       try {
         return { text: await tool.run(square, args, control, binding.identity, binding.now) };
@@ -59,7 +65,13 @@ interface DiscoveryToolDefinition {
   inputSchema: z.ZodObject<z.ZodRawShape>;
   runDiscovery(args: JsonObject, control: OperationControl, binding: ToolBinding): Promise<string>;
 }
-type ToolDefinition = SingleSquareToolDefinition | DiscoveryToolDefinition;
+interface LedgerToolDefinition {
+  name: 'mute' | 'unmute';
+  description: string;
+  inputSchema: z.ZodObject<z.ZodRawShape>;
+  runLedger(args: JsonObject, control: OperationControl, binding: ToolBinding): Promise<string>;
+}
+type ToolDefinition = SingleSquareToolDefinition | DiscoveryToolDefinition | LedgerToolDefinition;
 
 const location = z.string().describe('Path to the .square file, relative to the working directory.');
 const participant = z.string().optional().describe('Your name in the square. Leave it out if you hold exactly one name here.');
@@ -110,6 +122,15 @@ function historyToolQuery({ search, regex, before, after, since, full: _full, ..
 }
 
 const target = z.string().describe('The participant to turn toward or away from.');
+const muteSchema = z.object({
+  duration: z.string().describe('How long to pause automatic notifications, like "30m" or "2h".'),
+  location: z.string().optional().describe('Path to the .square file. Omit to mute the entire ledger.'),
+  as: z.string().optional().describe('Your name in the square.'),
+}).strict();
+const unmuteSchema = z.object({
+  location: z.string().optional().describe('Path to the .square file. Omit to unmute the entire ledger.'),
+  as: z.string().optional().describe('Your name in the square.'),
+}).strict();
 
 const listSchema = z.object({
   depth: z.number().int().min(0).max(MAX_LIST_DEPTH).optional().describe('How many directory levels to explore (default 4).'),
@@ -195,6 +216,43 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     const viewer = (await selectOwnSeat(square, identity.owner, as, { optional: true }))?.name;
     return square.status({ viewer, observe: true }, control);
   }, rendering((result: StatusResult) => renderStatusResult(result.observation?.location ?? '', result, { surface: 'tool' }))),
+  {
+    name: 'mute',
+    description: 'Step back from notifications for a while. Whatever reaches you stays waiting for perceive.',
+    inputSchema: muteSchema,
+    async runLedger(args, control, binding) {
+      const input = muteSchema.parse(args);
+      const durationMs = parseDurationMs(input.duration, 'duration');
+      if (input.location === undefined) {
+        if (input.as !== undefined) throw new SquareError('invalid_args', 'A ledger-wide mute does not accept as.');
+        return renderMuteResult(undefined, 'mute', await binding.ledger.mute(durationMs, control));
+      }
+      const square = await binding.open(input.location, control);
+      try {
+        const result = await (await selectOwnSeat(square, binding.identity.owner, input.as))
+          .mute({ durationMs }, { observe: true }, control);
+        return renderMuteResult(square.location, 'mute', result);
+      } finally { await square.close(); }
+    },
+  },
+  {
+    name: 'unmute',
+    description: 'Resume automatic notifications early.',
+    inputSchema: unmuteSchema,
+    async runLedger(args, control, binding) {
+      const input = unmuteSchema.parse(args);
+      if (input.location === undefined) {
+        if (input.as !== undefined) throw new SquareError('invalid_args', 'A ledger-wide unmute does not accept as.');
+        return renderMuteResult(undefined, 'unmute', await binding.ledger.unmute(control));
+      }
+      const square = await binding.open(input.location, control);
+      try {
+        const result = await (await selectOwnSeat(square, binding.identity.owner, input.as))
+          .unmute({ observe: true }, control);
+        return renderMuteResult(square.location, 'unmute', result);
+      } finally { await square.close(); }
+    },
+  },
 ];
 
 export function squareToolFailure(error: unknown, signal?: AbortSignal): JsonObject {

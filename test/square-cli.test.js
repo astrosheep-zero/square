@@ -230,6 +230,8 @@ test('every public subcommand exposes scoped help without a square', async () =>
     'codex-hook',
     'history',
     'status',
+    'mute',
+    'unmute',
     'install',
     'uninstall',
     'harness',

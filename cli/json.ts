@@ -1,6 +1,6 @@
 export const JSON_COMMANDS: ReadonlySet<string> = new Set([
   'join', 'express', 'perceive', 'history', 'listen', 'ignore', 'unlisten',
-  'done', 'status', 'inbox',
+  'done', 'status', 'inbox', 'mute', 'unmute',
 ]);
 
 /** Serialize the SDK receipt, not its optional presentation or live participant handle. */

@@ -2,8 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createArtifactPort } from './artifact.js';
+import { canonicalPath } from './canonical-path.js';
+import { nameKey, SquareError, type Seat } from './model.js';
+import { readLedgerMutedUntil, readSquareSeatMutes, seatMuteKey } from './square-notification-mute.js';
 import { listPresentation } from './views.js';
-import { SquareError } from './model.js';
 import type { DiscoveryResult, DiscoveryOptions, OperationControl, SquareListItem } from './square-facade.js';
 
 export const DEFAULT_LIST_DEPTH = 4;
@@ -19,17 +21,32 @@ async function readSquareListItem(filePath: string, root: string, options: Disco
     control?.signal?.throwIfAborted();
     const stat = await fs.promises.stat(filePath);
     const artifact = createArtifactPort(filePath, undefined, control?.signal);
-    let projection;
-    try { projection = (await artifact.read(facts => listPresentation(facts, options.owner), control?.signal)).value; }
-    finally { await artifact.close(); }
-    return {
-      path: path.relative(root, filePath) || path.basename(filePath),
-      lastActiveAt: stat.mtimeMs,
-      context: [...projection.context].map((line) => line.trim()).filter(Boolean),
-      participants: [...projection.participants],
-      activities: projection.activities,
-      ...(projection.joined === undefined ? {} : { joined: projection.joined }),
-    };
+    try {
+      const projection = (await artifact.read(facts => listPresentation(facts, options.owner), control?.signal)).value;
+      const joined = projection.joined;
+      let current = new Map<string, Seat | undefined>(), mutes = new Map<string, number>();
+      if (joined?.length && options.ledgerLocation !== undefined) {
+        const location = await canonicalPath(filePath);
+        const captured: Seat[] = joined.map(item => ({ participant: item.name, owner: item.seat.owner,
+          generation: item.seat.generation, attachment: 'attached' }));
+        mutes = new Map(await readSquareSeatMutes(location, captured, options.clock ?? Date.now, control?.signal, options.ledgerLocation));
+        current = (await artifact.read(facts => new Map(captured.map(seat =>
+          [nameKey(seat.participant), facts.seat(seat.participant)] as const)), control?.signal)).value;
+      }
+      return {
+        path: path.relative(root, filePath) || path.basename(filePath),
+        lastActiveAt: stat.mtimeMs,
+        context: [...projection.context].map((line) => line.trim()).filter(Boolean),
+        participants: [...projection.participants],
+        activities: projection.activities,
+        ...(joined === undefined ? {} : { joined: joined.map(item => {
+          const seat = current.get(nameKey(item.name));
+          const mutedUntil = seat?.owner === item.seat.owner && seat.generation === item.seat.generation
+            ? mutes.get(seatMuteKey(seat)) : undefined;
+          return { name: item.name, pending: item.pending, ...(mutedUntil === undefined ? {} : { mutedUntil }) };
+        }) }),
+      };
+    } finally { await artifact.close(); }
   } catch (error) {
     control?.signal?.throwIfAborted();
     // A vanished, unreadable or undecodable candidate does not abort discovery.
@@ -49,6 +66,8 @@ export async function discoverSquares(root: string, options: DiscoveryOptions = 
   const items: SquareListItem[] = [];
   let examined = 0;
   let stopped = false;
+  const ledgerMutedUntil = options.ledgerLocation === undefined ? undefined
+    : await readLedgerMutedUntil(options.ledgerLocation, options.clock ?? Date.now, control?.signal);
 
   async function walk(dir: string, level: number): Promise<void> {
     control?.signal?.throwIfAborted();
@@ -76,5 +95,7 @@ export async function discoverSquares(root: string, options: DiscoveryOptions = 
     .filter((item) => options.after === undefined || item.path.localeCompare(options.after) > 0);
   const selected = page.slice(0, limit);
   const remaining = page.length - selected.length;
-  return { items: selected, total: items.length, stopped, remaining, ...(remaining > 0 ? { next: selected.at(-1)!.path } : {}) };
+  return { items: selected, total: items.length, stopped, remaining,
+    ...(remaining > 0 ? { next: selected.at(-1)!.path } : {}),
+    ...(ledgerMutedUntil === undefined ? {} : { ledgerMutedUntil }) };
 }

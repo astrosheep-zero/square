@@ -138,7 +138,8 @@ export function listPresentation(facts: SquareRead, owner?: Owner) {
   return { context: facts.header().preamble, participants, activities: facts.activityCount({ kinds: ['say'] }),
     ...(owner === undefined ? {} : { joined: facts.seatsForOwner(owner)
       .filter(seat => facts.participant(seat.participant)?.joined)
-      .map(seat => ({ name: seat.participant, pending: facts.directedCount(seat.participant, { unseenOnly: true, currentGeneration: true }) })) }) };
+      .map(seat => ({ name: seat.participant, pending: facts.directedCount(seat.participant, { unseenOnly: true, currentGeneration: true }),
+        seat: { owner: seat.owner, generation: seat.generation } })) }) };
 }
 export function queryStatus(facts: SquareRead, context: ParticipantQueryContext, viewer = '', observe = false): StatusResult {
   const participants = coreParticipants(facts, context.now);

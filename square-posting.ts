@@ -4,10 +4,11 @@ import path from 'node:path';
 import { DeliveryLedger, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
 import { dispatchPostedCard, isProducerDispatchRoute } from './notifications.js';
 import { retainDeliveryLedger } from './delivery-lifetime.js';
+import { openReadOnlyDeliveryLedger } from './notification-mute.js';
 import { projectNotification, displayAttentionPath } from './attention-presentation.js';
 import type { CardPresentation } from './card-presentation.js';
 import { coreDone } from './decisions.js';
-import { activityMetadataHasContent, nameKey, type Seat } from './model.js';
+import { SquareError, activityMetadataHasContent, nameKey, type Seat } from './model.js';
 import type { SquareArtifactPort, SquareRead } from './ports.js';
 import { formatActivityId } from './square-core.js';
 import { parseSquarePostKey, squarePostKey, type SquarePost } from './square-post.js';
@@ -15,10 +16,13 @@ import { parseSquarePostKey, squarePostKey, type SquarePost } from './square-pos
 function requireLedgerLocation(ledgerLocation: string): void {
   if (typeof ledgerLocation !== 'string' || !path.isAbsolute(ledgerLocation)) throw new TypeError('Expected a resolved absolute delivery ledger location');
 }
-const openLedger = (ledgerLocation: string, signal?: AbortSignal) => {
+const openLedger = (ledgerLocation: string, clock: () => number, signal?: AbortSignal) => {
   requireLedgerLocation(ledgerLocation);
-  return DeliveryLedger.open({ location: ledgerLocation, signal });
+  return DeliveryLedger.open({ location: ledgerLocation, clock, signal });
 };
+function requireFiniteClock(clock: () => number): void {
+  if (!Number.isFinite(clock())) throw new SquareError('invalid_args', 'Square time must be a finite number.');
+}
 function renderPost(location: string, post: SquarePost): { text: string; full: boolean } {
   if (post.kind === 'notice') return { text: post.body ?? '', full: true };
   const projected = projectNotification({ squarePath: location, actIndex: post.index, recipient: post.recipient,
@@ -32,16 +36,19 @@ export async function deliverySessionsForSeats(ledger: DeliveryLedger, seats: re
   return new Map(await Promise.all(owners.map(async owner => [owner, await ledger.session(owner, signal)] as const)));
 }
 /** Read-only host observations for status; callers fence them against the captured World seats. */
-export async function readSquareSessions(seats: readonly Seat[], signal: AbortSignal | undefined, ledgerLocation: string): Promise<ReadonlyMap<string, DeliverySession | undefined>> {
+export async function readSquareSessions(seats: readonly Seat[], signal: AbortSignal | undefined, ledgerLocation: string, clock: () => number = Date.now): Promise<ReadonlyMap<string, DeliverySession | undefined>> {
   requireLedgerLocation(ledgerLocation);
+  requireFiniteClock(clock);
   if (!seats.length) return new Map();
-  const ledger = await openLedger(ledgerLocation, signal);
+  const ledger = await openReadOnlyDeliveryLedger(ledgerLocation, clock, signal);
+  if (ledger === undefined) return new Map();
   try { return await deliverySessionsForSeats(ledger, seats, signal); }
   finally { await ledger.close(); }
 }
 /** A first producer join may register an absent owner, never resume or revive one. */
-export async function ensureInitialDeliverySession(owner: Seat['owner'], route: DeliveryRoute | undefined, signal: AbortSignal | undefined, ledgerLocation: string): Promise<boolean> {
-  const ledger = await openLedger(ledgerLocation, signal);
+export async function ensureInitialDeliverySession(owner: Seat['owner'], route: DeliveryRoute | undefined, signal: AbortSignal | undefined, ledgerLocation: string, clock: () => number = Date.now): Promise<boolean> {
+  requireFiniteClock(clock);
+  const ledger = await openLedger(ledgerLocation, clock, signal);
   try {
     const current = await ledger.session(owner, signal);
     if (!current) {
@@ -56,8 +63,9 @@ export async function ensureInitialDeliverySession(owner: Seat['owner'], route: 
 /** Called only by privileged mutations. Sandbox lease/ACK/selection never enters here. */
 export async function reconcileSquareDelivery(artifact: SquareArtifactPort, location: string, clock: () => number, signal: AbortSignal | undefined, ledgerLocation: string): Promise<readonly Seat[]> {
   requireLedgerLocation(ledgerLocation);
+  requireFiniteClock(clock);
   const seats = (await artifact.read(currentSeats, signal)).value;
-  const ledger = await openLedger(ledgerLocation, signal);
+  const ledger = await openLedger(ledgerLocation, clock, signal);
   try {
     const sessions = await deliverySessionsForSeats(ledger, seats, signal);
     const awaySeats: Seat[] = [];
@@ -145,6 +153,7 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
   // Delivery enrichment cannot turn a committed producer mutation into a retry of that mutation.
   let lifetime: ReturnType<typeof retainDeliveryLedger> | undefined;
   try {
+    requireFiniteClock(clock);
     const snapshot = (await artifact.read(facts => ({
       pending: facts.pendingPosts(Date.now()).map(post => {
         const activity = post.kind === 'activity' ? facts.activity(post.index) : undefined;
@@ -153,7 +162,7 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
       }),
       seats: currentSeats(facts),
     }), signal)).value;
-    const ledger = await openLedger(ledgerLocation, signal);
+    const ledger = await openLedger(ledgerLocation, clock, signal);
     lifetime = retainDeliveryLedger(ledger);
     const sessions = await deliverySessionsForSeats(ledger, snapshot.seats, signal);
     for (const { post, replyTo } of snapshot.pending) {
