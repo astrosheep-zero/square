@@ -56,55 +56,47 @@ async function ensureRuntime($) {
   try { return await starting; } finally { starting = undefined; }
 }
 
-async function setMode($, current, mode, agentId) {
+async function setMode($, current, mode, agentId, drain = false) {
   current.modes.set(agentId ?? '', mode);
   if (mode === 'stopped' || mode === 'ended') current.epochs.set(agentId ?? '', (current.epochs.get(agentId ?? '') ?? 0) + 1);
-  return rpc($, current, { op: 'state', agentId, mode });
+  return rpc($, current, { op: 'state', agentId, mode, drain });
+}
+
+async function wake($, current, frame) {
+  const epoch = current.epoch, localEpoch = current.epochs.get('');
+  const available = () => !current.closed && current.epoch === epoch && current.epochs.get('') === localEpoch && current.modes.get('') === 'idle';
+  if (!available() || !(await rpc($, current, { op: 'wake-guard', token: frame.token })).ok || !available()) return;
+  // Admission carries no card, receipt or custody. The input boundary fetches current context.
+  const result = await $.prompt.submit({ text: 'Square wake: use only the current external notification context supplied for this turn. If none is supplied, this wake is obsolete; do not repeat earlier work.' });
+  if (result.drop) {
+    if (available() && result.drop.includes('the session was stopped')) await setMode($, current, 'stopped');
+    $.ui.log('Square wake was not submitted: ' + result.drop, { to: 'debug' });
+  }
 }
 
 async function deliver($, current, frame) {
   const epoch = current.epoch;
   const key = frame.agentId ?? '';
   const localEpoch = current.epochs.get(key);
-  const available = () => !current.closed && current.epoch === epoch && current.epochs.get(key) === localEpoch && ['busy', 'idle'].includes(current.modes.get(key));
+  const available = () => !current.closed && current.epoch === epoch && current.epochs.get(key) === localEpoch && current.modes.get(key) === 'busy';
   if (!available() || !(await rpc($, current, { op: 'guard', token: frame.token })).ok || !available()) {
     await rpc($, current, { op: 'settle', token: frame.token, kind: 'released' });
     return;
   }
-  // No await separates the last native-state fence from the chosen native call.
-  if (current.modes.get(key) === 'busy') {
-    const result = await $.session.append({ agentId: frame.agentId, message: { type: 'user', content: [{ type: 'text', text: frame.text }] } });
-    if (result.deny) {
-      await rpc($, current, { op: 'settle', token: frame.token, kind: 'failed' });
-      $.ui.log('Square context was refused: ' + result.deny, { to: 'debug' });
-      return;
-    }
-    const blocks = result.message?.content;
-    const text = Array.isArray(blocks) && blocks.every(block => block.type === 'text' && typeof block.text === 'string')
-      ? blocks.map(block => block.text).join('') : undefined;
-    // Display is a separate effect, never evidence that the model read the row.
-    try { $.ui.log(frame.display); } finally {
-      await rpc($, current, { op: 'settle', token: frame.token, kind: 'append', text, uuid: result.uuid });
-    }
+  // No await separates the last native-state fence from append.
+  const result = await $.session.append({ agentId: frame.agentId, message: { type: 'user', content: [{ type: 'text', text: frame.text }] } });
+  if (result.deny) {
+    await rpc($, current, { op: 'settle', token: frame.token, kind: 'failed' });
+    $.ui.log('Square context was refused: ' + result.deny, { to: 'debug' });
     return;
   }
-  if (frame.agentId !== undefined) {
-    await rpc($, current, { op: 'settle', token: frame.token, kind: 'released' });
-    return;
+  const blocks = result.message?.content;
+  const text = Array.isArray(blocks) && blocks.every(block => block.type === 'text' && typeof block.text === 'string')
+    ? blocks.map(block => block.text).join('') : undefined;
+  // Display is a separate effect, never evidence that the model read the row.
+  try { $.ui.log(frame.display); } finally {
+    await rpc($, current, { op: 'settle', token: frame.token, kind: 'append', text, uuid: result.uuid });
   }
-  current.modes.set('', 'busy');
-  // Keep the plugin attribution. A Square notification is not human input.
-  const result = await $.prompt.submit({ text: frame.text });
-  if (result.drop) {
-    if (result.drop.includes('the session was stopped')) await setMode($, current, 'stopped');
-    else {
-      current.modes.set('', 'idle');
-      await rpc($, current, { op: 'settle', token: frame.token, kind: 'failed' });
-    }
-    $.ui.log('Square prompt was not submitted: ' + result.drop, { to: 'debug' });
-    return;
-  }
-  await rpc($, current, { op: 'settle', token: frame.token, kind: 'submit', text: result.text });
 }
 
 async function readDeliveries($, current) {
@@ -116,10 +108,13 @@ async function readDeliveries($, current) {
         current.buffer = current.buffer.slice(end + 1);
         if (!line) continue;
         const frame = JSON.parse(line);
-        if (frame.type === 'delivery') {
+        if (frame.type === 'wake') {
+          // Native submit may wait for input screening. Keep reading its body frames.
+          void wake($, current, frame).catch(error => $.ui.log('Square wake failed: ' + String(error), { to: 'debug' }));
+        } else if (frame.type === 'delivery') {
           try { await deliver($, current, frame); }
           catch (error) {
-            // An invoked append/submit may already have taken effect. Never try
+            // An invoked append may already have taken effect. Never try
             // the other path, replay it, or call a fallback host on uncertainty.
             await rpc($, current, { op: 'settle', token: frame.token, kind: 'unknown' }).catch(() => undefined);
             $.ui.log('Square delivery is uncertain: ' + String(error), { to: 'debug' });
@@ -138,6 +133,13 @@ async function readDeliveries($, current) {
 }
 
 export function register(on) {
+  // This native input boundary runs even for our own submitted wake. Unlike
+  // turn.step, it precedes the model's message snapshot; no second mod is needed.
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    const current = await ensureRuntime($);
+    await setMode($, current, 'busy', undefined, true);
+    return next(e);
+  });
   on('session.start', async ($, e, next) => {
     await ensureRuntime($);
     return next(e);

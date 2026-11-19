@@ -151,6 +151,7 @@ open-time cancellation. Persistence failures reject or appear in the late settle
 claim successful persistence.
 
 Codex producers only post. Each native async Stop receiver waits without holding claims, attempts one
-idle queue handoff, then exits; PostToolUse presents synchronously during execution. Idle queueing
-requires a reachable hosting app-server endpoint, not private stdio alone. See
+body-free idle wake, then exits. UserPromptSubmit fetches current cards at dequeue; PostToolUse
+presents synchronously during execution. Queue admission is not card custody or presentation.
+The native queue store is shared across hosting processes, including private stdio hosts. See
 [Codex delivery](codex-delivery.md) for native turn fencing, cancellation and recovery limits.

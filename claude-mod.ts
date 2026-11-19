@@ -1,11 +1,11 @@
-import { encodeDeliveryKey } from './delivery-key.js';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { z } from 'zod/v4';
 import { DeliveryLedger, deliveryLedgerLocation, type DeliveryTransport, type TransportOutcome } from './delivery-ledger.js';
 import { retainDeliveryLedger } from './delivery-lifetime.js';
 import { harnessOwner } from './owner.js';
+import { encodeDeliveryKey } from './delivery-key.js';
 import { akumaActorFromEnvironment } from './participant-identity.js';
 import { attachDeliverySession, detachDeliverySession } from './session-lifecycle.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from './claude-mcp-context.js';
@@ -15,16 +15,17 @@ const routeKind = 'claude-mod';
 const nativeId = z.string().min(1).max(4096).regex(/^[^\x00-\x1f\x7f]+$/u);
 const coordinate = z.object({ agentId: nativeId.optional() });
 const request = z.discriminatedUnion('op', [
-  coordinate.extend({ op: z.literal('state'), mode: z.enum(['busy', 'idle', 'stopped', 'ended']) }),
+  coordinate.extend({ op: z.literal('state'), mode: z.enum(['busy', 'idle', 'stopped', 'ended']), drain: z.boolean().optional() }),
   z.object({ op: z.literal('guard'), token: z.string().uuid() }),
-  z.object({ op: z.literal('settle'), token: z.string().uuid(), kind: z.enum(['append', 'submit', 'failed', 'unknown', 'released']),
+  z.object({ op: z.literal('wake-guard'), token: z.string().uuid() }),
+  z.object({ op: z.literal('settle'), token: z.string().uuid(), kind: z.enum(['append', 'failed', 'unknown', 'released']),
     text: z.string().optional(), uuid: nativeId.optional() }),
   coordinate.extend({ op: z.literal('mcp-begin'), toolUseId: nativeId, cwd: z.string().min(1) }),
   z.object({ op: z.literal('mcp-end'), toolUseId: nativeId, token: nativeId }),
   z.object({ op: z.literal('close') }),
 ]);
 type Mode = 'busy' | 'idle' | 'stopped' | 'ended';
-interface Receiver { agentId?: string; owner: string; generation: string; mode: Mode; attempted: Set<string> }
+interface Receiver { agentId?: string; owner: string; generation: string; mode: Mode; attempted: Set<string>; wake?: string; drains: Array<() => void> }
 interface Offer { receiver: Receiver; text: string; invoked: boolean; guard(): Promise<boolean>; finish(outcome: TransportOutcome): void }
 
 /** One mod-owned helper. Only this process touches Node/SQLite; no producer socket or inbox. */
@@ -56,26 +57,50 @@ export async function runClaudeMod(
       const owner = ownerFor(agentId);
       const attached = await attachDeliverySession(owner, env, [{ kind: routeKind, address: { sessionId, ...(agentId === undefined ? {} : { agentId }) } }], signal);
       if (!attached) return false;
-      receiver = { agentId, owner, generation: attached.generation, mode, attempted: new Set() };
+      receiver = { agentId, owner, generation: attached.generation, mode, attempted: new Set(), drains: [] };
       receivers.set(key, receiver);
     }
     if (!receiver) return false;
     if (mode === 'busy' && receiver.mode === 'stopped') receiver.attempted.clear();
     receiver.mode = mode;
+    if (mode !== 'idle') receiver.wake = undefined;
     revision++;
     if (mode === 'stopped') await ledger.cancel({ owner: receiver.owner, generation: receiver.generation }, signal);
     if (mode === 'ended') await detachDeliverySession(receiver.owner, receiver.generation, env, signal);
-    if (mode === 'stopped' || mode === 'ended') for (const offer of offers.values()) {
-      if (offer.receiver === receiver) offer.finish(offer.invoked ? 'unknown' : 'not-capable');
+    if (mode === 'stopped' || mode === 'ended') {
+      for (const offer of offers.values()) if (offer.receiver === receiver) offer.finish(offer.invoked ? 'unknown' : 'not-capable');
+      for (const resolve of receiver.drains.splice(0)) resolve();
     }
     return true;
   }
+  async function availableCards(receiver: Receiver) {
+    const held = new Set((await ledger.handoffs(receiver.owner, { generation: receiver.generation }, lifetimeSignal))
+      .filter(attempt => !['failed', 'released'].includes(attempt.outcome)).map(attempt => attempt.seq));
+    return (await ledger.pending(receiver.owner, { generation: receiver.generation }, lifetimeSignal))
+      .filter(card => !held.has(card.seq) && !receiver.attempted.has(encodeDeliveryKey(card.key)));
+  }
   async function rpc(data: z.infer<typeof request>): Promise<unknown> {
     switch (data.op) {
-      case 'state': return { ok: await state(data.agentId, data.mode) };
+      case 'state': {
+        const ok = await state(data.agentId, data.mode);
+        if (ok && data.mode === 'busy' && data.drain) {
+          // The native input boundary waits for append before the model snapshot.
+          await new Promise<void>(resolve => receivers.get(data.agentId ?? '')!.drains.push(resolve));
+        }
+        return { ok };
+      }
+      case 'wake-guard': {
+        const receiver = receivers.get('');
+        if (!receiver || receiver.mode !== 'idle' || receiver.wake !== data.token) return { ok: false };
+        const session = await ledger.session(receiver.owner, lifetimeSignal);
+        const cards = await availableCards(receiver);
+        return { ok: receiver.mode === 'idle' && receiver.wake === data.token && cards.length > 0
+          && session?.state === 'attached' && session.generation === receiver.generation
+          && session.routes.some(route => route.kind === routeKind && route.address.sessionId === sessionId) };
+      }
       case 'guard': {
         const offer = offers.get(data.token);
-        if (!offer || !['busy', 'idle'].includes(offer.receiver.mode) || !await offer.guard()) return { ok: false };
+        if (!offer || offer.receiver.mode !== 'busy' || !await offer.guard()) return { ok: false };
         // Crossing this fence may invoke a native effect. Cancellation thereafter is uncertain.
         offer.invoked = true;
         return { ok: true };
@@ -85,7 +110,6 @@ export async function runClaudeMod(
         if (!offer) return { ok: false };
         const exact = data.text === offer.text;
         const outcome: TransportOutcome = data.kind === 'append' ? exact && data.uuid ? 'presented' : 'unknown'
-          : data.kind === 'submit' ? exact ? 'presented' : 'accepted'
           : data.kind === 'released' ? 'not-capable' : data.kind;
         offer.finish(outcome);
         return { ok: true };
@@ -141,38 +165,45 @@ export async function runClaudeMod(
       const previousRevision = revision;
       for (const receiver of receivers.values()) {
         if (!['busy', 'idle'].includes(receiver.mode)) continue;
-        const current = await ledger.session(receiver.owner, lifetimeSignal);
-        if (current?.state !== 'attached' || current.generation !== receiver.generation) {
-          if (receiver.agentId === undefined) return '';
-          receiver.mode = 'ended';
-          continue;
-        }
-        const held = new Set((await ledger.handoffs(receiver.owner, { generation: receiver.generation }, lifetimeSignal))
-          .filter(attempt => !['failed', 'released'].includes(attempt.outcome)).map(attempt => attempt.seq));
-        for (const card of await ledger.pending(receiver.owner, { generation: receiver.generation }, lifetimeSignal)) {
-          if (lifetimeSignal.aborted || !['busy', 'idle'].includes(receiver.mode)) break;
-          if (held.has(card.seq) || receiver.attempted.has(encodeDeliveryKey(card.key))) continue;
-          // An idle child cannot be woken with the main session's prompt.submit.
-          if (receiver.agentId !== undefined && receiver.mode !== 'busy') continue;
-          receiver.attempted.add(encodeDeliveryKey(card.key));
-          const transport: DeliveryTransport = {
-            kind: routeKind,
-            async send(deliveryCard, _address, context) {
-              const text = renderDeliveryReminder([`[square-delivery:${context.token}]\n${deliveryCard.text}\n[/square-delivery:${context.token}]`], { tagged: false });
-              if (!await context.prepare({ token: context.token, messageId: context.token, payloadHash: createHash('sha256').update(text).digest('hex') })
-                || !await context.beforeSend() || !['busy', 'idle'].includes(receiver.mode)) return 'not-capable';
-              const completion = Promise.withResolvers<TransportOutcome>();
-              offers.set(context.token, { receiver, text, invoked: false, guard: context.beforeSend, finish: completion.resolve });
-              try {
-                await output(`${JSON.stringify({ type: 'delivery', token: context.token, agentId: receiver.agentId, text, display: deliveryCard.text })}\n`);
-                return await completion.promise;
-              } finally { offers.delete(context.token); }
-            },
-          };
-          lifetime.track(await ledger.dispatchHandoff(receiver.owner, card.key, transport, { generation: receiver.generation, timeoutMs: 5000, signal: lifetimeSignal }));
-          // Settlement changes are our own; drain them rather than busy-retrying.
-          version = await observer.read(lifetimeSignal);
-        }
+        const drains = receiver.drains.splice(0);
+        try {
+          const current = await ledger.session(receiver.owner, lifetimeSignal);
+          if (current?.state !== 'attached' || current.generation !== receiver.generation) {
+            if (receiver.agentId === undefined) return '';
+            receiver.mode = 'ended';
+            continue;
+          }
+          const cards = await availableCards(receiver);
+          if (receiver.mode === 'idle') {
+            // One body-free wake per idle period; no card handoff until the native input boundary.
+            if (receiver.agentId === undefined && cards.length && !receiver.wake) {
+              receiver.wake = randomUUID();
+              await output(`${JSON.stringify({ type: 'wake', token: receiver.wake })}\n`);
+            }
+            continue;
+          }
+          for (const card of cards) {
+            if (lifetimeSignal.aborted || receiver.mode !== 'busy') break;
+            receiver.attempted.add(encodeDeliveryKey(card.key));
+            const transport: DeliveryTransport = {
+              kind: routeKind,
+              async send(deliveryCard, _address, context) {
+                const text = renderDeliveryReminder([`[square-delivery:${context.token}]\n${deliveryCard.text}\n[/square-delivery:${context.token}]`], { tagged: false });
+                if (!await context.prepare({ token: context.token, messageId: context.token, payloadHash: createHash('sha256').update(text).digest('hex') })
+                  || !await context.beforeSend() || receiver.mode !== 'busy') return 'not-capable';
+                const completion = Promise.withResolvers<TransportOutcome>();
+                offers.set(context.token, { receiver, text, invoked: false, guard: context.beforeSend, finish: completion.resolve });
+                try {
+                  await output(`${JSON.stringify({ type: 'delivery', token: context.token, agentId: receiver.agentId, text, display: deliveryCard.text })}\n`);
+                  return await completion.promise;
+                } finally { offers.delete(context.token); }
+              },
+            };
+            lifetime.track(await ledger.dispatchHandoff(receiver.owner, card.key, transport, { generation: receiver.generation, timeoutMs: 5000, signal: lifetimeSignal }));
+            // Settlement changes are our own; drain them rather than busy-retrying.
+            version = await observer.read(lifetimeSignal);
+          }
+        } finally { for (const resolve of drains) resolve(); }
       }
       if (!lifetimeSignal.aborted && previousRevision === revision) await observer.changed(version, 1000, lifetimeSignal);
     }
@@ -180,6 +211,7 @@ export async function runClaudeMod(
   finally {
     stop.abort();
     for (const offer of offers.values()) offer.finish(offer.invoked ? 'unknown' : 'not-capable');
+    for (const receiver of receivers.values()) for (const resolve of receiver.drains.splice(0)) resolve();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     observer?.close();

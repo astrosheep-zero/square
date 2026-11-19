@@ -50,6 +50,10 @@ const wrapper = path.join(root, 'hook.mjs');
 await fs.writeFile(wrapper, `import fs from 'node:fs';import os from 'node:os';import {spawn} from 'node:child_process';
 let input='';for await(const chunk of process.stdin)input+=chunk;
 const command=process.argv[2], payload=JSON.parse(input);
+if(payload.hook_event_name==='UserPromptSubmit'&&fs.existsSync(${JSON.stringify(path.join(root, 'hold-prompt-hook'))})){
+fs.appendFileSync(${JSON.stringify(hookLog)},JSON.stringify({t:Date.now(),command,pid:process.pid,event:payload.hook_event_name,turn:payload.turn_id,stage:'held'})+'\\n');
+while(fs.existsSync(${JSON.stringify(path.join(root, 'hold-prompt-hook'))}))await new Promise(resolve=>setTimeout(resolve,20));
+}
 const child=spawn(${JSON.stringify(process.execPath)},[${JSON.stringify(cli)},command],{env:process.env,stdio:['pipe','inherit','inherit']});
 const record=value=>fs.appendFileSync(${JSON.stringify(hookLog)},JSON.stringify({t:Date.now(),command,pid:process.pid,child:child.pid,event:payload.hook_event_name,turn:payload.turn_id,...value})+'\\n');
 record({stage:'start'});child.stdin.end(input);
@@ -58,7 +62,7 @@ child.on('error',error=>{record({stage:'error',error:String(error)});process.exi
 child.on('exit',(code,signal)=>{record({stage:'exit',code,signal});process.exit(code??(128+(os.constants.signals[signal]??0)))});
 `);
 const queueWrapper = path.join(root, 'queue');
-await fs.writeFile(queueWrapper, `#!/bin/sh\nprintf '%s\\n' "$$" >> ${shell(queueLog)}\nexec ${shell(binary)} "$@"\n`, { mode: 0o700 });
+await fs.writeFile(queueWrapper, `#!/bin/sh\nprintf '%s\\n' "$$" >> ${shell(queueLog)}\nprintf '%s\\n' "$@" >> ${shell(path.join(root, 'queue-args.txt'))}\nexec ${shell(binary)} "$@"\n`, { mode: 0o700 });
 env.SQUARE_CODEX_BIN = queueWrapper;
 const hooks = JSON.parse(await fs.readFile(new URL('../plugins/codex/hooks/hooks.json', import.meta.url), 'utf8'));
 assert.deepEqual(Object.keys(hooks.hooks).sort(), ['Interrupt', 'PostToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'UserPromptSubmit'].sort());
@@ -151,10 +155,14 @@ try {
   await until(idle, 'self-queued turn completed');
   assert.equal((await queues()).length, 1);
   assert.match(JSON.stringify(evidence.requests[1].body), /NATIVE_IDLE_CARD_086c/);
-  assert.deepEqual(await ledger.receipts(owner), []);
+  assert.equal((await ledger.receipts(owner, { keys: [["idle-card"]] })).length, 1);
+  assert.ok((await readHooks()).some(row => row.event === 'UserPromptSubmit' && row.turn !== firstStop.id && row.stage === 'exit'));
+  const queueArgs = await fs.readFile(path.join(root, 'queue-args.txt'), 'utf8');
+  assert.match(queueArgs, /Square wake:/);
+  assert.doesNotMatch(queueArgs, /NATIVE_IDLE_CARD_086c/);
   await until(async () => (await readHooks()).some(row => row.child === firstWatcher.child && row.stage === 'exit'), 'first watcher exited after queue');
   const nextWatcher = await until(async () => (await readHooks()).find(row => row.command === 'codex-watch' && row.stage === 'start' && row.child !== firstWatcher.child), 'fresh watcher at next Stop');
-  check('idle queue admitted one card and ended its watcher; next Stop started a fresh watcher', { first: firstWatcher.child, next: nextWatcher.child });
+  check('body-free idle wake fetched its card at native UserPromptSubmit and recorded presentation; next Stop rearmed', { first: firstWatcher.child, next: nextWatcher.child });
 
   holdNext = true;
   await call('turn/start', { threadId, input: [{ type: 'text', text: 'busy native turn', text_elements: [] }] });
@@ -170,9 +178,11 @@ try {
   await until(idle, 'later self-queue completed');
   assert.equal((await queues()).length, 2);
   assert.match(JSON.stringify(evidence.requests[3].body), /NATIVE_BUSY_CARD_086c/);
+  assert.equal((await ledger.receipts(owner, { keys: [["busy-card"]] })).length, 1);
+  assert.doesNotMatch(await fs.readFile(path.join(root, 'queue-args.txt'), 'utf8'), /NATIVE_BUSY_CARD_086c/);
   const busyWatcher = await until(async () => (await readHooks()).find(row => row.command === 'codex-watch' && row.stage === 'start' && row.child !== firstWatcher.child && row.child !== nextWatcher.child), 'busy turn Stop started fresh watcher');
   await until(async () => (await readHooks()).some(row => row.child === busyWatcher.child && row.stage === 'exit'), 'busy turn watcher exited after queue');
-  check('new Stop queued the busy card once and its watcher exited', { watcher: busyWatcher.child });
+  check('new Stop queued only a wake; native prompt hook presented the busy card once', { watcher: busyWatcher.child });
 
   holdNext = true;
   const interruptTurn = await call('turn/start', { threadId, input: [{ type: 'text', text: 'interrupt native turn', text_elements: [] }] });
@@ -218,7 +228,35 @@ try {
   await until(idle, 'native tool turn completed');
   check('real PostToolUse presented active card and recorded receipt without queue');
 
-  const lastWatcher = await until(async () => (await readHooks()).find(row => row.command === 'codex-watch' && row.stage === 'start' && row.turn === toolTurn.turn.id), 'last idle Stop watcher started');
+  // Hold an actual native prompt hook before it disarms the prior Stop. This
+  // admits our wake while native input is busy, then suppress the original card
+  // before the queued wake can run. No provider credentials or fake queue API.
+  const queuedWatcher = await until(async () => (await readHooks()).find(row => row.command === 'codex-watch' && row.stage === 'start' && row.turn === toolTurn.turn.id), 'watcher before delayed native input');
+  const gate = path.join(root, 'hold-prompt-hook');
+  await fs.writeFile(gate, 'hold');
+  holdNext = true;
+  const delayedTurn = await call('turn/start', { threadId, input: [{ type: 'text', text: 'hold native input before queued wake', text_elements: [] }] });
+  await until(async () => (await readHooks()).some(row => row.turn === delayedTurn.turn.id && row.stage === 'held'), 'native prompt hook held before presentation');
+  await ledger.post({ owner, key: ["stale-queued-card"], text: 'NATIVE_STALE_QUEUED_BODY' });
+  await until(async () => (await queues()).length === 3, 'wake queued behind active native input');
+  await until(async () => (await readHooks()).some(row => row.child === queuedWatcher.child && row.stage === 'exit' && row.code === 0), 'wake admission completed before suppression');
+  await ledger.suppress({ owner, key: ["stale-queued-card"], scope: 'exact' });
+  await fs.unlink(gate);
+  const delayedRequest = await until(() => [...held.keys()].find(n => n > toolRequest), 'native request before delayed wake');
+  assert.doesNotMatch(JSON.stringify(evidence.requests[delayedRequest - 1].body), /NATIVE_STALE_QUEUED_BODY/);
+  await ledger.post({ owner, key: ["fresh-at-dequeue"], text: 'NATIVE_FRESH_AT_DEQUEUE' });
+  complete(held.get(delayedRequest), delayedRequest); held.delete(delayedRequest);
+  await until(() => evidence.requests.length > delayedRequest, 'already-admitted wake fetched current body');
+  const afterDelayedWake = JSON.stringify(evidence.requests[delayedRequest].body);
+  assert.match(afterDelayedWake, /NATIVE_FRESH_AT_DEQUEUE/);
+  assert.doesNotMatch(afterDelayedWake, /NATIVE_STALE_QUEUED_BODY/);
+  assert.equal((await ledger.receipts(owner, { keys: [["fresh-at-dequeue"]] })).length, 1);
+  assert.deepEqual(await ledger.receipts(owner, { keys: [["stale-queued-card"]] }), []);
+  assert.equal((await queues()).length, 3);
+  const lastTurn = await until(idle, 'delayed queued wake completed');
+  check('already-admitted wake survived suppression without replaying old body; native dequeue fetched only fresh context');
+
+  const lastWatcher = await until(async () => (await readHooks()).find(row => row.command === 'codex-watch' && row.stage === 'start' && row.turn === lastTurn.id), 'last idle Stop watcher started');
   assert.ok(!(await readHooks()).some(row => row.child === lastWatcher.child && row.stage === 'exit'), 'last watcher is still running before shutdown');
   process.kill(lastWatcher.child, 0);
   const live = (await readHooks()).filter(row => row.command === 'codex-watch' && row.stage === 'start').map(row => row.child);

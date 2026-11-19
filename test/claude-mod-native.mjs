@@ -20,7 +20,7 @@ fs.writeFileSync(path.join(root, 'controller.log'), `${run.stdout ?? ''}${run.st
 assert.equal(run.status, 0, `Native delivery failed: ${root}\n${run.error ?? ''}\n${run.stderr}\n${run.stdout}`);
 const summary = JSON.parse(fs.readFileSync(path.join(root, 'summary.json'), 'utf8'));
 assert.equal(summary.idleWakes, 2);
-for (const field of ['duplicateSuppressed', 'busyAppendedWithinTurn', 'busyUiLogEmitted', 'stopDidNotWakeOrAppend', 'exactReceipts', 'detachedOnExit', 'expectedInterrupt'])
+for (const field of ['bodyFreeWakes', 'duplicateSuppressed', 'busyAppendedWithinTurn', 'busyUiLogEmitted', 'stopDidNotWakeOrAppend', 'exactReceipts', 'detachedOnExit', 'expectedInterrupt'])
   assert.equal(summary[field], true, field);
 const mcp = spawnSync(process.execPath, ['--import', './test/sandbox-env.js', '--test', 'test/claude-mcp-runtime.test.js'], {
   cwd: repo, env: { ...process.env, SQUARE_CLAUDE_BIN: binary }, stdio: 'inherit', timeout: 100_000,

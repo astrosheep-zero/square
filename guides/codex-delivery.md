@@ -38,23 +38,22 @@ UserPromptSubmit, PostToolUse, Interrupt) clears it and retires the watcher so s
 active-turn presentation; SessionEnd marks the thread ended. No app-server connection, idle proof or
 turn-history sampling is involved: the boundary file is the only activity gate.
 
-The watcher subscribes before reading the ledger, uses a one-second bounded rescan, and holds no
-card claims while waiting. On an eligible card it claims once and checks ledger currentness,
-suppression, cancellation, attachment generation, signal and deadline immediately before queue
-invocation. It then ends observation after that handoff attempt, whether accepted, unknown or
-definitely unsent. A refusal is not retried in the same wait. Failed/released cards remain available
-to UserPromptSubmit/PostToolUse or a future Stop; accepted/unknown custody cannot be replayed.
-The original ledger connection is retained only for already-invoked late settlements.
+The watcher subscribes before reading the ledger, uses a one-second bounded rescan, and never
+claims cards. When an eligible card exists, it queues only a fixed, body-free wake. It rechecks the
+captured boundary epoch, route, attachment generation, pending eligibility, signal and deadline
+immediately before launch. One attempt ends the wait, whether accepted, unknown or definitely
+unsent; there is no same-wait retry. Wake admission neither takes card custody nor records a
+presentation receipt. Cards remain in the ledger for UserPromptSubmit/PostToolUse.
 
 Queue admission writes the shared native queue store (`queue_1.sqlite` under the receiver's
 `CODEX_HOME`) through the official `codex queue` CLI. Every Codex app-server hosting a thread polls
 that store across processes and starts queued input only when the thread is idle
 (`start_turn_if_idle`), so admission never interrupts an active turn and needs no hosting endpoint.
 
-The lock deduplicates overlapping Stop callbacks, not all sequential duplicates forever. Ledger
-custody excludes replay of the same card; it is not a persistent one-send-per-turn budget for different
-cards. A duplicate callback arriving after the first watcher exits could submit another card before
-native history reflects the queued turn.
+The lock deduplicates overlapping Stop callbacks, not all sequential duplicates forever. A duplicate
+callback arriving after the first watcher exits can enqueue another body-free wake. At execution,
+UserPromptSubmit presents only currently eligible cards. A wake whose cards were already perceived,
+suppressed or presented may produce an empty model turn; it never carries the old body.
 
 ## Transport and cancellation limits
 
@@ -64,20 +63,22 @@ Because the store is shared per `CODEX_HOME`, a private stdio-only app-server (f
 launched by another host) still polls and consumes its queued messages. The watcher never starts a
 replacement service and never samples native thread state.
 
-Queue admission is custody, not presentation. Accepted/unknown outbox custody has no remaining card
-content. Invoked timeout or ambiguous results remain unknown; never automatically replay them.
-Already-admitted queue entries cannot be recalled, matching the official CLI.
+Queue admission is only a wake, not card custody or presentation. An ambiguous wake is not retried
+in the same wait and does not mark any card unknown. The original body remains available to the
+synchronous receiver. Already-admitted wake entries cannot be recalled, matching the official CLI;
+they contain no activity body to replay.
 
 Interrupt cancellation suppresses the captured attachment's pending batch, not future cards, and the
-Interrupt event retires the live watcher through the boundary file. Cards already queued before the
-Interrupt stay admitted; future cards wait for UserPromptSubmit/PostToolUse or a later Stop.
+Interrupt event retires the live watcher through the boundary file. Wakes already queued before the
+Interrupt stay admitted, but cancelled bodies cannot revive through them; future cards wait for
+UserPromptSubmit/PostToolUse or a later Stop.
 Hook payloads do not provide a cross-incarnation event identity: generation capture protects against
 replacement after capture, not a callback that was already stale when it began. In particular, a late
 Interrupt can still cancel a newer batch in the same attachment. SessionEnd has the same observation-
 time capture limitation.
 
 Observation is finite. Before the first Stop, after timeout/crash/missed spawn, or after an unsent
-handoff failure, cards wait for UserPromptSubmit/PostToolUse or a subsequent Stop. There is no
+wake failure, cards wait for UserPromptSubmit/PostToolUse or a subsequent Stop. There is no
 detached helper, producer fallback or autonomous crash-idle recovery.
 
 ## Native evidence
@@ -91,7 +92,8 @@ env -u SQUARE_HOST_LEDGER_ROOT SQUARE_CODEX_NATIVE_SMOKE=1 \
 
 The probe uses a temporary HOME/CODEX_HOME, actual shipped hooks/CLI, an isolated native app-server
 with an explicit Unix endpoint, and a loopback fixture provider. Its JSON evidence names the temporary
-directory. It verifies Stop startup, one-shot idle wake and exit, fresh watchers for new Stops, busy
+directory. It verifies Stop startup, body-free idle wake and exit, current card presentation and
+receipts at the queued turn's native UserPromptSubmit, fresh watchers for new Stops, busy
 fencing with no pending cards, Interrupt RPC cancellation, future delivery through UserPromptSubmit,
 real PostToolUse context and receipts, and termination of a still-waiting watcher at host shutdown.
 It does not certify physical TUI Escape, 24-hour lifetime or every resume path.

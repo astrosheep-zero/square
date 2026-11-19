@@ -14,7 +14,6 @@ export interface MarkdownStyles {
   // Keep nested Text backgrounds square; rounded inline backgrounds are unreliable on iOS.
   inlineCode: TextStyle;
   heading: TextStyle;
-  headingSizes?: TextStyle[];
   quoteText: TextStyle;
   codeText: TextStyle;
   bullet: TextStyle;
@@ -129,8 +128,7 @@ export function renderBlocks(tokens: Token[], styles: MarkdownStyles, prefix: st
         // Headings sit closer to the section they introduce than to whatever preceded them.
         const rhythm = { marginTop: index > 0 ? 4 : 0, marginBottom: index < visible.length - 1 ? -2 : 0 };
         return (
-          <Text key={key} selectable style={[styles.text, textStyle, styles.heading,
-            styles.headingSizes?.[(token as Tokens.Heading).depth - 1], rhythm]}>
+          <Text key={key} selectable style={[styles.text, textStyle, styles.heading, rhythm]}>
             {renderInlines(children(token), styles, key, openLinks)}
           </Text>
         );

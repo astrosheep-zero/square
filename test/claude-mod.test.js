@@ -38,9 +38,12 @@ async function fixture(t, options = {}) {
       },
     },
     prompt: { submit: async input => {
-      effects.push({ kind: 'submit', input });
+      const effect = { kind: 'submit', input, started: false };
+      effects.push(effect);
       if (options.submit) return options.submit(input);
+      await event('classic.UserPromptSubmit', { prompt: input.text });
       await event('turn.start', { turnId: randomUUID(), text: input.text });
+      effect.started = true;
       return { text: input.text, origin: { kind: 'plugin', name: 'square' } };
     } },
     ui: { log: (text, opts) => logs.push({ text, debug: opts?.to === 'debug' }) },
@@ -99,17 +102,52 @@ test('busy mod appends and logs each card once; exact native acceptance alone se
   assert.deepEqual(f.effects.map(effect => effect.kind), ['append', 'append']);
 });
 
-test('idle mod submits an attributed prompt, never append plus submit, and rearms after normal completion', async t => {
+test('idle mod submits a body-free wake, appends at the native input boundary, and rearms', async t => {
   const f = await fixture(t);
   await f.post(["idle-one"]);
   await until(async () => (await f.ledger.receipts(f.owner())).length === 1);
   assert.equal(f.effects[0].kind, 'submit');
   assert.equal('asUser' in f.effects[0].input, false);
-  assert.deepEqual(f.logs.filter(log => !log.debug), []);
+  assert.doesNotMatch(f.effects[0].input.text, /idle-one/);
+  assert.equal(f.effects[1].kind, 'append');
+  assert.match(f.effects[1].input.message.content[0].text, /idle-one/);
+  await until(() => f.effects[0].started); // Native completion follows turn.start, not just an append receipt.
   await f.event('turn.complete', { turnId: 'wake-one', isAborted: false });
   await f.post(["idle-two"]);
   await until(async () => (await f.ledger.receipts(f.owner())).length === 2);
-  assert.deepEqual(f.effects.map(effect => effect.kind), ['submit', 'submit']);
+  assert.deepEqual(f.effects.map(effect => effect.kind), ['submit', 'append', 'submit', 'append']);
+});
+
+test('a delayed wake leaves cards pending and fetches only unsuppressed context at the native input boundary', async t => {
+  const submitted = Promise.withResolvers(), release = Promise.withResolvers();
+  const f = await fixture(t, { submit: async input => { submitted.resolve(input); await release.promise; return { text: input.text }; } });
+  await f.post(["stale"], 'ORIGINAL_BODY_MUST_NOT_REPLAY');
+  const input = await submitted.promise;
+  assert.doesNotMatch(input.text, /ORIGINAL_BODY_MUST_NOT_REPLAY/);
+  const { generation } = await f.ledger.session(f.owner());
+  assert.deepEqual((await f.ledger.pending(f.owner(), { generation })).map(card => card.key), [["stale"]]);
+  assert.deepEqual(await f.ledger.handoffs(f.owner(), { generation }), []);
+  assert.deepEqual(await f.ledger.receipts(f.owner()), []);
+  await f.ledger.suppress({ owner: f.owner(), key: ["stale"], scope: 'exact' });
+  await f.post(["fresh"], 'CURRENT_BODY_ONLY');
+  await f.event('classic.UserPromptSubmit', { prompt: input.text });
+  assert.deepEqual(f.effects.map(effect => effect.kind), ['submit', 'append']);
+  assert.match(f.effects[1].input.message.content[0].text, /CURRENT_BODY_ONLY/);
+  assert.doesNotMatch(f.effects[1].input.message.content[0].text, /ORIGINAL_BODY_MUST_NOT_REPLAY/);
+  assert.deepEqual((await f.ledger.receipts(f.owner())).map(row => row.key), [["fresh"]]);
+  release.resolve();
+});
+
+test('an obsolete wake with no remaining cards crosses input screening without appending or acknowledging old text', async t => {
+  const submitted = Promise.withResolvers(), release = Promise.withResolvers();
+  const f = await fixture(t, { submit: async input => { submitted.resolve(input); await release.promise; return { text: input.text }; } });
+  await f.post(["already-read"]);
+  const input = await submitted.promise;
+  await f.ledger.suppress({ owner: f.owner(), key: ["already-read"], scope: 'exact' });
+  await f.event('classic.UserPromptSubmit', { prompt: input.text });
+  assert.deepEqual(f.effects.map(effect => effect.kind), ['submit']);
+  assert.deepEqual(await f.ledger.receipts(f.owner()), []);
+  release.resolve();
 });
 
 test('Stop fences an in-flight guard, suppresses its batch without receipts, and requires new native input', async t => {
@@ -159,6 +197,20 @@ test('idle Escape refuses submit, cancels that batch, and does not keep retrying
   await sleep(50);
   assert.deepEqual(f.effects.map(effect => effect.kind), ['submit']);
   assert.deepEqual(await f.ledger.receipts(f.owner()), []);
+});
+
+test('a late refused wake cannot stop a newer native input or cancel its future cards', async t => {
+  const submitted = Promise.withResolvers(), result = Promise.withResolvers();
+  const f = await fixture(t, { submit: async () => { submitted.resolve(); return result.promise; } });
+  await f.post(["before-stop"]);
+  await submitted.promise;
+  await f.event('turn.complete', { isAborted: true });
+  await f.event('classic.UserPromptSubmit', { prompt: 'new human input' });
+  result.resolve({ drop: 'the session was stopped and nobody has sent input since' });
+  await until(() => f.logs.some(log => /wake was not submitted/.test(log.text)));
+  await f.post(["future"]);
+  await until(async () => (await f.ledger.receipts(f.owner())).length === 1);
+  assert.deepEqual((await f.ledger.receipts(f.owner())).map(row => row.key), [["future"]]);
 });
 
 test('clear closes the captured attachment; the next prompt starts a new helper without another session.start', async t => {

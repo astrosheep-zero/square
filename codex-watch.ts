@@ -2,13 +2,12 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { DeliveryLedger, deliveryLedgerLocation } from './delivery-ledger.js';
-import { retainDeliveryLedger } from './delivery-lifetime.js';
 import { harnessOwner } from './owner.js';
 import { withFileLock } from './file-lock.js';
 import { canonicalPath } from './canonical-path.js';
 import { codexWakeAddress, codexBoundaryStore } from './codex-address.js';
 import { parseCodexHookText } from './codex-hook.js';
-import { CodexQueueTransport } from './codex-queue.js';
+import { queueCodexWake } from './codex-queue.js';
 
 /** One async Stop waits only for its captured native turn; it never adopts another Stop.
  * Queue admission writes the shared native queue store through the CLI; the hosting
@@ -25,14 +24,14 @@ export async function runCodexWatch(inputText: string, env: NodeJS.ProcessEnv = 
   const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
-  let lifetime: ReturnType<typeof retainDeliveryLedger> | undefined;
+  let ledger: DeliveryLedger | undefined;
   try {
     const route = codexWakeAddress(input.session_id, env);
     const home = await canonicalPath(route.address.codexHome);
-    const ledger = await DeliveryLedger.open({ location: deliveryLedgerLocation(env), signal: combined });
-    lifetime = retainDeliveryLedger(ledger);
+    const currentLedger = await DeliveryLedger.open({ location: deliveryLedgerLocation(env), signal: combined });
+    ledger = currentLedger;
     const owner = harnessOwner({ channel: 'codex', session: input.session_id });
-    const captured = await ledger.session(owner, combined);
+    const captured = await currentLedger.session(owner, combined);
     if (captured?.state !== 'attached') return '';
     // Same-turn duplicates cannot overlap; a later Stop need not wait for an old
     // watcher or a slow late settlement to release a session-wide lock.
@@ -49,25 +48,29 @@ export async function runCodexWatch(inputText: string, env: NodeJS.ProcessEnv = 
       await boundaries.record(input.session_id, 'Stop', { turnId: input.turn_id, signal: combined });
       const epoch = (await boundaries.read(input.session_id))?.stop;
       if (!epoch) return;
-      const observer = await ledger.observe(owner);
+      const eligible = async () => {
+        if (combined.aborted || !await boundaries.queueEligible(input.session_id, epoch)) return;
+        const session = await currentLedger.session(owner, combined);
+        if (session?.state !== 'attached' || session.generation !== captured.generation) return;
+        const registered = session.routes.find(candidate => candidate.kind === 'codex-queue');
+        if (!registered || registered.address.threadId !== input.session_id ||
+          registered.address.endpoint !== route.address.endpoint ||
+          !registered.address.codexHome || await canonicalPath(registered.address.codexHome) !== home) return;
+        const held = new Set((await currentLedger.handoffs(owner, { generation: captured.generation }, combined))
+          .filter(attempt => !['failed', 'released'].includes(attempt.outcome)).map(attempt => attempt.seq));
+        const cards = await currentLedger.pending(owner, { generation: captured.generation }, combined);
+        return { address: registered.address, pending: cards.some(card => !held.has(card.seq)) };
+      };
+      const observer = await currentLedger.observe(owner);
       try {
         while (!combined.aborted) {
           const version = await observer.read(combined);
-          if (!await boundaries.queueEligible(input.session_id, epoch)) return;
-          const session = await ledger.session(owner, combined);
-          if (session?.state !== 'attached' || session.generation !== captured.generation) return;
-          const registered = session.routes.find(candidate => candidate.kind === 'codex-queue');
-          if (!registered || registered.address.threadId !== input.session_id ||
-            registered.address.endpoint !== route.address.endpoint ||
-            !registered.address.codexHome || await canonicalPath(registered.address.codexHome) !== home) return;
-          const held = new Set((await ledger.handoffs(owner, { generation: captured.generation }, combined))
-            .filter(attempt => !['failed', 'released'].includes(attempt.outcome)).map(attempt => attempt.seq));
-          const card = (await ledger.pending(owner, { generation: captured.generation }, combined)).find(card => !held.has(card.seq));
-          if (card) {
-            lifetime!.track(await ledger.dispatchHandoff(owner, card.key, new CodexQueueTransport({ env, address: registered.address }),
-              { generation: captured.generation, timeoutMs: 5000, signal: combined }));
-            // One handoff attempt ends this wait, including unknown/refused
-            // outcomes. Never replay or turn our own writes into a retry loop.
+          const current = await eligible();
+          if (!current) return;
+          if (current.pending) {
+            await queueCodexWake(current.address, async () => !!(await eligible())?.pending, env, combined);
+            // Wake admission owns no card. Unknown/refused wakes also end this
+            // wait without retries; synchronous hooks retain the original body.
             return;
           }
           await observer.changed(version, 1000, combined);
@@ -80,7 +83,7 @@ export async function runCodexWatch(inputText: string, env: NodeJS.ProcessEnv = 
     clearTimeout(timer);
     process.off('SIGTERM', stop);
     process.off('SIGINT', stop);
-    await lifetime?.close();
+    await ledger?.close();
   }
   return '';
 }

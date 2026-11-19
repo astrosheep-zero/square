@@ -155,6 +155,10 @@ with socketserver.ThreadingTCPServer(('127.0.0.1', 0), Server) as server:
         driver('post', ['idle-2'], 'SQUARE_MOD_IDLE_NOTICE_2')
         time.sleep(0.2)
         assert len(calls) == count
+        wakes = [frame for frame in frames if frame.get('type') == 'user' and frame.get('origin') == {'kind': 'plugin', 'name': 'square'}]
+        assert len(wakes) == 2
+        assert all('Square wake:' in json.dumps(frame['message']) and 'SQUARE_MOD_IDLE_NOTICE_' not in json.dumps(frame['message']) for frame in wakes)
+        summary['bodyFreeWakes'] = True
         summary['idleWakes'] = 2
         summary['duplicateSuppressed'] = True
         state.update(phase='busy', toolSent=False)
