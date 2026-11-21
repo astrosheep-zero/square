@@ -6,27 +6,25 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import plugin from '../dist/plugins/opencode-v1/index.js';
-import { legacyTransport, nativeMessageId } from '../dist/plugins/opencode-v1/transport.js';
+import { legacyTransport } from '../dist/plugins/opencode-v1/transport.js';
 import { startReceiver } from '../dist/plugins/opencode-v1/runtime.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { renderDeliveryReminder } from '../dist/delivery-frame.js';
 import { harnessOwner } from '../dist/owner.js';
 import { installOpenCodePlugin, uninstallOpenCodePlugin, verifyOpenCodeRuntime } from '../dist/harness-links.js';
 
-test('v1 native message IDs are unique, ordered and native-shaped', () => {
-  const ids = Array.from({ length: 100 }, nativeMessageId);
-  assert.equal(new Set(ids).size, ids.length);
-  assert.deepEqual([...ids].sort(), ids);
-  assert.ok(ids.every(id => /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(id)));
-});
-
 test('v1 persists correlation before submission but never claims native acceptance', async () => {
   const events = [];
   const transport = legacyTransport({ session: { promptAsync: async input => { events.push(['call', input]); return { response: { status: 204 } }; } } }, 'ses_a', new AbortController().signal);
-  const context = { token: 'handoff', signal: new AbortController().signal, deadline: Date.now() + 1000,
-    prepare: async value => { events.push(['prepare', value]); return true; }, beforeSend: async () => { events.push(['check']); return true; } };
-  assert.equal(await transport.send({ text: 'hello' }, { sessionId: 'ses_a' }, context), 'unknown');
-  assert.deepEqual(events.map(event => event[0]), ['prepare', 'check', 'call']);
+  const context = () => ({ token: 'handoff', signal: new AbortController().signal, deadline: Date.now() + 1000,
+    prepare: async value => { events.push(['prepare', value]); return true; }, beforeSend: async () => { events.push(['check']); return true; } });
+  assert.equal(await transport.send({ text: 'hello' }, { sessionId: 'ses_a' }, context()), 'unknown');
+  assert.equal(await transport.send({ text: 'again' }, { sessionId: 'ses_a' }, context()), 'unknown');
+  assert.deepEqual(events.map(event => event[0]), ['prepare', 'check', 'call', 'prepare', 'check', 'call']);
+  const ids = events.filter(([kind]) => kind === 'call').map(([, input]) => input.body.messageID);
+  assert.deepEqual([...ids].sort(), ids);
+  assert.notEqual(ids[0], ids[1]);
+  assert.ok(ids.every(id => /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(id)));
   assert.equal(events[0][1].token, 'handoff');
   assert.equal(events[0][1].messageId, events[2][1].body.messageID);
   const text = renderDeliveryReminder(['hello'], { tagged: true });
@@ -91,6 +89,28 @@ test('unavailable health leaves bounded shell-only integration', async t => {
   const output = { env: {} };
   await hooks['shell.env']({ sessionID: 'ses_one' }, output);
   assert.equal(output.env.OPENCODE_SESSION_ID, 'ses_one');
+});
+
+test('a healthy v1 host with an invalid ledger stays shell-only', async t => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ version: '1.19.5' }), { status: 200 }));
+  t.mock.method(console, 'warn', () => {});
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-v1-ledger-'));
+  const delivery = path.join(root, 'delivery.sqlite');
+  fs.writeFileSync(delivery, 'not a database');
+  const previous = process.env.SQUARE_DELIVERY;
+  process.env.SQUARE_DELIVERY = delivery;
+  t.after(() => {
+    if (previous === undefined) delete process.env.SQUARE_DELIVERY; else process.env.SQUARE_DELIVERY = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  let nativeCalls = 0;
+  const hooks = await plugin({ serverUrl: 'http://127.0.0.1', directory: root, project: { id: 'project' }, client: { session: {
+    get: async () => { nativeCalls++; return {}; },
+    promptAsync: async () => { nativeCalls++; return {}; },
+  } } });
+  assert.deepEqual(Object.keys(hooks), ['shell.env']);
+  assert.equal(fs.readFileSync(delivery, 'utf8'), 'not a database');
+  assert.equal(nativeCalls, 0);
 });
 
 test('major one installs only owned file URL and diagnoses moved file without removing lookalikes', t => {

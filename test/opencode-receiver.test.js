@@ -43,11 +43,14 @@ test('v2 records the native input identity before confirmed native acceptance', 
 
 test('exact context hash confirms the current handoff, never a changed message or canceled card', async t => {
   const f = await fixture(t);
-  await f.ledger.post({ owner: f.owner, key: ["first"], text: 'hello' });
-  const result = await f.ledger.dispatchHandoff(f.owner, ["first"], transport(async (card, _address, c) => {
-    assert.ok(await c.prepare({ token: c.token, messageId: 'native-message', payloadHash: hash(card.text) }));
-    return 'accepted';
-  }), { generation: f.generation, timeoutMs: 1000 });
+  const stage = async (key, text) => {
+    await f.ledger.post({ owner: f.owner, key: [key], text });
+    return f.ledger.dispatchHandoff(f.owner, [key], transport(async (card, _address, c) => {
+      assert.ok(await c.prepare({ token: c.token, messageId: 'native-message', payloadHash: hash(card.text) }));
+      return 'accepted';
+    }), { generation: f.generation, timeoutMs: 1000 });
+  };
+  const result = await stage('first', 'hello');
   assert.equal(result.outcome, 'accepted');
   const signal = new AbortController().signal;
   await observeOpenCodeContext('ses_test', f.generation, context('tampered'), f.env, signal);
@@ -58,20 +61,12 @@ test('exact context hash confirms the current handoff, never a changed message o
   assert.equal(await f.ledger.handoff(result.token), undefined);
   assert.equal((await f.ledger.post({ owner: f.owner, key: ["first"], text: 'hello' })).status, 'suppressed');
 
-  await f.ledger.post({ owner: f.owner, key: ["second"], text: 'later' });
-  await f.ledger.dispatchHandoff(f.owner, ["second"], transport(async (card, _address, c) => {
-    await c.prepare({ token: c.token, messageId: 'native-message', payloadHash: hash(card.text) });
-    return 'accepted';
-  }), { generation: f.generation, timeoutMs: 1000 });
+  await stage('second', 'later');
   await f.ledger.cancel({ owner: f.owner, generation: f.generation });
   await observeOpenCodeContext('ses_test', f.generation, context('later'), f.env, signal);
   assert.equal((await f.ledger.receipts(f.owner)).length, 1);
 
-  await f.ledger.post({ owner: f.owner, key: ["third"], text: 'stale' });
-  await f.ledger.dispatchHandoff(f.owner, ["third"], transport(async (card, _address, c) => {
-    await c.prepare({ token: c.token, messageId: 'native-message', payloadHash: hash(card.text) });
-    return 'accepted';
-  }), { generation: f.generation, timeoutMs: 1000 });
+  await stage('third', 'stale');
   await f.ledger.attach({ owner: f.owner, expectedGeneration: f.generation, routes: [{ kind: 'opencode-server', address: { sessionId: 'ses_test' } }] });
   await observeOpenCodeContext('ses_test', f.generation, context('stale'), f.env, signal);
   assert.equal((await f.ledger.receipts(f.owner)).length, 1);
@@ -124,6 +119,150 @@ test('interrupt cancels the captured generation without suppressing later cards'
     await stop();
     if (previous === undefined) delete process.env.SQUARE_DELIVERY; else process.env.SQUARE_DELIVERY = previous;
   }
+});
+
+test('v2 keeps synchronous registration callbacks inert until startup', async t => {
+  const f = await fixture(t);
+  const previous = process.env.SQUARE_DELIVERY;
+  process.env.SQUARE_DELIVERY = f.env.SQUARE_DELIVERY;
+  t.after(() => { if (previous === undefined) delete process.env.SQUARE_DELIVERY; else process.env.SQUARE_DELIVERY = previous; });
+  await f.ledger.post({ owner: f.owner, key: ["early"], text: 'early' });
+  const calls = [], reads = [];
+  let contextRegistered = false, subscribed = false, release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  let callbackDone;
+  const callbackRan = new Promise(resolve => { callbackDone = resolve; });
+  const setup = plugin.setup({
+    app: { version: '2.0.0' }, location: { directory: os.tmpdir(), project: { id: 'project' } },
+    session: {
+      hook: async (name, callback) => {
+        if (name === 'context') { contextRegistered = true; return; }
+        await callback({ sessionID: 'ses_test' });
+        callbackDone();
+        await blocked;
+      },
+      get: async ({ sessionID }) => { reads.push(sessionID); return { id: sessionID, projectID: 'project', location: { directory: os.tmpdir() } }; },
+      prompt: async input => {
+        calls.push({ input, ready: contextRegistered && subscribed });
+        return { id: input.id, sessionID: input.sessionID, type: 'user', delivery: input.delivery, payload: { text: input.text }, time: { created: Date.now() } };
+      },
+    },
+    event: { subscribe({ signal }) {
+      subscribed = true;
+      return (async function* () { while (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true })); })();
+    } },
+  });
+  let stop;
+  try {
+    await callbackRan;
+    assert.deepEqual(reads, [], 'a registration callback reconciled before startup');
+    assert.equal(calls.length, 0);
+    release();
+    stop = await setup;
+    const deadline = Date.now() + 5000;
+    while (!calls.length && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].ready, true, 'native delivery started before context and subscription registration');
+  } finally {
+    release();
+    stop ??= await setup.catch(() => undefined);
+    await stop?.();
+  }
+});
+
+test('v2 hook registration failure disposes setup without delivery', async t => {
+  const f = await fixture(t);
+  const previous = process.env.SQUARE_DELIVERY;
+  process.env.SQUARE_DELIVERY = f.env.SQUARE_DELIVERY;
+  t.after(() => { if (previous === undefined) delete process.env.SQUARE_DELIVERY; else process.env.SQUARE_DELIVERY = previous; });
+  await f.ledger.post({ owner: f.owner, key: ["early"], text: 'early' });
+  const reads = [];
+  let calls = 0;
+  const setup = plugin.setup({
+    app: { version: '2.0.0' }, location: { directory: os.tmpdir(), project: { id: 'project' } },
+    session: {
+      hook: async (name, callback) => {
+        if (name === 'context') throw Error('registration failed');
+        await callback({ sessionID: 'ses_test' });
+      },
+      get: async ({ sessionID }) => { reads.push(sessionID); return { id: sessionID, projectID: 'project', location: { directory: os.tmpdir() } }; },
+      prompt: async () => { calls++; return {}; },
+    },
+    event: { async *subscribe() {} },
+  });
+  let stop, failure;
+  try { stop = await setup; } catch (error) { failure = error; }
+  try {
+    assert.equal(failure?.message, 'registration failed');
+    assert.deepEqual(reads, []);
+    assert.equal(calls, 0);
+    assert.deepEqual(await f.ledger.handoffs(f.owner, { generation: f.generation }), []);
+    assert.equal((await f.ledger.pending(f.owner, { generation: f.generation })).length, 1);
+  } finally { await stop?.(); }
+});
+
+test('v2 synchronous subscription failure disposes setup without custody', async t => {
+  const f = await fixture(t);
+  const previous = process.env.SQUARE_DELIVERY;
+  process.env.SQUARE_DELIVERY = f.env.SQUARE_DELIVERY;
+  t.after(() => { if (previous === undefined) delete process.env.SQUARE_DELIVERY; else process.env.SQUARE_DELIVERY = previous; });
+  await f.ledger.post({ owner: f.owner, key: ["early"], text: 'early' });
+  let calls = 0;
+  const setup = plugin.setup({
+    app: { version: '2.0.0' }, location: { directory: os.tmpdir(), project: { id: 'project' } },
+    session: {
+      hook: async () => {},
+      get: async ({ sessionID }) => ({ id: sessionID, projectID: 'project', location: { directory: os.tmpdir() } }),
+      prompt: async () => { calls++; return {}; },
+    },
+    event: { subscribe() { throw Error('subscription failed'); } },
+  });
+  let stop, failure;
+  try { stop = await setup; } catch (error) { failure = error; }
+  try {
+    assert.equal(failure?.message, 'subscription failed');
+    assert.equal(calls, 0);
+    assert.deepEqual(await f.ledger.handoffs(f.owner, { generation: f.generation }), []);
+    assert.equal((await f.ledger.pending(f.owner, { generation: f.generation })).length, 1);
+  } finally { await stop?.(); }
+});
+
+test('v2 first iterator rejection closes the receiver before delivery', async t => {
+  const f = await fixture(t);
+  const previous = process.env.SQUARE_DELIVERY;
+  process.env.SQUARE_DELIVERY = f.env.SQUARE_DELIVERY;
+  t.after(() => { if (previous === undefined) delete process.env.SQUARE_DELIVERY; else process.env.SQUARE_DELIVERY = previous; });
+  await f.ledger.post({ owner: f.owner, key: ["early"], text: 'early' });
+  const calls = [];
+  let subscriptionSignal, aborted;
+  const abortedSignal = new Promise(resolve => { aborted = resolve; });
+  const setup = plugin.setup({
+    app: { version: '2.0.0' }, location: { directory: os.tmpdir(), project: { id: 'project' } },
+    session: {
+      hook: async () => {},
+      get: async ({ sessionID }) => ({ id: sessionID, projectID: 'project', location: { directory: os.tmpdir() } }),
+      prompt: async input => {
+        calls.push(input);
+        return { id: input.id, sessionID: input.sessionID, type: 'user', delivery: input.delivery, payload: { text: input.text }, time: { created: Date.now() } };
+      },
+    },
+    event: { subscribe({ signal }) {
+      subscriptionSignal = signal;
+      if (signal.aborted) aborted(); else signal.addEventListener('abort', aborted, { once: true });
+      return (async function* () { throw Error('event stream lost'); })();
+    } },
+  });
+  let stop, timer;
+  try {
+    stop = await setup;
+    try {
+      await Promise.race([abortedSignal, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('receiver did not abort')), 2000); })]);
+    } finally { clearTimeout(timer); }
+    assert.equal(subscriptionSignal.aborted, true);
+    assert.equal(calls.length, 0);
+    assert.deepEqual(await f.ledger.handoffs(f.owner, { generation: f.generation }), []);
+    assert.equal((await f.ledger.pending(f.owner, { generation: f.generation })).length, 1);
+  } finally { await stop?.(); }
 });
 
 test('watcher pulls ledger cards and competing presentation custody prevents duplicate handoff', async t => {
