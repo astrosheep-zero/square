@@ -68,7 +68,7 @@ test('the local resource accepts transport injection without composing harness d
 });
 
 test('neutral storage closure excludes Agora, including type-only dependencies', () => {
-  const roots = ['artifact-store.ts', 'sqlite-framing.ts', 'sqlite-values.ts'];
+  const roots = ['sqlite-framing.ts', 'sqlite-values.ts'];
   const forbidden = /^(?:model|ports|square-facade|square-core|artifact|square-sqlite|sqlite-square|square-domain|square-.*(?:schema|framing|domain)|agora(?:-.*)?)\.ts$/;
   function closureLeaks(sources) {
     const visited = new Set(), leaks = [];
@@ -89,9 +89,9 @@ test('neutral storage closure excludes Agora, including type-only dependencies',
   }
   assert.deepEqual(closureLeaks(productionSources), []);
   const probe = new Map(roots.map(root => [root, '']));
-  probe.set('artifact-store.ts', "import type { X } from './helper.js';");
+  probe.set('sqlite-framing.ts', "import type { X } from './helper.js';");
   probe.set('helper.ts', "type X = import('./model.js').X;");
-  assert.deepEqual(closureLeaks(probe), ['artifact-store.ts -> helper.ts -> model.ts']);
+  assert.deepEqual(closureLeaks(probe), ['sqlite-framing.ts -> helper.ts -> model.ts']);
 });
 
 test('normal runtime has one fact path, with no retired whole-state bridge', () => {
@@ -128,7 +128,7 @@ function storageLeaks(sources) {
         leaks.push(`${file} -> ${target}`);
       if (target === 'square-producer-sqlite.ts' && !['artifact.ts', 'square-sqlite.ts', 'migrate.ts'].includes(file))
         leaks.push(`${file} -> ${target}`);
-      if (target === 'sqlite-transaction.ts' && !['artifact-store.ts', 'delivery-ledger-sqlite.ts', 'migrate.ts'].includes(file))
+      if (target === 'sqlite-transaction.ts' && !['artifact.ts', 'delivery-ledger-sqlite.ts', 'migrate.ts'].includes(file))
         leaks.push(`${file} -> ${target}`);
     }
   }

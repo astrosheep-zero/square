@@ -1,19 +1,39 @@
-import { type DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { validateActivityMetadata, activityMetadataHasContent, type ActivityMetadata, type ActivityObservation, type HardCap, type Seat, type StoredAct, type HydratedAct, type WatchLease } from './model.js';
+import { InternalSquareError, SquareError } from './neutral.js';
 import type { SquareHeader, SquareRead, ParticipantFact, AttentionFact, ActivityHead, ActivityFilter, DirectedFilter, DirectedHead } from './ports.js';
-import type { SeatRef } from './ports.js';
 import { deriveLanding, landingFacts, type LandingWriter } from './square-domain.js';
-import { formatActivityId } from './square-core.js';
+import { formatActivityId, parseActivityId } from './square-core.js';
 import { compileSearchPattern } from './search.js';
 import { validateEndpointGeneration as endpointGeneration } from './message.js';
-import { createProducerDriver, producerSchemaSql, initializeProducerSqlite, resetProducerSqlite } from './square-producer-sqlite.js';
-import { readStorageRevision, initializeStorageMeta, STORAGE_META_SQL, validateSchema } from './sqlite-framing.js';
-import type { StoreFormat } from './artifact-store.js';
+import { createProducerDriver, FORMAT12_PRODUCER_SQL, FORMAT13_ADDITIONS_SQL, resetProducerSqlite } from './square-producer-sqlite.js';
+import { readStorageRevision, initializeStorageMeta, resetStorageMeta, STORAGE_META_SQL, validateSchema } from './sqlite-framing.js';
 import { type Row, encode, key, invalidArtifact, requireFact, integer, finite, string, json, object, shape, strings, decoded, immutable, pageRows, pageLimit } from './sqlite-values.js';
-export { invalidArtifact } from './sqlite-values.js';
-export { validateEndpointGeneration as endpointGeneration } from './message.js';
 export const APPLICATION_ID = 0x53515245;
 export const CURRENT_USER_VERSION = 13;
+
+export function requireSquareExtension(location: string): void {
+    if (!location.endsWith('.square')) throw new SquareError('invalid_args', `Square artifacts must use the .square extension: ${location}`);
+}
+export function storageError(error: unknown, location: string): unknown {
+    if (!(error instanceof Error) || error instanceof SquareError || error instanceof InternalSquareError) return error;
+    if (/unable to open database file|no such file|SQLITE_CANTOPEN/i.test(error.message))
+        return new InternalSquareError('not_found', `square file not found: ${location}`);
+    if (/not a database|SQLITE_NOTADB/i.test(error.message)) return invalidArtifact('not a SQLite database.');
+    return error;
+}
+/** Private storage opening; never creates a missing file. */
+export function openExistingSquareDatabase(location: string, readOnly = false): DatabaseSync {
+    requireSquareExtension(location);
+    const uri = pathToFileURL(path.resolve(location));
+    uri.searchParams.set('mode', readOnly ? 'ro' : 'rw');
+    try { return new DatabaseSync(uri.href, { readOnly }); } catch (error) { throw storageError(error, location); }
+}
+export function abort(signal?: AbortSignal): void {
+    if (signal?.aborted) throw signal.reason ?? new Error('Square artifact operation aborted');
+}
 /** Explicit import/export DTOs, not a runtime transaction model. */
 export interface SquareRuntimeState {
     nextActIndex: number;
@@ -105,27 +125,29 @@ CREATE TABLE catch_leases (
   lease_json TEXT NOT NULL CHECK (json_valid(lease_json))
 ) WITHOUT ROWID;`;
 export interface AgoraConfig { readonly hardCap?: number | null; readonly throttlePerMinute?: number; readonly preamble?: readonly string[]; readonly warmup?: readonly string[] }
-export function initializeAgoraSqlite(db: DatabaseSync, configuration: AgoraConfig = {}): void {
+/** Frozen Format12 framing shared with the accepted Format12 offline edge. */
+export const FORMAT12_SQUARE_SQL = [STORAGE_META_SQL, FORMAT12_PRODUCER_SQL, AGORA_SCHEMA_SQL].join('\n');
+/** The only current framing: Format12 plus the two Format13 producer declarations. */
+export const FORMAT13_SQUARE_SQL = [FORMAT12_SQUARE_SQL, FORMAT13_ADDITIONS_SQL].join('\n');
+function initializeAgoraSqlite(db: DatabaseSync, configuration: AgoraConfig = {}): void {
     db.exec(AGORA_SCHEMA_SQL);
     db.prepare('INSERT INTO square_meta(id,next_act_index,hard_cap,throttle_per_minute,preamble_json,warmup_json) VALUES(1,0,?,?,?,?)')
         .run(configuration.hardCap ?? null, configuration.throttlePerMinute ?? null, JSON.stringify(configuration.preamble ?? []), JSON.stringify(configuration.warmup ?? []));
 }
-export function resetAgoraSqlite(db: DatabaseSync): void {
+function resetAgoraSqlite(db: DatabaseSync): void {
     for (const table of ['catch_leases', 'caught_activity', 'participant_seats', 'landed_audience', 'attention', 'participants', 'activities', 'square_meta']) db.exec(`DROP TABLE ${table}`);
 }
-function validateSquareFraming(db: DatabaseSync, location = ''): void {
+export function validateSquareFraming(db: DatabaseSync, location = ''): void {
     const identity = db.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get() as Row;
     requireFact(identity.application_id === APPLICATION_ID, 'unrelated SQLite database.');
     requireFact(identity.user_version === CURRENT_USER_VERSION, 'unsupported SQLite format version; this build opens only fresh format-13 squares.');
-    validateSchema(db, [STORAGE_META_SQL, producerSchemaSql, AGORA_SCHEMA_SQL].join('\n'), location);
+    validateSchema(db, FORMAT13_SQUARE_SQL, location);
 }
-/** Full Square framing and reset, including producer state. */
-export function squareStoreFormat(resetStorage: (db: DatabaseSync) => void): StoreFormat {
-    return {
-        applicationId: APPLICATION_ID, userVersion: CURRENT_USER_VERSION, observerKey: 'square',
-        validate: (db, location) => validateSquareFraming(db, location),
-        reset(db) { resetProducerSqlite(db); resetAgoraSqlite(db); resetStorage(db); },
-    };
+/** Full Square reset, including producer state. */
+export function resetSquareSqlite(db: DatabaseSync): void {
+    resetProducerSqlite(db);
+    resetAgoraSqlite(db);
+    resetStorageMeta(db);
 }
 
 const kinds = ['join', 'done', 'say', 'read', 'listen', 'ignore', 'unlisten'];
@@ -142,7 +164,7 @@ function head(row: Row): ActivityHead {
     });
 }
 /** Validate the complete persisted activity. */
-export function validateStoredActivity(value: unknown): StoredAct {
+function validateStoredActivity(value: unknown): StoredAct {
     const a = object(value);
     integer(a.index);
     finite(a.at);
@@ -183,12 +205,6 @@ export function validateStoredActivity(value: unknown): StoredAct {
     }
     return value as StoredAct;
 }
-/** Validate complete activity content. */
-export function validateHydratedActivity(value: unknown): HydratedAct {
-    const a = object(value);
-    if (a.kind !== 'say') return validateStoredActivity(a);
-    return validateStoredActivity(a);
-}
 /** Decode an activity with its complete payload. */
 function activity(row: Row): StoredAct {
     const h = head(row), payload = object(json(row.payload_json));
@@ -196,10 +212,6 @@ function activity(row: Row): StoredAct {
     const allowed = h.kind === 'say' ? ['mentions', 'body', 'metadata'] : h.kind === 'done' ? ['body'] : h.kind === 'read' ? ['through'] : h.kind === 'listen' || h.kind === 'ignore' || h.kind === 'unlisten' ? ['target'] : [];
     requireFact(Object.keys(payload).every(k => allowed.includes(k)));
     return immutable(validateStoredActivity({ ...h, ...payload }));
-}
-/** Activity and content are one stored fact. */
-function activityWithContent(row: Row): HydratedAct {
-    return activity(row);
 }
 function participant(row: Row): ParticipantFact {
     const name = decoded(row.name_json, true);
@@ -232,7 +244,7 @@ export function validateWatchLease(value: unknown): WatchLease {
     }
     return value as WatchLease;
 }
-export function readSquareHeader(db: DatabaseSync): SquareHeader {
+function readSquareHeader(db: DatabaseSync): SquareHeader {
     const rows = db.prepare('SELECT m.*, (SELECT COALESCE(MAX(act_index),-1) FROM activities) AS last_act_index FROM square_meta m').all() as Row[];
     requireFact(rows.length === 1 && rows[0].id === 1, 'header row is malformed.');
     const r = rows[0], nextActIndex = integer(r.next_act_index), lastActIndex = integer(r.last_act_index, -1);
@@ -284,15 +296,14 @@ function activitySelection(filter: ActivityFilter, alias = 'a'): Selection {
         args.push(encode(filter.metadataMatch.fields));
     }
     if (filter.search !== undefined) {
-        terms.push(`square_search(?,?,'act/'||${alias}.act_index,${alias}.actor_json,json_extract(${alias}.payload_json,'$.body'))=1`);
+        terms.push(`square_search(?,?,${alias}.act_index,${alias}.actor_json,json_extract(${alias}.payload_json,'$.body'))=1`);
         args.push(filter.search.mode, filter.search.text);
     }
     return { sql: terms.length ? terms.join(' AND ') : '1', args };
 }
-export interface SqliteDriver extends SquareRead {
-    storeSeat(seat: Seat): boolean;
-    removeSeat(seat: SeatRef): boolean;
-    applyLanding(effect: import('./square-domain.js').LandingEffect): void;
+export interface SqliteDriver {
+    readonly read: SquareRead;
+    readonly writes: LandingWriter;
     readonly changed: boolean;
     readonly deliveryChanged: boolean;
     /** Explicit import replay of activity and audience facts. */
@@ -314,7 +325,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
                 pattern = compileSearchPattern(string(text), mode === 'literal');
                 patterns.set(cacheKey, pattern);
             }
-            return Number([string(index), decoded(actor, true), body === null ? '' : string(body)]
+            return Number([formatActivityId(integer(index)), decoded(actor, true), body === null ? '' : string(body)]
                 .some(field => pattern.test(field)));
         });
         searchRegistered = true;
@@ -323,7 +334,6 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         if (filter.search !== undefined) ensureSearch();
         return activitySelection(filter);
     }
-    const read = {} as SquareRead;
     const producer = createProducerDriver(db);
     const currentEndpoint = (name: string): Seat | undefined => {
         const row = one('SELECT * FROM participant_seats WHERE participant_key_json=?', [key(name)]);
@@ -346,7 +356,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         return { base, participant };
     }
     // ----- Upper Agora read capabilities -----
-    const readMethods: SquareRead = {
+    const read: SquareRead = {
         pendingPosts: producer.pendingPosts, postsAt: producer.postsAt, postDispositionsAt: producer.postDispositionsAt,
         withdrawnClaims: producer.withdrawnClaims, ownsPost: producer.ownsPost, receiptWatermark: producer.receiptWatermark, departedSeats: producer.departedSeats,
         seat: currentEndpoint,
@@ -370,7 +380,7 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
         },
         activities(indexes) {
             indexes.forEach(v => integer(v));
-            return immutable(all('SELECT a.* FROM activities a WHERE a.act_index IN (SELECT value FROM json_each(?)) ORDER BY a.act_index', [encode(indexes)]).map(activityWithContent));
+            return immutable(all('SELECT a.* FROM activities a WHERE a.act_index IN (SELECT value FROM json_each(?)) ORDER BY a.act_index', [encode(indexes)]).map(activity));
         },
         activityCount(filter) { const s = selectActivity(filter); return integer(one(`SELECT COUNT(*) AS n FROM activities a WHERE ${s.sql}`, s.args)!.n); },
         contextIndexes(centers, before, after) {
@@ -432,7 +442,6 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
             return row ? immutable(validateWatchLease(json(row.lease_json))) : undefined;
         },
     };
-    Object.assign(read, readMethods);
 
     // ----- Upper Agora writes / landing -----
     const writes: LandingWriter = {
@@ -507,17 +516,17 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
     };
 
     function importLanding(activityValue: HydratedAct): StoredAct {
-        const validated = validateHydratedActivity(activityValue);
-        driver.applyLanding(deriveLanding(validated, landingFacts(read, validated)));
-        if (validated.kind === 'join') driver.storeSeat({ participant: validated.actor, owner: 'import', generation: formatActivityId(validated.index), attachment: 'attached' });
-        else if (validated.kind === 'done') { const current = read.seat(validated.actor); if (current) driver.removeSeat(current); }
+        const validated = validateStoredActivity(activityValue);
+        writes.applyLanding(deriveLanding(validated, landingFacts(read, validated)));
+        if (validated.kind === 'join') writes.storeSeat({ participant: validated.actor, owner: 'import', generation: formatActivityId(validated.index), attachment: 'attached' });
+        else if (validated.kind === 'done') { const current = read.seat(validated.actor); if (current) writes.removeSeat(current); }
         return validated;
     }
-    const driver = Object.defineProperties(Object.assign(read, writes, { importLanding }), {
-        changed: { get: () => changed || producer.changed },
-        deliveryChanged: { get: () => producer.deliveryChanged },
-    }) as unknown as SqliteDriver;
-    return driver;
+    return {
+        read, writes, importLanding,
+        get changed() { return changed || producer.changed; },
+        get deliveryChanged() { return producer.deliveryChanged; },
+    };
 }
 /** Explicit import replay. Caller owns the transaction and format publication. */
 export function initializeSqlite(db: DatabaseSync, state: SquareState, revision: number): void {
@@ -526,34 +535,34 @@ export function initializeSqlite(db: DatabaseSync, state: SquareState, revision:
     if (state.hardCap !== null) integer(state.hardCap, 1);
     if (state.throttlePerMinute !== undefined) integer(state.throttlePerMinute, 1);
     initializeStorageMeta(db, revision);
-    initializeProducerSqlite(db);
+    db.exec(FORMAT13_ADDITIONS_SQL);
+    db.exec(FORMAT12_PRODUCER_SQL);
     initializeAgoraSqlite(db, { ...state, preamble: strings(state.preamble), warmup: strings(state.warmup) });
     const driver = createSqliteDriver(db);
     for (const activity of state.acts) driver.importLanding(activity);
-    requireFact(state.runtime.nextActIndex > driver.header().lastActIndex, 'nextActIndex is behind the activity history.');
+    requireFact(state.runtime.nextActIndex > driver.read.header().lastActIndex, 'nextActIndex is behind the activity history.');
     db.prepare('UPDATE square_meta SET next_act_index=? WHERE id=1').run(state.runtime.nextActIndex);
     const insert = db.prepare('INSERT INTO caught_activity(recipient_key_json,act_index,at) VALUES(?,?,?)');
     for (const [owner, observations] of Object.entries(state.runtime.observations)) {
         string(owner, true);
         for (const [id, observation] of Object.entries(observations)) {
-            const match = /^act\/(0|[1-9][0-9]*)$/.exec(id);
-            requireFact(match, 'malformed receipt coordinate.');
-            const index = integer(Number(match[1]));
+            const index = parseActivityId(id);
+            requireFact(index !== undefined, 'malformed receipt coordinate.');
             requireFact(index < state.runtime.nextActIndex, 'receipt references an unassigned activity index.');
             requireFact(observation.state === 'seen');
-            const activity = driver.activity(index);
+            const activity = driver.read.activity(index);
             if (activity?.kind !== 'say') continue;
             insert.run(key(owner), index, finite(observation.at));
         }
     }
     for (const [owner, value] of Object.entries(state.runtime.leases)) {
         string(owner, true);
-        const l = validateWatchLease(value), generation = driver.seat(owner)?.generation ?? 'detached';
+        const l = validateWatchLease(value), generation = driver.read.seat(owner)?.generation ?? 'detached';
         db.prepare('INSERT INTO catch_leases(recipient_key_json,generation_json,lease_json) VALUES(?,?,?)').run(key(owner), encode(generation), encode(l));
     }
 }
 export function exportSqliteState(db: DatabaseSync): SquareState {
-    const d = createSqliteDriver(db), h = d.header();
+    const d = createSqliteDriver(db), h = d.read.header();
     const observations: SquareState['runtime']['observations'] = {}, leases: Record<string, WatchLease> = {};
     for (const row of db.prepare('SELECT p.name_json,r.act_index,r.at FROM caught_activity r JOIN participants p ON p.name_key_json=r.recipient_key_json').all() as Row[]) {
         const owner = decoded(row.name_json, true);
@@ -565,7 +574,7 @@ export function exportSqliteState(db: DatabaseSync): SquareState {
     }
     return {
         hardCap: h.hardCap, ...(h.throttlePerMinute === undefined ? {} : { throttlePerMinute: h.throttlePerMinute }), preamble: [...h.preamble], warmup: [...h.warmup],
-        acts: (db.prepare('SELECT * FROM activities ORDER BY act_index').all() as Row[]).map(activityWithContent),
+        acts: (db.prepare('SELECT * FROM activities ORDER BY act_index').all() as Row[]).map(activity),
         runtime: { nextActIndex: h.nextActIndex, observations, leases }
     };
 }
@@ -574,8 +583,8 @@ export function inspectSqlite(db: DatabaseSync): { standingCount: number } {
     const check = db.prepare('PRAGMA integrity_check').all() as Row[];
     requireFact(check.length === 1 && check[0].integrity_check === 'ok', 'SQLite integrity check failed.');
     const state = exportSqliteState(db), d = createSqliteDriver(db);
-    d.roster();
-    for (const p of d.roster()) { d.attention(p.name); d.incomingAttention(p.name); }
-    for (const a of state.acts) if (a.kind === 'say') d.audience(a.index);
-    return { standingCount: d.roster().filter(p => p.joined).length };
+    d.read.roster();
+    for (const p of d.read.roster()) { d.read.attention(p.name); d.read.incomingAttention(p.name); }
+    for (const a of state.acts) if (a.kind === 'say') d.read.audience(a.index);
+    return { standingCount: d.read.roster().filter(p => p.joined).length };
 }

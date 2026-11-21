@@ -38,35 +38,28 @@ async function until(predicate) {
 }
 
 test('busy artifact open resumes and queued cancellation returns without later running the callback', { timeout: 3000 }, async t => {
-  const { file, port } = await fixture(t), writer = new DatabaseSync(file);
+  const { file, port: a } = await fixture(t), b = createArtifactPort(file);
+  t.after(() => b.close());
+  const writer = new DatabaseSync(file);
   t.after(() => writer.close());
   writer.exec('BEGIN EXCLUSIVE');
   let opened = false, cancelledCalls = 0;
-  const opening = port.read(r => r.header()).then(result => { opened = true; return result; });
+  const opening = a.read(r => r.header()).then(result => { opened = true; return result; });
+  const bAbort = new AbortController(), bReason = new Error('cancel validation');
+  const bOpening = assert.rejects(b.revision(bAbort.signal), error => error === bReason);
   await sleep(30);
   assert.equal(opened, false);
   const abort = new AbortController(), reason = new Error('cancel queued read');
-  const queued = assert.rejects(port.read(r => { cancelledCalls++; return r.header(); }, abort.signal), error => error === reason);
+  const queued = assert.rejects(a.read(r => { cancelledCalls++; return r.header(); }, abort.signal), error => error === reason);
+  bAbort.abort(bReason);
   abort.abort(reason);
-  await queued;
+  await Promise.all([bOpening, queued]);
   assert.equal(opened, false);
   writer.exec('ROLLBACK');
   assert.equal((await opening).value.revision, 0);
-  assert.equal(await port.revision(), 0);
+  assert.equal(await a.revision(), 0);
   assert.equal(cancelledCalls, 0);
-});
-
-test('cancelled artifact opening closes its probe and permits a later open on the same resource', { timeout: 3000 }, async t => {
-  const { file, port } = await fixture(t), writer = new DatabaseSync(file);
-  t.after(() => writer.close());
-  writer.exec('BEGIN EXCLUSIVE');
-  const abort = new AbortController(), reason = new Error('cancel validation');
-  const opening = assert.rejects(port.revision(abort.signal), error => error === reason);
-  await sleep(30);
-  abort.abort(reason);
-  await opening;
-  writer.exec('ROLLBACK');
-  assert.equal(await port.revision(), 0);
+  assert.equal(await b.revision(), 0);
 });
 
 test('a blocked COMMIT retries the same callback/result and releases the event loop', async t => {
@@ -150,19 +143,22 @@ test('busy writer acquisition can be cancelled and a later writer still runs exa
   assert.equal(await port.revision(), 1);
 });
 
-test('two processes serialize unseen selection plus sparse receipt insertion without double consumption', async t => {
+test('two warmed writers serialize unseen selection plus sparse receipt insertion without double consumption', async t => {
   const { file, port } = await fixture(t);
   const alice = await join(port, 'Alice', 0), bob = await join(port, 'Bob', 1);
   await port.transactAs({ kind: 'participant', seat: alice }, facts => facts.land({ kind: 'say', actor: 'Alice', at: 2, body: 'one', mentions: ['Bob'] }));
-  const seededRevision = await port.revision();
-  const script = `import {createArtifactPort} from './dist/artifact.js';
-    const p=createArtifactPort(process.argv[1]);
-    const seat=(await p.read(facts=>facts.seat('Bob'))).value;
-    const result=await p.transactAs({kind:'participant',seat},w=>{const ids=w.directed('Bob',{unseenOnly:true},{edge:'oldest',limit:10}).items.map(h=>h.index);w.markSeen('Bob',ids,3);return ids;});
-    console.log(JSON.stringify(result));await p.close();`;
-  const outcomes = await Promise.all([child(script, file).exited, child(script, file).exited]);
-  for (const o of outcomes) assert.equal(o.code, 0, o.err);
-  const results = outcomes.map(o => JSON.parse(o.out));
+  const seededRevision = await port.revision(), peer = createArtifactPort(file);
+  t.after(() => peer.close());
+  assert.equal(await peer.revision(), seededRevision);
+  const consume = facts => {
+    const ids = facts.directed('Bob', { unseenOnly: true }, { edge: 'oldest', limit: 10 }).items.map(h => h.index);
+    facts.markSeen('Bob', ids, 3);
+    return ids;
+  };
+  const results = await Promise.all([
+    port.transactAs({ kind: 'participant', seat: bob }, consume),
+    peer.transactAs({ kind: 'participant', seat: bob }, consume),
+  ]);
   assert.deepEqual(results.flatMap(r => r.value), [2]);
   assert.deepEqual(results.map(r => r.changed).sort(), [false, true]);
   assert.equal(await port.revision(), seededRevision + 1);

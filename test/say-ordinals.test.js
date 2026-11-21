@@ -54,8 +54,8 @@ test('missing participant projections retain prefix-count ordinals instead of lo
     initializeSqlite(db, state(), 0);
     const facts = createSqliteDriver(db);
     db.prepare('DELETE FROM participants WHERE name_key_json=?').run(JSON.stringify('alice'));
-    assert.equal(facts.participant('Alice'), undefined);
-    assert.deepEqual(facts.sayOrdinals([2, 9, 23, 30, 999]), { 2: 1, 9: 2, 23: 3, 30: 2 });
+    assert.equal(facts.read.participant('Alice'), undefined);
+    assert.deepEqual(facts.read.sayOrdinals([2, 9, 23, 30, 999]), { 2: 1, 9: 2, 23: 3, 30: 2 });
   } finally {
     db.close();
   }

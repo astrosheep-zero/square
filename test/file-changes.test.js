@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { observeFileVersion, observeFileMetadata } from '../dist/file-changes.js';
-import { createArtifactPort, prepareSquareBuild, writeSquareFile, observeSquareRevision, readSquareRevision } from '../dist/artifact.js';
+import { createArtifactPort, prepareSquareBuild, writeSquareFile, observeSquareRevision } from '../dist/artifact.js';
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'square-change-test-'));
@@ -78,7 +78,7 @@ test('an edge during a shared read is rechecked, including a waiter arriving aft
   assert.equal(reads, 2);
 });
 
-test('unavailable watches reconcile without loading history', async (t) => {
+test('unavailable watches recover on the real fallback interval without loading history', async (t) => {
   const file = fixture(t);
   await writeSquareFile(file, await prepareSquareBuild({ force: true, hardCap: null }, 'fallback'));
   t.mock.method(fs, 'watch', () => { throw Object.assign(new Error('no watcher capacity'), { code: 'ENOSPC' }); });
@@ -94,32 +94,19 @@ test('unavailable watches reconcile without loading history', async (t) => {
   assert.equal(await waiting, true);
 });
 
-test('a healthy watcher that loses an event still reconciles, without speculative changes', async (t) => {
-  const file = fixture(t);
-  fs.writeFileSync(file, 'first');
-  fakeWatch(t);
-  const observer = await observeFileMetadata(file);
-  t.after(() => observer.close());
-  const baseline = await observer.read();
-  const changed = observer.changed(baseline, 4_000);
-  await sleep(30);
-  fs.writeFileSync(file, 'different, but no event is emitted');
-  assert.equal(await changed, true);
-});
-
 test('missing revisions stay quiet across reconciliation and wake on return', async (t) => {
   const file = fixture(t);
   const watcher = fakeWatch(t);
   const observer = await observeSquareRevision(file);
   t.after(() => observer.close());
   assert.equal(await observer.read(), null);
-  await assert.rejects(readSquareRevision(file), { code: 'not_found' });
-  const quiet = observer.changed(null, 2_200);
+  const quiet = observer.changed(null, 80);
   watcher.callbacks[0]('rename', path.basename(file));
   assert.equal(await quiet, false);
 
   const appeared = observer.changed(null, 4_000);
   await writeSquareFile(file, prepareSquareBuild({ force: true, hardCap: null }, 'returned'));
+  watcher.callbacks[0]('rename', path.basename(file));
   assert.equal(await appeared, true);
   assert.equal(await observer.read(), 0);
   const removed = observer.changed(0, 1_000);

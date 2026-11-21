@@ -7,15 +7,8 @@ import type { SeatRef } from './ports.js';
 import type { FutureAck, ProducerRead, ProducerWrite, SendInput, SendResult, SquarePost, SquarePostDisposition } from './square-post.js';
 import { decoded, encode, finite, integer, json, key, object, string, type Row } from './sqlite-values.js';
 
-/** Private Square producer bookkeeping, on the artifact's existing connection/transaction. */
-export const producerSchemaSql = `CREATE TABLE producer_receipt_watermarks (
-  owner_json TEXT PRIMARY KEY NOT NULL, seq INTEGER NOT NULL CHECK (seq BETWEEN 0 AND 9007199254740991)
-) WITHOUT ROWID;
-CREATE TABLE producer_departures (
-  participant_key_json TEXT NOT NULL, participant_json TEXT NOT NULL, owner_json TEXT NOT NULL, generation_json TEXT NOT NULL, token TEXT NOT NULL,
-  PRIMARY KEY (owner_json,generation_json,participant_key_json)
-) WITHOUT ROWID;
-CREATE TABLE square_notices (
+/** Frozen Format12 producer declarations shared with the one supported offline edge. */
+export const FORMAT12_PRODUCER_SQL = `CREATE TABLE square_notices (
   notice_index INTEGER PRIMARY KEY CHECK (notice_index >= 0), at REAL NOT NULL,
   sender_json TEXT NOT NULL, body_json TEXT NOT NULL, metadata_json TEXT
 );
@@ -36,7 +29,14 @@ CREATE TABLE square_posts (
   posted INTEGER NOT NULL DEFAULT 0 CHECK (posted IN (0,1)), full INTEGER CHECK (full IN (0,1)),
   PRIMARY KEY (kind,item_index,recipient_key_json)
 ) WITHOUT ROWID;`;
-export function initializeProducerSqlite(db: DatabaseSync): void { db.exec(producerSchemaSql); }
+/** The two Format13-only producer declarations; never a template for arbitrary edits. */
+export const FORMAT13_ADDITIONS_SQL = `CREATE TABLE producer_receipt_watermarks (
+  owner_json TEXT PRIMARY KEY NOT NULL, seq INTEGER NOT NULL CHECK (seq BETWEEN 0 AND 9007199254740991)
+) WITHOUT ROWID;
+CREATE TABLE producer_departures (
+  participant_key_json TEXT NOT NULL, participant_json TEXT NOT NULL, owner_json TEXT NOT NULL, generation_json TEXT NOT NULL, token TEXT NOT NULL,
+  PRIMARY KEY (owner_json,generation_json,participant_key_json)
+) WITHOUT ROWID;`;
 export function resetProducerSqlite(db: DatabaseSync): void {
   for (const table of ['producer_receipt_watermarks', 'producer_departures', 'square_posts', 'producer_consumption', 'notice_audience', 'square_notices']) db.exec(`DROP TABLE ${table}`);
 }

@@ -93,8 +93,8 @@ at the next ordinary posting opportunity; perceived or ACKed activity is not exp
 cannot recall or retroactively suppress export ownership already committed.
 
 After landing, Square renders and posts a card per audience member to the host delivery ledger using
-`square:<canonical-path>#act/N/recipient/<encodeURIComponent(nameKey(recipient))>/join/<encodeURIComponent(capturedJoinGeneration)>`.
-Notices use the analogous `notice/N` key. The recipient and participant join generation are frozen at
+`['square', canonicalPath, 'recipient', nameKey(recipient), 'join', capturedJoinGeneration, 'act', String(index)]`.
+Notices use the analogous `notice` tag in place of `act`. The recipient and participant join generation are frozen at
 landing; ledger attachment rotation does not change the key. Post, receipt lookup and suppression use
 the same captured coordinates. A later mutating operation retries unposted, unconsumed work for current
 joined seats idempotently, and retries dispatch of their existing pending ledger cards when their host
@@ -184,6 +184,13 @@ Receipt folding reads only sequences after each owner watermark. Ledger card loo
 ranges, and permanent suppression retention uses a `created_at` index. Producer pending selection still
 searches retained say/audience history, withdrawn-claim selection searches posting rows, and
 `read_through` aggregates retained read activities; these remaining physical reads can grow with history.
+
+One artifact port owns connection, publication and transaction lifetime. `artifact.ts` opens the canonical
+path lazily (read-only probe and validation, then a non-creating writable open), publishes new files through
+a same-directory temporary file and hard link, and exposes only guarded `SquareRead`/`LandingWriter`
+capabilities inside a synchronous transaction callback. The capability expires when the callback returns;
+SQLite framing and row handles stay private to `square-sqlite.ts`, and no public package entry exports a
+database handle or a second runtime data path.
 
 Format 13 owns activities, audience, participants, read state, posting/full-card bookkeeping,
 receipt watermarks and outstanding departure intents in the `.square` SQLite artifact. The per-user

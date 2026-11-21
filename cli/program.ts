@@ -14,6 +14,7 @@ async function handleSquareError(error: unknown, context?: CommandContext): Prom
     : await withSquare({ ...context, name: detail?.participant ?? context.name }, (square) => square.recovery(detail?.participant ?? context.name)).catch(() => undefined);
   const name = detail?.participant ?? recovery?.participant ?? context?.name;
   const lines = renderFailureLines(error, { squarePath, name, owner: context?.owner ?? context?.env.SQUARE_OWNER });
+  if (error.code === 'conflict' && context?.command === 'build') lines.push('Pass -f to overwrite.');
   if (squarePath === undefined) process.stderr.write(`${lines.join('\n')}\n`);
   else process.stderr.write(formatRefusal(squarePath, lines, {
     participantCount: recovery?.standingCount,

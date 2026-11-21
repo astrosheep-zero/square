@@ -51,6 +51,13 @@ attachments, audience, consumption, read receipts, leases, notices, post tokens,
 PIDs, export times, posted/full flags, revisions and settings stay intact. Only
 `producer_receipt_watermarks` and `producer_departures` are added.
 
+The accepted Format12 source shape declares `storage_meta`, the Square activity
+and roster tables, and four producer tables (`square_notices`, `notice_audience`,
+`producer_consumption`, `square_posts`). An earlier Format12 revision (`c3124f7c`)
+also declared a `producer_leases` table; `e2657506` removed it. Because preflight
+compares the exact historical declaration set, a version-12 file that still
+contains `producer_leases` is refused; there is no upgrade mode for it.
+
 Receipt watermarks start empty. Departure intentions conservatively cover each
 captured noncurrent owner/generation/recipient tuple in activity and notice
 audiences, plus any surviving nonjoined seat. Both nullable activity audience

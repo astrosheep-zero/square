@@ -91,7 +91,6 @@ export interface SquareArtifactPort {
   transactAs<R>(authority: ArtifactWriteAuthority, change: (facts: SquareWrite) => R, signal?: AbortSignal): Promise<SquareCommitResult<R>>;
   settleAs<R>(authority: ArtifactWriteAuthority, change: (facts: SquareWrite) => R): Promise<SquareCommitResult<R>>;
   revision(signal?: AbortSignal): Promise<number>;
-  deliveryRevision(signal?: AbortSignal): Promise<number>;
   changed(sinceVersion: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
   close(): Promise<void>;
 }
