@@ -48,6 +48,10 @@ and `Participant.pending` reads addressed unconsumed says without consuming them
 Square operations. `OperationControl` can carry cancellation; a committed mutation is not undone by
 later cancellation.
 
+The package root also exports the syntax Square validates with: `parseActivityId`,
+`NAME_GRAPHEME_SOURCE`, `PARTICIPANT_NAME_SOURCE` and `isParticipantName(name)`. They share the core
+acceptance, so adapters use them instead of copying the grammar.
+
 `Participant.mute({durationMs}, options?, control?)` installs one timed hold for the handle's captured
 owner, name and join generation; `Participant.unmute` releases only that named seat hold. Duration is a
 positive safe integer in milliseconds. The Square clock sets the deadline, a stale handle cannot affect a

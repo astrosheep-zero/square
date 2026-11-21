@@ -1,5 +1,5 @@
 import { Square } from '@astrosheep/square';
-import type { Activity, ActivityId, Participant, StreamRecord } from '@astrosheep/square';
+import type { Activity, StreamRecord } from '@astrosheep/square';
 import type { BridgeSettings } from './config.js';
 import { Directory } from './directory.js';
 import type { SlackInboundMessage, SlackPort } from './slack-port.js';
@@ -105,7 +105,7 @@ export class Bridge {
     if (handled === undefined) return;
     const { userId, text } = handled;
     await this.directory.learn(text);
-    const participant = await this.participantFor(await this.directory.participantFor(userId));
+    const participant = (await this.square.join(await this.directory.participantFor(userId), { owner: this.settings.owner })).participant;
     const reply = message.threadTs === undefined ? undefined : asActivityId(this.state.tsToActivity[message.threadTs]);
     const landed = await participant.express(squareBody(text, this.directory), {
       force: true, ...(reply === undefined ? {} : { reply }),
@@ -121,10 +121,12 @@ export class Bridge {
   /** Post every square activity after the cursor that Slack has not seen yet. */
   async drainOutbound(): Promise<void> {
     for (;;) {
-      const activities = await this.nextActivities();
-      if (activities.length === 0) return;
-      for (const activity of activities) await this.mirror(activity);
-      if (activities.length < PAGE) return;
+      const cursor = asActivityId(this.state.cursor);
+      const page = await this.square.history(cursor === undefined
+        ? { limit: null }
+        : { cursor: { id: cursor, direction: 'after' }, limit: PAGE });
+      for (const activity of page.activities) await this.mirror(activity);
+      if (cursor === undefined || page.activities.length < PAGE) return;
     }
   }
 
@@ -144,15 +146,10 @@ export class Bridge {
     return { userId: message.userId, text: message.text };
   }
 
-  private async participantFor(name: string): Promise<Participant> {
-    return (await this.square.join(name, { owner: this.settings.owner })).participant;
-  }
-
   private async mirror(activity: Activity): Promise<void> {
     const body = activity.kind === 'say' ? activity.body : undefined;
     if (body !== undefined && body.trim() !== '' && !activity.actor.startsWith('slack/')) {
-      const reply = activity.reply === undefined ? undefined : asActivityId(activity.reply);
-      const threadTs = reply === undefined ? undefined : this.state.activityToTs[reply]?.threadTs;
+      const threadTs = activity.reply === undefined ? undefined : this.state.activityToTs[activity.reply]?.threadTs;
       try {
         const posted = await this.port.postMessage({
           ...this.directory.posterFor(activity.actor),
@@ -168,21 +165,6 @@ export class Bridge {
     }
     this.state.cursor = activity.id;
     await this.store.save();
-  }
-
-  private async nextActivities(): Promise<readonly Activity[]> {
-    const cursor = asActivityId(this.state.cursor);
-    if (cursor !== undefined) return (await this.square.history({ cursor: { id: cursor, direction: 'after' }, limit: PAGE })).activities;
-    // A bridge that first started on an empty square has no cursor yet. Read the whole
-    // archive from its newest end, so nothing that landed while it was stopped is skipped.
-    const pages: (readonly Activity[])[] = [];
-    let before: ActivityId | undefined;
-    for (;;) {
-      const page = (await this.square.history({ cursor: before === undefined ? undefined : { id: before, direction: 'before' }, limit: PAGE })).activities;
-      pages.push(page);
-      if (page.length < PAGE) return pages.reverse().flat();
-      before = page[0]!.id;
-    }
   }
 
   private watch(): void {

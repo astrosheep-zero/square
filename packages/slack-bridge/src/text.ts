@@ -1,4 +1,4 @@
-import { NAME_SOURCE } from './names.js';
+import { PARTICIPANT_NAME_SOURCE } from '@astrosheep/square';
 
 /** Slack message text becomes a Square body; only the transport's own markup is translated. */
 export interface SquareMentionSource {
@@ -13,7 +13,7 @@ export interface SlackMentionSource {
 }
 
 const SLACK_TOKEN = /<([^<>]+?)(?:\|([^<>]*))?>/g;
-const MENTION = new RegExp(String.raw`(?<![A-Za-z0-9_\-\/@])@(${NAME_SOURCE})(?![A-Za-z0-9_\-\/])`, 'gv');
+const MENTION = new RegExp(String.raw`(?<![A-Za-z0-9_\-\/@])@(${PARTICIPANT_NAME_SOURCE})(?![A-Za-z0-9_\-\/])`, 'gv');
 
 export function squareBody(text: string, names: SquareMentionSource): string {
   const translated = text.replace(SLACK_TOKEN, (_token, target: string, label: string | undefined) => {

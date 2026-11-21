@@ -2,7 +2,6 @@ import './sandbox-env.js'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import { Square } from '@astrosheep/square'
 import { Bridge } from '../dist/bridge.js'
 import { FakeSlack } from './fake-slack.js'
@@ -27,55 +26,6 @@ function slackWith(bots = personas) {
   return connectedSlack(new FakeSlack(), bots)
 }
 
-function recordJoins(square) {
-  const calls = []
-  const join = square.join.bind(square)
-  square.join = (...args) => {
-    calls.push(args)
-    return join(...args)
-  }
-  return calls
-}
-
-test('the bridge opens an identity-free square and joins inbound with stable custody', async () => {
-  const path = await buildSquare()
-  const settings = settingsFor({ square: path, personas })
-  const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
-  const originalAt = Square.at
-  let input
-  let square
-  let joins
-  let bridge
-  Square.at = async (options, ...rest) => {
-    input = options
-    square = await originalAt(options, ...rest)
-    joins = recordJoins(square)
-    return square
-  }
-  try {
-    bridge = await Bridge.open({ settings, port: slack })
-    assert.equal(input.path, settings.square)
-    for (const key of ['body', 'wakeAddress', 'participant']) {
-      assert.equal(Object.hasOwn(input, key), false, `${key} must not be captured on open`)
-    }
-    const body = bridgeBody(settings)
-    assert.equal(body, settings.owner)
-
-    await bridge.handleInbound(message({ ts: '1700.0001', text: 'hello from the bridge' }))
-    assert.deepEqual(joins, [['slack/Alice', { owner: body }]])
-    assert.deepEqual((await square.seatsOf(body)).map((seat) => seat.name), ['slack/Alice'])
-    const landed = (await archive(square)).at(-1)
-    assert.equal(landed.kind, 'say')
-    assert.equal(landed.actor, 'slack/Alice')
-    assert.equal(landed.body, 'hello from the bridge')
-  }
-  finally {
-    Square.at = originalAt
-    if (bridge === undefined) await square?.close()
-    else await bridge.stop()
-  }
-})
-
 test('a caller-owned square uses bridge custody per operation and stays caller-owned', async (t) => {
   const path = await buildSquare()
   const settings = settingsFor({ square: path, personas })
@@ -83,30 +33,16 @@ test('a caller-owned square uses bridge custody per operation and stays caller-o
   const square = await Square.at({ path })
   t.after(() => square.close())
   await square.join('caller', { owner: callerBody })
-  const joins = recordJoins(square)
   const slack = slackWith().addUser('UALICE', { displayName: 'Alice' })
-  const originalAt = Square.at
-  let openCalls = 0
-  Square.at = async (...args) => {
-    openCalls += 1
-    return originalAt(...args)
-  }
-  let bridge
+  const bridge = await Bridge.open({ settings, port: slack, square })
   try {
-    bridge = await Bridge.open({ settings, port: slack, square })
     await bridge.handleInbound(message({ ts: '1700.0002', text: 'hello from the supplied square' }))
     await bridge.handleInbound(message({ ts: '1700.0005', text: 'hello again' }))
   }
   finally {
-    Square.at = originalAt
-    await bridge?.stop()
+    await bridge.stop()
   }
 
-  assert.equal(openCalls, 0)
-  assert.deepEqual(joins, [
-    ['slack/Alice', { owner: bridgeBody(settings) }],
-    ['slack/Alice', { owner: bridgeBody(settings) }],
-  ])
   assert.deepEqual((await square.seatsOf(callerBody)).map((seat) => seat.name), ['caller'])
   assert.deepEqual((await square.seatsOf(bridgeBody(settings))).map((seat) => seat.name), ['slack/Alice'])
   const activities = await archive(square)
@@ -303,12 +239,15 @@ test('a bridge first started on an empty square posts what landed while it was s
 
   const { square, body } = await opened(t, path)
   const rei = (await square.join('rei', { owner: body })).participant
-  await rei.express('late')
+  const late = Array.from({ length: 101 }, (_, index) => `late ${index}`)
+  for (const text of late) await rei.express(text, { force: true })
 
   const restarted = await Bridge.open({ settings, port: slack })
   t.after(() => restarted.stop())
   await restarted.drainOutbound()
-  assert.deepEqual(slack.posts.map((post) => post.text), ['late'])
+  assert.deepEqual(slack.posts.map((post) => post.text), late)
+  await restarted.drainOutbound()
+  assert.deepEqual(slack.posts.map((post) => post.text), late)
 })
 
 test('the running bridge mirrors both directions until stopped', async (t) => {

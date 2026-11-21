@@ -102,9 +102,9 @@ Inbound:
 - Edits, deletes, joins, other subtypes, other channels and anything from the
   bridge's or a persona's own bot are ignored.
 - The sender becomes `slack/<name>`, from their Slack display name (then real
-  name, then user ID), sanitized to Square name characters. Two Slack users
-  never share a name: the later one gets a user-ID suffix. Names are persisted
-  so they stay stable across restarts.
+  name, then user ID), sanitized with Square's shared participant-name grammar.
+  Two Slack users never share a name: the later one gets a user-ID suffix. Names
+  are persisted so they stay stable across restarts.
 - `<@U…>` for a persona bot becomes `@persona`; another user becomes
   `@slack/<name>` once the bridge knows them, otherwise their display name.
   `<url|label>` becomes `label (url)`, `<url>` becomes `url`, `<#C…|name>`
@@ -134,12 +134,13 @@ SIGINT/SIGTERM stop event intake, let the in-flight item finish (or abandon it
 after two seconds), and close the Socket Mode client and the square.
 
 The state file holds the cursor and the two-way `ts` ↔ activity map (the most
-recent 5000 entries per map), written atomically after each successful item. A
-restart resumes from it without duplicates in either direction. A first start
-begins at the current end of the archive, so old history is not replayed; a
-bridge that first started on an empty square picks up everything that landed
-while it was stopped. A corrupt or unknown-version state file refuses startup
-and is never silently reset.
+recent 5000 entries per map), written atomically after each successful item. The
+cursor is validated with Square's own activity-id parser, so every accepted id
+means the same activity. A restart resumes from it without duplicates in either
+direction. A first start begins at the current end of the archive, so old
+history is not replayed; a bridge that first started on an empty square picks up
+everything that landed while it was stopped. A corrupt, out-of-range or
+unknown-version state file refuses startup and is never silently reset.
 
 ## Visibility
 

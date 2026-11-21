@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { ActivityId } from '@astrosheep/square';
+import { parseActivityId, type ActivityId } from '@astrosheep/square';
 
 export class StateError extends Error {
   constructor(message: string) {
@@ -34,11 +34,10 @@ export interface LoadedState {
 }
 
 const MAX_ENTRIES = 5000;
-const ACTIVITY_ID = /^act\/(?:0|[1-9]\d*)$/;
 
 /** A stored activity id, when it still has Square's shape. */
 export function asActivityId(value: string | null | undefined): ActivityId | undefined {
-  return value !== null && value !== undefined && ACTIVITY_ID.test(value) ? value as ActivityId : undefined;
+  return typeof value === 'string' && parseActivityId(value) !== undefined ? value as ActivityId : undefined;
 }
 
 export function emptyState(): BridgeState {

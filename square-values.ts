@@ -85,10 +85,15 @@ export interface WakeRoute {
 export function sameName(a: string, b: string): boolean { return nameKey(a) === nameKey(b); }
 const TEXT_NAME_GRAPHEME_SOURCE = String.raw`[[\p{L}\p{N}\p{M}_\x2D]--[\p{Variation_Selector}]]`;
 export const NAME_GRAPHEME_SOURCE = String.raw`${TEXT_NAME_GRAPHEME_SOURCE}|\p{RGI_Emoji}`;
+/** One or more non-empty slash-separated segments of Square name graphemes. */
+export const PARTICIPANT_NAME_SOURCE = `(?:${NAME_GRAPHEME_SOURCE})+(?:/(?:${NAME_GRAPHEME_SOURCE})+)*`;
 const TEXT_NAME_PATTERN = new RegExp(`^(?:${TEXT_NAME_GRAPHEME_SOURCE})+(?:/(?:${TEXT_NAME_GRAPHEME_SOURCE})+)*$`, 'v');
-const NAME_PATTERN = new RegExp(`^(?:${NAME_GRAPHEME_SOURCE})+(?:/(?:${NAME_GRAPHEME_SOURCE})+)*$`, 'v');
+const NAME_PATTERN = new RegExp(`^${PARTICIPANT_NAME_SOURCE}$`, 'v');
+export function isParticipantName(name: string): boolean {
+  return name.length > 0 && (TEXT_NAME_PATTERN.test(name) || NAME_PATTERN.test(name));
+}
 export function validateName(name: string): void {
-  if (!name || (!TEXT_NAME_PATTERN.test(name) && !NAME_PATTERN.test(name))) {
+  if (!isParticipantName(name)) {
     throw new SquareError('invalid_name', 'Invalid name: names must contain non-empty slash-separated segments using Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes.');
   }
 }

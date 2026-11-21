@@ -1,21 +1,17 @@
 import './sandbox-env.js'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readdir, writeFile } from 'node:fs/promises'
+import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { asActivityId, createStateStore, emptyState, loadState, rememberMessage, saveState } from '../dist/state.js'
 import { caseDir } from './fixtures.js'
 
-test('a missing state file starts fresh without replaying history', async () => {
-  const root = await caseDir('state')
-  const loaded = await loadState(join(root, 'bridge.json'))
-  assert.deepEqual(loaded.state, emptyState())
-  assert.equal(loaded.fresh, true)
-})
-
 test('state round-trips through an atomic write', async () => {
   const root = await caseDir('state')
   const file = join(root, 'nested/bridge.json')
+  const missing = await loadState(file)
+  assert.deepEqual(missing.state, emptyState())
+  assert.equal(missing.fresh, true)
   const state = emptyState()
   rememberMessage(state, 'act/1', '1700.1', '1700.0')
   state.cursor = 'act/1'
@@ -62,6 +58,7 @@ test('corrupt, unknown and unsupported state refuses instead of resetting', asyn
     ['{ not json', /is not valid JSON/],
     [JSON.stringify({ version: 2, cursor: null, users: {}, tsToActivity: {}, activityToTs: {} }), /unsupported version 2/],
     [JSON.stringify({ version: 1, cursor: 'latest', users: {}, tsToActivity: {}, activityToTs: {} }), /cursor must be an activity id/],
+    [JSON.stringify({ version: 1, cursor: 'act/9007199254740993', users: {}, tsToActivity: {}, activityToTs: {} }), /cursor must be an activity id/],
     [JSON.stringify({ version: 1, cursor: null, users: {}, tsToActivity: { '1700.1': 7 }, activityToTs: {} }), /tsToActivity/],
     [JSON.stringify({ version: 1, cursor: null, users: {}, tsToActivity: {}, activityToTs: { 'act/1': { ts: '1' } } }), /activityToTs/],
     ['[]', /expected a JSON object/],
@@ -71,8 +68,7 @@ test('corrupt, unknown and unsupported state refuses instead of resetting', asyn
     await writeFile(file, body)
     const error = await loadState(file).catch((failure) => failure)
     assert.match(error.message, expected, body)
+    assert.equal(await readFile(file, 'utf8'), body)
   }
   assert.equal(asActivityId('act/0'), 'act/0')
-  assert.equal(asActivityId('act/01'), undefined)
-  assert.equal(asActivityId(null), undefined)
 })

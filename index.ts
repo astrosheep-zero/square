@@ -10,3 +10,6 @@ export { isCardPresentation } from './card-presentation.js';
 export type { CardPresentation } from './card-presentation.js';
 // Public operation contracts; no alternate runtime surface.
 export type * from './square-facade.js';
+// Participant-name and activity-id syntax shared with adapters.
+export { parseActivityId } from './square-core.js';
+export { NAME_GRAPHEME_SOURCE, PARTICIPANT_NAME_SOURCE, isParticipantName } from './square-values.js';
