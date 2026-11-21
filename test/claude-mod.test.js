@@ -24,6 +24,7 @@ async function fixture(t, options = {}) {
   const ledger = await DeliveryLedger.open({ location: env.SQUARE_DELIVERY });
   const module = await import(`../plugins/claude/hooks/register.js?test=${randomUUID()}`);
   const hooks = new Map(), children = [], effects = [], logs = [], requests = [];
+  const lifetime = new AbortController();
   let sessionId = 'native-session';
   const owner = agent => harnessOwner({ channel: 'claude-code', session: sessionId, ...(agent ? { agent } : {}) });
   if (options.routes) await ledger.attach({ owner: owner(), expectedGeneration: null, routes: options.routes });
@@ -58,12 +59,13 @@ async function fixture(t, options = {}) {
     } },
     process: { spawn: input => {
       assert.deepEqual(input.argv, ['square', 'claude-mod']);
+      lifetime.signal.throwIfAborted();
       const controller = new AbortController(), queue = [], readers = [];
       let done = false;
       const push = value => readers.length ? readers.shift()(value) : queue.push(value);
-      const running = runClaudeMod(input.input, env, controller.signal, line => { push({ done: false, value: { stream: 'stdout', text: line } }); })
+      const running = runClaudeMod(input.input, env, AbortSignal.any([lifetime.signal, controller.signal]), line => { push({ done: false, value: { stream: 'stdout', text: line } }); })
         .finally(() => { done = true; while (readers.length) readers.shift()({ done: true }); });
-      children.push({ controller, running });
+      children.push(running);
       return {
         next: () => queue.length ? Promise.resolve(queue.shift()) : done ? Promise.resolve({ done: true }) : new Promise(resolve => readers.push(resolve)),
         return: async () => { controller.abort(); await running; return { done: true }; },
@@ -75,8 +77,8 @@ async function fixture(t, options = {}) {
     return { catch() {} };
   });
   t.after(async () => {
-    for (const child of children) child.controller.abort();
-    await Promise.all(children.map(child => child.running));
+    lifetime.abort();
+    await Promise.all(children);
     await ledger.close();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -116,6 +118,7 @@ test('idle mod submits a body-free wake, appends at the native input boundary, a
   await f.post(["idle-two"]);
   await until(async () => (await f.ledger.receipts(f.owner())).length === 2);
   assert.deepEqual(f.effects.map(effect => effect.kind), ['submit', 'append', 'submit', 'append']);
+  await until(() => f.effects[2]?.started);
 });
 
 test('a delayed wake leaves cards pending and fetches only unsuppressed context at the native input boundary', async t => {
