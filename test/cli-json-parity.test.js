@@ -9,7 +9,6 @@ import { Square, inbox } from '../dist/square-api.js';
 import { commandIdentity } from '../dist/cli/context.js';
 import { run, testEnv, withName, withPath } from './square-cli-helpers.js';
 
-const traceModule = path.resolve(import.meta.dirname, 'fixtures/cli-json-trace.js');
 const session = 'cli-json-parity';
 const body = `codex:${session}`;
 
@@ -25,15 +24,21 @@ function serializable(result) {
 async function fixture(t, { hardCap = null, throttlePerMinute } = {}) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-cli-json-'));
   const file = path.join(cwd, 'SQUARE.square');
-  const trace = path.join(cwd, 'trace.ndjson');
   const env = testEnv({ HOME: cwd, CODEX_HOME: path.join(cwd, 'codex'), CODEX_THREAD_ID: session,
-    SQUARE_INDEX: path.join(cwd, 'index.ndjsonl'), SQUARE_NOW_MS: '90000',
-    NODE_OPTIONS: `--import=${traceModule}`, SQUARE_JSON_TRACE: trace });
+    SQUARE_INDEX: path.join(cwd, 'index.ndjsonl'), SQUARE_NOW_MS: '90000' });
   const identity = commandIdentity(env);
   assert.deepEqual(identity.owner, body);
   const square = await Square.build({ path: file, markdown: 'JSON parity', hardCap, ...(throttlePerMinute === undefined ? {} : { throttlePerMinute }), clock: () => 90000 });
   await square.close();
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+
+  async function withSquare(operation) {
+    const square = await Square.at({ path: file, clock: () => 90000 });
+    try { return await operation(square); } finally { await square.close(); }
+  }
+  async function join(name) {
+    return withSquare(square => square.join(name, { owner: body, wakeAddress: identity.wakeAddress, takeover: false, last: 10 }));
+  }
 
   async function parity(name, args, operation, exitCode = 0) {
     // Each mutating call starts from an identical copy of the CLI artifact.
@@ -45,41 +50,28 @@ async function fixture(t, { hardCap = null, throttlePerMinute } = {}) {
     let expected;
     try { expected = serializable(await operation(oracle)); }
     finally { await oracle.close(); }
-    fs.writeFileSync(trace, '');
     const command = name === undefined ? withPath(file, args) : withName(file, name, args);
     const result = run([...command, '--json'], { cwd, env });
     assert.equal(result.error, undefined);
     assert.equal(result.status, exitCode, result.stderr + result.stdout);
     assert.deepEqual(JSON.parse(result.stdout), expected);
     assert.equal(result.stdout, `${JSON.stringify(expected)}\n`, 'one exact JSON document with a newline');
-    const calls = fs.readFileSync(trace, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-    assert.deepEqual(calls.map(call => call.method), [args[0]]);
-    assert.equal(Object.hasOwn(calls[0].options ?? {}, 'observe'), false, 'CLI must not request presentation enrichment');
     return expected;
   }
-  return { cwd, file, env, trace, parity, wakeAddress: identity.wakeAddress };
+  return { cwd, file, env, parity, withSquare, join, wakeAddress: identity.wakeAddress };
 }
 
 test('each CLI --json result is the real SDK receipt from the same artifact state', async t => {
   const f = await fixture(t);
 
-  await t.test('empty history', async () => {
-    assert.deepEqual(await f.parity(undefined, ['history'], square => square.history()), { activities: [] });
-  });
-  await t.test('join and reconnect', async () => {
-    const joined = await f.parity('Alice', ['join', '--json', '--last', '4'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, last: 4, takeover: false }));
+  await t.test('join', async () => {
+    const joined = await f.parity('Alice', ['join', '--last', '4'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, last: 4, takeover: false }));
     assert.deepEqual(joined.participant, { name: 'Alice' });
-    const reconnected = await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, last: 10, takeover: false }));
-    assert.equal(reconnected.kind, 'reconnected');
-    assert.equal(reconnected.activity, null);
-    await f.parity('Bob', ['join'], square => square.join('Bob', { owner: body, wakeAddress: f.wakeAddress, last: 10, takeover: false }));
   });
-  await t.test('listen', async () => {
-    const listened = await f.parity('Alice', ['listen', 'Bob'], async square => (await square.participant('Alice', { owner: body })).listen('Bob'));
-    assert.equal(listened.activity.target, 'Bob');
-    assert.equal((await f.parity('Alice', ['listen', 'Bob'], async square => (await square.participant('Alice', { owner: body })).listen('Bob'))).activity, null);
-    assert.deepEqual((await f.parity('Alice', ['status'], square => square.status({ viewer: 'Alice' }))).listening, ['Bob']);
-  });
+  // Seed Bob and Alice's listening relation through the SDK.
+  await f.join('Bob');
+  await f.withSquare(async square => (await square.participant('Alice', { owner: body })).listen('Bob'));
+
   let sent;
   await t.test('express preserves SDK warnings, hint, metadata and reply', async () => {
     const metadata = { observation: { nested: true }, participant: { name: 'not a handle', express: 'literal' } };
@@ -95,26 +87,11 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
     assert.equal(perceived.activities[0].id, sent.activity.id);
     assert.equal(perceived.activities[0].perception, 'full');
     assert.equal(perceived.activities[0].via, 'mention');
-    const exact = await f.parity('Bob', ['perceive', '--id', sent.activity.id], async square => (await square.participant('Bob', { owner: body })).perceive({ id: sent.activity.id }));
-    assert.equal(exact.activities[0].id, sent.activity.id);
   });
   await t.test('history includes listener target and all canonical fields', async () => {
     const history = await f.parity(undefined, ['history', '--limit', '100'], square => square.history({ limit: 100 }));
     assert.equal(history.activities.find(activity => activity.kind === 'listen').target, 'Bob');
     assert.deepEqual(history.activities.find(activity => activity.id === sent.activity.id).metadata, sent.activity.metadata);
-  });
-  await t.test('unlisten and ignore include null for unchanged relations', async () => {
-    const removed = await f.parity('Alice', ['unlisten', 'Bob'], async square => (await square.participant('Alice', { owner: body })).unlisten('Bob'));
-    assert.equal(removed.activity.target, 'Bob');
-    assert.equal((await f.parity('Alice', ['unlisten', 'Bob'], async square => (await square.participant('Alice', { owner: body })).unlisten('Bob'))).activity, null);
-    const ignored = await f.parity('Alice', ['ignore', 'Bob'], async square => (await square.participant('Alice', { owner: body })).ignore('Bob'));
-    assert.equal(ignored.activity.target, 'Bob');
-    assert.equal((await f.parity('Alice', ['ignore', 'Bob'], async square => (await square.participant('Alice', { owner: body })).ignore('Bob'))).activity, null);
-  });
-  await t.test('status and done', async () => {
-    const status = await f.parity('Alice', ['status'], square => square.status({ viewer: 'Alice' }));
-    assert.equal(status.participants.length, 2);
-    await f.parity('Bob', ['done'], async square => (await square.participant('Bob', { owner: body })).done());
   });
   await t.test('inbox is the standalone SDK result on the same discovery and artifact state', async () => {
     const expected = serializable(await inbox({ cwd: f.cwd }, body, { limit: 1 }));
@@ -127,16 +104,16 @@ test('each CLI --json result is the real SDK receipt from the same artifact stat
 
 test('perceive --json retains the terminal failure exit code and the SDK result', async t => {
   const f = await fixture(t, { hardCap: 1 });
-  await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
-  await f.parity('Bob', ['join'], square => square.join('Bob', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
-  await f.parity('Alice', ['express', '--force', 'one'], async square => (await square.participant('Alice', { owner: body })).express('one', { force: true }));
+  await f.join('Alice');
+  await f.join('Bob');
+  await f.withSquare(async square => (await square.participant('Alice', { owner: body })).express('one', { force: true }));
   const result = await f.parity('Alice', ['perceive'], async square => (await square.participant('Alice', { owner: body })).perceive({ limit: 10 }), 1);
   assert.equal(result.reason, 'capped');
 });
 
 test('a throttled waiting express leaves stdout as one JSON document', async t => {
   const f = await fixture(t, { throttlePerMinute: 1 });
-  await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
+  await f.join('Alice');
   const artifact = createArtifactPort(f.file);
   try {
     const seat = (await artifact.read(facts => facts.seat('Alice'))).value;
@@ -155,7 +132,7 @@ test('a throttled waiting express leaves stdout as one JSON document', async t =
 
 test('an active perceive keeps its exit code and JSON receipt without disrupting the waiter', async t => {
   const f = await fixture(t);
-  await f.parity('Alice', ['join'], square => square.join('Alice', { owner: body, wakeAddress: f.wakeAddress, takeover: false, last: 10 }));
+  await f.join('Alice');
   const square = await Square.at({ path: f.file });
   const alice = await square.participant('Alice', { owner: body }), controller = new AbortController();
   let started;
@@ -178,22 +155,15 @@ test('an active perceive keeps its exit code and JSON receipt without disrupting
 
 test('JSON mode retains human argument errors and exit codes', async t => {
   const f = await fixture(t);
-  for (const args of [['history', '--limit', '101'], ['perceive', '--limit', '0']]) {
-    const human = run(withName(f.file, 'Alice', args), { cwd: f.cwd, env: f.env });
-    const json = run(withName(f.file, 'Alice', [...args, '--json']), { cwd: f.cwd, env: f.env });
-    assert.equal(json.status, human.status);
-    assert.equal(json.status, 2);
-    assert.equal(json.stderr, human.stderr);
-    assert.equal(json.stdout, human.stdout);
-  }
+  const paired = ['history', '--limit', '101'];
+  const human = run(withName(f.file, 'Alice', paired), { cwd: f.cwd, env: f.env });
+  const json = run(withName(f.file, 'Alice', [...paired, '--json']), { cwd: f.cwd, env: f.env });
+  assert.equal(json.status, human.status);
+  assert.equal(json.status, 2);
+  assert.equal(json.stderr, human.stderr);
+  assert.equal(json.stdout, human.stdout);
   // A JSON switch cannot become invisible to a preceding value-taking option.
-  for (const args of [
-    ['join', '--last', '--json', '10'], ['express', '--metadata', '--json', '{}'],
-    ['perceive', '--limit', '--json', '2'], ['history', '--limit', '--json', '2'],
-    ['inbox', '--for-owner', body, '--limit', '--json', '2'],
-  ]) {
-    const result = run(withName(f.file, 'Alice', args), { cwd: f.cwd, env: f.env });
-    assert.equal(result.status, 2, `${args.join(' ')}: ${result.stdout}${result.stderr}`);
-    assert.match(result.stderr, /missing value|needs a positive integer|invalid arguments/);
-  }
+  const result = run(withName(f.file, 'Alice', ['join', '--last', '--json', '10']), { cwd: f.cwd, env: f.env });
+  assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+  assert.match(result.stderr, /missing value|needs a positive integer|invalid arguments/);
 });

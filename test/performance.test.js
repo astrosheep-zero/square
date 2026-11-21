@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { renderPerceiveOutcome } from '../dist/cli/perceive-presentation.js';
+import { renderPerceiveOutcome } from '../dist/operation-presentation.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { perceivePresence } from '../dist/views.js';
@@ -118,10 +118,9 @@ test('perceive keeps transaction-selected records and presence enrichment/render
     assert.deepEqual(counters.hydrated.flat(), perceivedIds.map((id) => Number(id.slice(4))), 'nearby enrichment must not re-fetch the committed page');
     const beforeRender = measurements();
     const output = renderPerceiveOutcome('memory', outcome);
-    assert.equal(output.exitCode, 0);
-    assert.match(output.stdout, /dispatch 0 @P0/);
-    assert.doesNotMatch(output.stdout, /dispatch 899 @P0/);
-    assert.match(output.stdout, /890 matching activities remain/);
+    assert.match(output, /dispatch 0 @P0/);
+    assert.doesNotMatch(output, /dispatch 899 @P0/);
+    assert.match(output, /890 matching activities remain/);
     assert.deepEqual(measurements(), beforeRender);
 
     // A valid sender filter with no matching pending activity settles empty;
@@ -133,8 +132,7 @@ test('perceive keeps transaction-selected records and presence enrichment/render
     assert.equal(counters.hydrated.length, hydrationCount, 'empty perceive must not request body hydration');
     const beforeEmptyRender = measurements();
     const emptyOutput = renderPerceiveOutcome('memory', emptyOutcome, { from: ['P0'] });
-    assert.equal(emptyOutput.exitCode, 0);
-    assert.doesNotMatch(emptyOutput.stdout, /dispatch \d+ @P0/);
+    assert.doesNotMatch(emptyOutput, /dispatch \d+ @P0/);
     assert.deepEqual(measurements(), beforeEmptyRender);
   } finally {
     await cell.close();

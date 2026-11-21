@@ -10,7 +10,7 @@ import { ACTIVITY_METADATA_MAX_BYTES } from '../dist/model.js';
 import { activityRetryCommand } from '../dist/cli/express-presentation.js';
 import { SQUARE_TOOLS } from '../dist/square-tools.js';
 import { renderEventCli } from '../dist/presentation.js';
-import { renderExpression } from '../dist/operation-presentation.js';
+import { renderExpression, renderPerceiveOutcome } from '../dist/operation-presentation.js';
 import { Square } from '../dist/square-api.js';
 
 const body = (session) => `metadata-test:${session}`;
@@ -159,26 +159,19 @@ test('the shared express schema accepts body and location and rejects metadata i
   assert.deepEqual(definition.inputSchema.parse(args), args);
 });
 
-test('shared history and directed perceive render metadata-only activities without exposing metadata', async () => {
+test('directed perceive renders metadata-only activities without exposing metadata', async () => {
   const square = await localSquare();
   try {
     const alice = (await square.join('Alice', { owner: body('local') })).participant;
-    await square.join('Bob', { owner: body('local') });
+    const bob = (await square.join('Bob', { owner: body('local') })).participant;
     const metadata = { nested: { wake: true }, values: [1, null, 'text'] };
     const directed = await alice.express({ metadata, mentions: ['Bob'], force: true });
     assert.deepEqual(directed.activity.metadata, metadata);
-    const shared = name => SQUARE_TOOLS.find(tool => tool.name === name);
 
-    const perceived = await shared('perceive').run(square, { location: square.location, as: 'Bob' }, {}, { owner: body('local') });
-    assert.equal(typeof perceived, 'string');
+    const perceived = renderPerceiveOutcome(square.location, await bob.perceive({ observe: true }), {}, undefined, 'tool');
     assert.ok(perceived.includes(directed.activity.id));
     assert.match(perceived, /structured activity/);
     assert.doesNotMatch(perceived, /"nested"|"wake"|"values"/);
-
-    const history = await shared('history').run(square, { location: square.location }, {}, { owner: body('local') });
-    assert.ok(history.includes(directed.activity.id));
-    assert.match(history, /structured activity/);
-    assert.doesNotMatch(history, /"nested"|"wake"|"values"/);
 
     // Tool rendering leaves the exact domain metadata available to SDK readers.
     assert.deepEqual(directed.activity.metadata, metadata);

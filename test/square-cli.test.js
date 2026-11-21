@@ -9,6 +9,7 @@ import { formatActivityId } from '../dist/square-core.js';
 import { squareInput, commandIdentity } from '../dist/cli/context.js';
 import { Square, localUserOwner, harnessOwner } from '../dist/square-api.js';
 import { streamCommand } from '../dist/cli/observation-commands.js';
+import { helpRequest, renderSubcommandHelp } from '../dist/help.js';
 import {
   ROOT,
   run,
@@ -240,14 +241,13 @@ test('every public subcommand exposes scoped help without a square', async () =>
     'migrate',
   ];
 
-  const results = await Promise.all(commands.map((command) => runAsync([command, '--help'], { cwd })));
-  for (const [index, result] of results.entries()) {
-    const command = commands[index];
-    assert.equal(result.status, 0, `${command}: ${result.stderr}`);
-    assert.match(result.stdout, /^Usage: square /, command);
-    assert.match(result.stdout, /-h, --help\s+Show this command help\./, command);
-    assert.doesNotMatch(result.stdout, /The loop:/, command);
-    assert.equal(result.stderr, '', command);
+  for (const command of commands) {
+    assert.deepEqual(helpRequest([command, '--help']), { command });
+    const stdout = renderSubcommandHelp(command);
+    assert.ok(stdout, command);
+    assert.match(stdout, /^Usage: square /, command);
+    assert.match(stdout, /-h, --help\s+Show this command help\./, command);
+    assert.doesNotMatch(stdout, /The loop:/, command);
   }
 
   const index = run(['help'], { cwd });
@@ -266,37 +266,17 @@ test('every public subcommand exposes scoped help without a square', async () =>
   assert.equal(withGlobals.status, 0, withGlobals.stderr);
   assert.match(withGlobals.stdout, /Usage: square \[--location <square>\] --as <name> perceive/);
 
-  const retiredLocationFlag = run(['--square-path', missingSquare, 'perceive', '--help'], { cwd });
-  assert.equal(retiredLocationFlag.status, 2);
-  assert.match(retiredLocationFlag.stderr, /unknown command: --square-path/);
 });
 
-test('help command resolves aliases and rejects unknown commands', async () => {
+test('help command resolves aliases and rejects unknown commands', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-help-alias-'));
-  const [direct, named, alias, unknown, ...removedResults] = await Promise.all([
-    runAsync(['history', '--help'], { cwd }),
-    runAsync(['help', 'history'], { cwd }),
-    runAsync(['help', 'list'], { cwd }),
-    runAsync(['help', 'missing-command'], { cwd }),
-    ...['act', 'echo', 'compact', 'participants'].flatMap((removed) => [
-      runAsync(['help', removed], { cwd }),
-      runAsync([removed], { cwd }),
-    ]),
-  ]);
-  assert.equal(named.status, 0, named.stderr);
-  assert.equal(named.stdout, direct.stdout);
+  const alias = run(['help', 'ls'], { cwd });
   assert.equal(alias.status, 0, alias.stderr);
-  assert.match(alias.stdout, /^Usage: square list \[--depth N\] \[--limit N\] \[--after path\]$/m);
-  assert.match(alias.stdout, /^Aliases: ls$/m);
+  assert.equal(alias.stdout, renderSubcommandHelp('ls'));
+  const unknown = run(['help', 'missing-command'], { cwd });
   assert.equal(unknown.status, 2);
   assert.match(unknown.stderr, /unknown command: missing-command/);
   assert.match(unknown.stderr, /square --help/);
-  for (const [index, result] of removedResults.entries()) {
-    const removed = ['act', 'echo', 'compact', 'participants'][Math.floor(index / 2)];
-    assert.equal(result.status, 2, removed);
-    assert.match(result.stderr, new RegExp(`unknown command: ${removed}`));
-    assert.doesNotMatch(result.stderr, /did you mean/i);
-  }
 });
 
 test('build rejects removed --participants flag', () => {

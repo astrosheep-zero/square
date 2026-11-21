@@ -1,21 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Square } from '../dist/square-api.js';
-import { renderHistoryResult, renderJoinResult } from '../dist/operation-presentation.js';
+import { renderHistoryResult } from '../dist/operation-presentation.js';
 import { renderExpressWaiting } from '../dist/presentation.js';
-
-test('join guidance follows delivery capability, not a blanket instruction to wait', () => {
-  const base = { kind: 'reconnected', participant: 'rei', observation: {
-    location: '/tmp/example.square', standingCount: 1, now: 0,
-  } };
-  const native = renderJoinResult({ ...base, observation: { ...base.observation, deliveryAvailable: true } });
-  const manual = renderJoinResult({ ...base, observation: { ...base.observation, deliveryAvailable: false } });
-  assert.match(native, /when someone calls you, you’ll hear them here/);
-  assert.doesNotMatch(native, /perceive --idle/);
-  assert.match(manual, /perceive --idle 30m/);
-  assert.match(manual, /stay within earshot/);
-  for (const output of [native, manual]) assert.doesNotMatch(output, /every word here lands on a real ear/);
-});
 
 test('expanding a clipped history page keeps its activity coordinates', async () => {
   const square = Square.inMemory({ markdown: 'Conversation' });

@@ -38,12 +38,17 @@ test('exact perceive acknowledges only its id and repeats without changing obser
 test('exact perceive refuses unavailable activities and incompatible library options without consuming', async (t) => {
   const { bob, alice, second } = await setup(t);
   const bare = await alice.express('not addressed to Bob', { force: true });
-  const errors = [];
-  for (const id of ['act/9999', 'act/0', bare.activity.id]) {
-    await assert.rejects(bob.perceive({ id }), (error) => { errors.push(error.message); return error.code === 'invalid_args'; });
+  for (const [id, activityExists] of [
+    ['act/9999', false], ['act/0', true], [bare.activity.id, true],
+  ]) {
+    await assert.rejects(bob.perceive({ id }), (error) => {
+      assert.equal(error.code, 'invalid_args');
+      assert.equal(error.facts.reason, 'not_addressed');
+      assert.equal(error.facts.activityId, id);
+      assert.equal(error.facts.activityExists, activityExists);
+      return true;
+    });
   }
-  // Each refusal names the activity it cannot hand over, and never the raw generic sentence.
-  assert.deepEqual(errors, ['act/9999', 'act/0', bare.activity.id].map((id) => `✕ ${id} isn't addressed to you`));
   for (const extra of [{ idle: 0 }, { from: [] }, { mention: false }, { limit: 1 }, { limit: undefined }, { takeover: true }]) {
     await assert.rejects(bob.perceive({ id: second.id, ...extra }), { code: 'invalid_args' });
   }

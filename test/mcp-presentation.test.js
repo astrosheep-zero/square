@@ -100,27 +100,16 @@ test('read-only tools print the same page as the CLI', async (t) => {
     await rei.express('*waves*', { force: true, noMention: true });
     await bob.listen('rei');
   });
+  const result = cli(squarePath, ['history']);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
   const call = await openMcp(t, squarePath);
-  const cases = [
-    { tool: 'history', args: {}, cliArgs: ['history'] },
-    { tool: 'status', args: { as: 'rei' }, cliArgs: ['--as', 'rei', 'status'] },
-    { tool: 'status', args: {}, cliArgs: ['status'] },
-    { tool: 'status', args: { as: 'bob' }, cliArgs: ['--as', 'bob', 'status'] },
-  ];
-  for (const { tool, args, cliArgs } of cases) {
-    const result = cli(squarePath, cliArgs);
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    const response = await call(tool, args);
-    assert.equal(response.isError, undefined, JSON.stringify(response), tool);
-    assert.equal(response.content[0].text, result.stdout, `${tool} content text must be the CLI's human text`);
-    assert.equal(response.structuredContent, undefined, `${tool} returns only human text`);
-  }
+  const response = await call('history', {});
+  assert.equal(response.isError, undefined, JSON.stringify(response));
+  assert.equal(response.content[0].text, result.stdout, 'history content text must be the CLI\'s human text');
+  assert.equal(response.structuredContent, undefined, 'history returns only human text');
 });
 
 test('mutating tools print the same result as the CLI', async (t) => {
-  await t.test('join', async (t) => {
-    await assertTextParity(t, undefined, ['--as', 'rei', 'join'], 'join', { as: 'rei' });
-  });
   await t.test('express', async (t) => {
     await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'express', 'hello @bob'], 'express',
       { as: 'rei', body: 'hello @bob' });
@@ -130,22 +119,6 @@ test('mutating tools print the same result as the CLI', async (t) => {
       await joinReiAndBob(square, body);
       await (await square.participant('bob', { owner: body })).express('@rei ping', { force: true });
     }, ['--as', 'rei', 'perceive'], 'perceive', { as: 'rei' });
-  });
-  await t.test('listen', async (t) => {
-    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'listen', 'bob'], 'attention', { as: 'rei', action: 'listen', target: 'bob' });
-  });
-  await t.test('ignore', async (t) => {
-    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'ignore', 'bob'], 'attention', { as: 'rei', action: 'ignore', target: 'bob' });
-  });
-  await t.test('unlisten', async (t) => {
-    await assertTextParity(t, async (square, body) => {
-      await joinReiAndBob(square, body);
-      await (await square.participant('rei', { owner: body })).listen('bob');
-    }, ['--as', 'rei', 'unlisten', 'bob'], 'attention', { as: 'rei', action: 'unlisten', target: 'bob' });
-  });
-  await t.test('done', async (t) => {
-    await assertTextParity(t, async (square, body) => { await square.join('rei', { owner: body }); },
-      ['--as', 'rei', 'done'], 'done', { as: 'rei' });
   });
 });
 

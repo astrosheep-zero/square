@@ -12,8 +12,6 @@ import {
 import { isExpressGate, renderExpression, renderFailureLines } from '../operation-presentation.js';
 import { jsonResult } from './json.js';
 
-export { renderExpression } from '../operation-presentation.js';
-
 export interface ActivityOptions extends Omit<ExpressOptions, 'reply'> {
   readonly recoveryOwner?: Owner;
   readonly reply?: string;

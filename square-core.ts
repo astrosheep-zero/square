@@ -11,11 +11,12 @@ export function formatActivityId(index: number): ActivityId {
   if (!Number.isSafeInteger(index) || index < 0) throw new Error(`Invalid activity index: ${index}`);
   return `act/${index}`;
 }
+export const ACTIVITY_ID_PATTERN = /^act\/(0|[1-9][0-9]*)$/;
 export function parseActivityId(value: string): number | undefined {
   if (value === 'act/0') return 0;
-  if (typeof value !== 'string' || !/^act\/[1-9]\d*$/.test(value)) return undefined;
+  if (typeof value !== 'string' || !ACTIVITY_ID_PATTERN.test(value)) return undefined;
   const index = Number(value.slice(4));
-  return Number.isSafeInteger(index) ? index : undefined;
+  return Number.isSafeInteger(index) && index > 0 ? index : undefined;
 }
 export type Act =
   | { kind: 'join'; actor: Participant; at?: number }

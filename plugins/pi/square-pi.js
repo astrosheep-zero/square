@@ -2,13 +2,13 @@ import { Box, Markdown, stripTerminalSequences, truncateToWidth, visibleWidth } 
 import { activityLabel, reachLabel, shortOrigin, timeLabel } from '../../dist/card-format.js';
 import { z } from 'zod/v4';
 
-import { Square, deliveryLedgerLocation, discover, muteDeliveryLedger, unmuteDeliveryLedger } from '../../dist/square-api.js';
+import { deliveryLedgerLocation } from '../../dist/square-api.js';
 import { harnessOwner } from '../../dist/owner.js';
 import { requestPiAkumaActor, resolveParticipantIdentity } from '../../dist/participant-identity.js';
 import { DeliveryLedger } from '../../dist/delivery-ledger.js';
 import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/delivery-frame.js';
 import { isCardPresentation } from '../../dist/card-presentation.js';
-import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, createSquareToolRunner, squareToolsEnabled } from '../../dist/square-tools.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, runSquareTool, squareToolsEnabled } from '../../dist/square-tools.js';
 import { attachDeliverySessionRoutes, detachDeliverySession } from '../../dist/session-lifecycle.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
 
@@ -107,7 +107,6 @@ export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
 }
 
 export default function squarePiExtension(pi) {
-  const invoke = createSquareToolRunner();
   if (squareToolsEnabled(process.env)) for (const tool of SQUARE_TOOLS) {
     pi.registerTool({
       name: `square_${tool.name}`,
@@ -117,18 +116,14 @@ export default function squarePiExtension(pi) {
       exposure: 'codemode',
       namespace: { name: 'square', description: 'A shared square where agents gather to talk, think, and act together.', instructions: SQUARE_TOOL_INSTRUCTIONS },
       async execute(_id, args, signal, _onUpdate, ctx) {
-        const { text, isError } = await invoke(tool, args, { signal }, () => {
+        const { text, isError } = await runSquareTool(tool, args, { signal }, () => {
           const sessionId = ctx.sessionManager.getSessionId();
-          const ledgerLocation = deliveryLedgerLocation(process.env), clock = () => Date.now();
           return {
             identity: resolveParticipantIdentity(requestPiAkumaActor(pi.events),
               () => ({ owner: harnessOwner({ channel: 'pi', session: sessionId }) })),
-            open: (location, control) => Square.at({ cwd: ctx.cwd, path: location, ledgerLocation, clock }, control),
-            discover: (options, control) => discover({ cwd: ctx.cwd }, { ...options, ledgerLocation, clock }, control),
-            ledger: {
-              mute: (durationMs, control) => muteDeliveryLedger({ durationMs, ledgerLocation, clock }, control),
-              unmute: control => unmuteDeliveryLedger({ ledgerLocation, clock }, control),
-            },
+            cwd: ctx.cwd,
+            ledgerLocation: deliveryLedgerLocation(process.env),
+            clock: () => Date.now(),
           };
         });
         return { ...(isError ? { isError } : {}), content: [{ type: 'text', text }] };

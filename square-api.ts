@@ -65,6 +65,7 @@ export async function deliveryLedgerMutedUntil(input: DeliveryMuteOptions = {}, 
 }
 export { ACTIVITY_METADATA_MAX_BYTES } from './model.js';
 export { localUserOwner, harnessOwner, decodeHarnessOwner } from './owner.js';
+export { ACTIVITY_ID_PATTERN } from './square-core.js';
 export { formatActivityId, parseActivityId, MAX_IDENTITY_SET_SIZE,
   PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT, HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT,
   DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT,

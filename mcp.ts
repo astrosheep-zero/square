@@ -1,10 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, createSquareToolRunner, squareToolsEnabled } from './square-tools.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, runSquareTool, squareToolsEnabled } from './square-tools.js';
 import { codexWakeAddress } from './codex-address.js';
 import { readClaudeMcpCall } from './claude-mcp-context.js';
 import { SQUARE_IDENTITY } from './identity.js';
-import { Square, deliveryLedgerLocation, discover, harnessOwner, muteDeliveryLedger, unmuteDeliveryLedger, type Owner } from './square-api.js';
+import { deliveryLedgerLocation, harnessOwner, type Owner } from './square-api.js';
 import { resolveParticipantIdentity, type AkumaActor } from './participant-identity.js';
 import type { SquareAtInput } from './square-facade.js';
 import type { WakeAddress } from './model.js';
@@ -25,13 +25,12 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
   const clock = resourceOptions.clock ?? Date.now;
   const ledgerLocation = resourceOptions.ledgerLocation ?? deliveryLedgerLocation(baseEnv);
   const toolsEnabled = squareToolsEnabled(baseEnv);
-  const invoke = createSquareToolRunner();
   const server = new McpServer({ name: 'square', version: SQUARE_IDENTITY.packageVersion }, {
     ...(toolsEnabled ? { instructions: SQUARE_TOOL_INSTRUCTIONS } : {}),
   });
   if (toolsEnabled) for (const tool of SQUARE_TOOLS) {
     server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputSchema }, (args, extra) => {
-      return invoke(tool, args, { signal: extra.signal }, async () => {
+      return runSquareTool(tool, args, { signal: extra.signal }, async () => {
         const threadId = extra._meta?.threadId;
         const opencodeSessionId = extra._meta?.['ai.opencode/sessionID'];
         // Claude's bundled mod requires a per-call native association; startup identity is not a fallback.
@@ -53,18 +52,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
             ? wakeAddress : undefined;
           return { owner, wakeAddress: callWake };
         });
-        return {
-          identity,
-          now: clock,
-          open: (location, control) => Square.at({ ...resourceOptions, ledgerLocation,
-            cwd: claude?.cwd ?? resourceOptions.cwd, path: location, clock }, control),
-          discover: (discovery, control) => discover({ cwd: claude?.cwd ?? resourceOptions.cwd },
-            { ...discovery, ledgerLocation, clock }, control),
-          ledger: {
-            mute: (durationMs, control) => muteDeliveryLedger({ durationMs, ledgerLocation, clock }, control),
-            unmute: control => unmuteDeliveryLedger({ ledgerLocation, clock }, control),
-          },
-        };
+        return { identity, cwd: claude?.cwd ?? resourceOptions.cwd, ledgerLocation, clock };
       }).then(({ text, isError }) => ({
         ...(isError ? { isError } : {}), content: [{ type: 'text' as const, text }],
       }));

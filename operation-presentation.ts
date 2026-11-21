@@ -61,16 +61,12 @@ export function renderSquareList(data: DiscoveryResult, projection: { now: numbe
 
 const STATUS_PARTICIPANT_PREVIEW_LIMIT = 10;
 
-/** A join receipt whose participant is already reduced to its serializable name. */
-export type JoinPresentation = Omit<JoinResult, 'participant'> & {
-  readonly participant: { readonly name: string } | string;
-};
-
-export function renderJoinResult(data: JoinPresentation, owner?: string, surface: PresentationSurface = 'cli'): string | undefined {
+/** A join receipt, rendered from the observer's own participant name. */
+export function renderJoinResult(data: JoinResult, owner?: string, surface: PresentationSurface = 'cli'): string | undefined {
   const after = data.observation;
   if (after === undefined) return undefined;
   const entry = after.entry;
-  const name = typeof data.participant === 'string' ? data.participant : data.participant.name;
+  const name = data.participant.name;
   const activities = (entry?.recentActivities ?? []).map((event) => renderAmbientEvent(event, name, {
     now: after.now, preview: 200, perception: event.perception,
   })).filter(Boolean).join('\n\n');
@@ -139,9 +135,9 @@ export function renderPerceiveOutcome(
   options: PerceiveOptions = {},
   owner?: string,
   surface: PresentationSurface = 'cli',
-): { stdout: string; exitCode: number } {
+): string {
   const projection = data.observation;
-  if (projection === undefined) return { stdout: '', exitCode: 0 };
+  if (projection === undefined) return '';
   const location = projection.location ?? squarePath;
   const name = projection.participant;
   const stop = data.reason === 'drained' && data.activities.length > 0 ? undefined : data.reason;
@@ -152,11 +148,8 @@ export function renderPerceiveOutcome(
     ownActivityCount: projection.ownActivityCount, hardCap: projection.hardCap,
   };
   if (stop === 'already-active' || stop === 'replaced') {
-    return {
-      stdout: withPathOutput(location, stop === 'already-active'
-        ? renderWatchAlreadyActive(statusOptions) : renderWatchReplaced(statusOptions), header),
-      exitCode: stop === 'already-active' ? 1 : 0,
-    };
+    return withPathOutput(location, stop === 'already-active'
+      ? renderWatchAlreadyActive(statusOptions) : renderWatchReplaced(statusOptions), header);
   }
   const rendered = data.activities.map((activity) => renderAmbientEvent(activity, name, {
     now: projection.now, perception: activity.perception, mention: options.mention ? name : undefined,
@@ -170,10 +163,7 @@ export function renderPerceiveOutcome(
   const fallback = stop === undefined && !projection.deliveryAvailable && data.remaining === 0
     ? `${surface === 'tool' ? formatToolAction('perceive', { location: displayPath(location), as: name, idle: '30m' }) : `${participantCommandPrefix(location, name, owner)} perceive --idle 30m`}\n  stay available for new activity` : '';
   const hint = data.hint === undefined ? '' : style('dim', `· ${data.hint}`);
-  return {
-    stdout: withPathOutput(location, [terminal, rendered, hint, remaining, fallback].filter(Boolean).join('\n\n'), header),
-    exitCode: stop === 'capped' ? 1 : 0,
-  };
+  return withPathOutput(location, [terminal, rendered, hint, remaining, fallback].filter(Boolean).join('\n\n'), header);
 }
 
 function renderHistoryProjection(
@@ -413,7 +403,8 @@ export function renderFailureLines(failure: FailureReport, options: FailureOptio
   const reason = facts?.reason;
   const gate = expressGateLines(failure, options);
   if (gate !== undefined) return gate;
-  const marked = reason === 'never_joined' || reason === 'not_standing';
+  const marked = reason === 'never_joined' || reason === 'not_standing'
+    || (failure.operation?.operation === 'perceive' && reason === 'not_addressed');
   const lines = marked ? failure.message.split('\n').map((line) => `✕ ${line}`) : [failure.message];
   if (reason === 'invalid_reply') {
     lines[0] = `Invalid ${options.surface === 'tool' ? 'reply' : '--reply'}: ${facts?.activityExists === false ? `${facts.activityId ?? options.reply ?? 'that activity'} is not in this square's history` : 'expected an activity id like act/12'}`;

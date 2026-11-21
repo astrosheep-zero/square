@@ -10,16 +10,18 @@ import {
   truncateChars,
   withPathOutput,
   quoteShell,
+  renderWatchForceTakeover,
+  renderWatchReplaceMissing,
 } from '../presentation.js';
 import {
   historyContinuationCommand,
   renderHistoryResult,
+  renderPerceiveOutcome,
   renderStatusResult,
   renderSquareList,
 } from '../operation-presentation.js';
 import { formatTimestamp, parseTimeOrRelative } from '../time.js';
 import { deliveryLedgerLocation, discover, inbox, formatActivityId, parseActivityId, PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../square-api.js';
-import { renderPerceiveOutcome, renderPerceiveProgress } from './perceive-presentation.js';
 import { selectOwnSeat } from '../square-api.js';
 import { jsonResult } from './json.js';
 
@@ -195,18 +197,15 @@ export const perceiveCommand: CommandSpec<PerceiveOptions> = {
       const outcome = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name)).perceive({ ...intent, ...(context.json ? {} : { observe: true }) }, {
         signal: controller.signal,
         onProgress(progress) {
-          const line = renderPerceiveProgress(squarePath, progress);
-          if (line !== undefined) process.stderr.write(line);
+          if (progress.kind !== 'perceive-started' || !progress.replacementRequested) return;
+          const options = { squarePath, name: progress.participant };
+          process.stderr.write((progress.replaced ? renderWatchForceTakeover(options) : renderWatchReplaceMissing(options)) + '\n');
         },
       }), { signal: controller.signal });
-      if (context.json) {
-        process.stdout.write(jsonResult(outcome));
-        process.exitCode = outcome.reason === 'already-active' || outcome.reason === 'capped' ? 1 : 0;
-      } else {
-        const rendered = renderPerceiveOutcome(squarePath, outcome, intent, context.owner ?? context.env.SQUARE_OWNER);
-        process.stdout.write(rendered.stdout);
-        process.exitCode = rendered.exitCode;
-      }
+      const exitCode = outcome.reason === 'already-active' || outcome.reason === 'capped' ? 1 : 0;
+      if (context.json) process.stdout.write(jsonResult(outcome));
+      else process.stdout.write(renderPerceiveOutcome(squarePath, outcome, intent, context.owner ?? context.env.SQUARE_OWNER));
+      process.exitCode = exitCode;
     } catch (error) {
       if (!controller.signal.aborted) throw error;
       process.stdout.write(withPathOutput(squarePath, '○ you step back — perceive stopped'));

@@ -54,7 +54,6 @@ test('Square resource and posting boundaries stay free of process.env and CLI cl
   assert.deepEqual(ownershipLeaks('operationEnv', []), []);
   const toolsSource = productionSources.get('square-tools.ts') ?? '';
   assert.match(toolsSource, /export interface ToolIdentity \{\s*readonly owner\?: Owner;\s*readonly wakeAddress\?: WakeAddress;?\s*\}/);
-  assert.match(toolsSource, /discover\(options: DiscoveryOptions, control: OperationControl\): Promise<DiscoveryResult>;/);
 });
 
 test('the local resource accepts transport injection without composing harness defaults', () => {

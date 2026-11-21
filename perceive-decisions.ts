@@ -98,7 +98,7 @@ export function decidePerceive(facts: SquareWrite, requestedName: string, option
     if (!(error instanceof ReceiveError)) throw error;
     if (error.code === 'missing_item') throw new SquareError('invalid_args', 'Invalid square artifact: addressed activity is missing.');
     const index = error.key as number;
-    throw new SquareError('invalid_args', `✕ ${formatActivityId(index)} isn't addressed to you`, {
+    throw new SquareError('invalid_args', `${formatActivityId(index)} isn't addressed to you`, {
       reason: 'not_addressed', activityId: formatActivityId(index), activityExists: facts.activity(index) !== undefined,
     });
   }
