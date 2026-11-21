@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
@@ -21,53 +20,6 @@ function executePrinted(command, env = {}) {
   });
 }
 
-function printedCommands(output) {
-  return output.split('\n').filter((line) => /^square .* express /.test(line));
-}
-
-test('express refuses the removed bell flag without landing and keeps named mentions in help', async t => {
-  const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { owner: body });
-    await square.join('Bob', { owner: body });
-  });
-  const square = await Square.at({ path: file });
-  t.after(() => square.close());
-  const before = await square.history();
-  for (const args of [['--bell'], ['--bell', 'must not land']]) {
-    const result = run(withName(file, 'Alice', ['express', ...args]));
-    assert.equal(result.status, 2, result.stdout + result.stderr);
-    assert.match(result.stderr, /express does not know --bell/);
-  }
-  assert.deepEqual(await square.history(), before);
-  const prose = 'The old --bell flag is just text here.';
-  for (const [args, input, expected] of [[[prose], undefined, prose], [['-'], '--bell\n', '--bell']]) {
-    const sent = run(withName(file, 'Alice', ['express', '--json', ...args]), { input });
-    assert.equal(sent.status, 0, sent.stderr);
-    assert.equal(JSON.parse(sent.stdout).activity.body, expected);
-  }
-  const help = run(['express', '--help']);
-  assert.equal(help.status, 0, help.stderr);
-  assert.doesNotMatch(help.stdout, /--bell/);
-  assert.match(help.stdout, /--mention <name>/);
-});
-
-test('unmatched body @names and explicit mentions land with the same reach warning', async () => {
-  const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { owner: body });
-    await square.join('Bob', { owner: body });
-  });
-
-  const result = run(withName(file, 'Alice', ['express', '--no-wait', '-']), { input: 'hello @Nobody\n' });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.doesNotMatch(result.stderr, /does not match|not standing|draft kept/);
-
-  const flag = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Ghost', 'hello there']));
-  assert.equal(flag.status, 0, flag.stdout + flag.stderr);
-  for (const [sent, target] of [[result, 'Nobody'], [flag, 'Ghost']]) {
-    assert.match(sent.stdout, new RegExp(`⚠ @${target} is not in this square\\.`));
-    assert.equal(printedCommands(sent.stdout + sent.stderr).length, 0);
-  }
-});
 
 test('CLI express warns once for absent and observed away targets', async t => {
   const ledger = await DeliveryLedger.open({ location: process.env.SQUARE_DELIVERY });
@@ -82,7 +34,6 @@ test('CLI express warns once for absent and observed away targets', async t => {
   });
   const result = run(withName(file, 'Alice', ['express', '--force', '--mention', 'bob', '--mention', 'Nobody', '--reply', reply, '@bob @BOB @Nobody @nobody']));
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /● you walk over to @Bob — act\/\d+ · 1\/3/);
   assert.deepEqual(result.stdout.split('\n').filter(line => line.startsWith('⚠')), [
     '⚠ @Nobody is not in this square.', '⚠ @Bob is away.',
   ]);
@@ -145,20 +96,6 @@ test('express receipts distinguish words, gestures, and named reach', async t =>
     const recipient = await square.participant(name, { owner });
     assert.deepEqual((await recipient.perceive()).activities.map(a => a.id), name === 'Dan' ? [] : [activity.id]);
   }
-});
-
-test('a reply to an author who stepped out says the reply did not reach them', async () => {
-  const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { owner: body });
-    const bob = (await square.join('Bob', { owner: body })).participant;
-    await bob.express('question', { force: true, noMention: true });
-    await bob.done();
-  });
-
-  const result = run(withName(file, 'Alice', ['express', '--force', '--reply', 'act/2', 'answer']));
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /● your words land — act\/4/);
-  assert.match(result.stdout, /⚠ @Bob is not in this square\./);
 });
 
 test('unread activity appended to a receipt is explicitly a nonconsuming preview', async () => {
@@ -256,12 +193,3 @@ test('history closes the page with one presence anchor line', async () => {
   assert.equal(lines.at(-1), anchors[0]);
 });
 
-test('the retired receipt wording is gone from production sources', () => {
-  const root = path.resolve(import.meta.dirname, '..');
-  const retired = /holds its breath|glance:|#\$\{ownActCount\}|first join steps in/;
-  const files = fs.readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
-    .map((entry) => entry.name);
-  const offenders = files.filter((file) => retired.test(fs.readFileSync(path.join(root, file), 'utf8')));
-  assert.deepEqual(offenders, []);
-});

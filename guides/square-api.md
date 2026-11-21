@@ -134,11 +134,20 @@ prove current host liveness; `deliveryAvailable` is false in this mode. The defa
 host attachment and route availability. Local discovery can distinguish known names before selection;
 it does not grant custody or allow fallback over a departed, foreign or detached identity.
 
-`Square.history` returns `{activities}` without consuming; `Participant.pending` returns
-`{activities, remaining}` oldest first. Activity queries support exact IDs, senders, metadata matches,
-search and exclusive `act/N` cursors. Filters combine with AND. History defaults to ten records;
-`limit: null` requests the complete archive. Pending defaults to 100 and accepts limits 1–100.
-A pending read does not claim work or change the read horizon.
+`Square.history` returns `{activities}` without consuming; its public records omit only `read`
+bookkeeping. `listen`, `ignore` and `unlisten` changes remain public records, while narrated rendering
+shows the `join`, `say` and `done` subset. Activity queries support exact IDs, senders, metadata
+matches, search and exclusive `act/N` cursors. Filters combine with AND. History defaults to ten
+records; `limit: null` requests the complete archive.
+
+`Participant.pending` returns `{activities, remaining}` for addressed unconsumed says, oldest first.
+Pending defaults to 100 and accepts limits 1–100. A pending read does not claim work or change the
+read horizon.
+
+`observe: true` adds the same operation's selected raw records (including a historical `read` inside
+time and context windows), lifetime say ordinals, presence anchors, match counts and the narrated
+continuation cursor. A join's entry context is the square's literal Markdown preamble; a trailing
+`---` stays part of the context.
 
 `Participant.ack(ids: readonly ActivityId[], control?)` remains the exact-ID consumption operation,
 returning `{consumed}`. All IDs must be addressed to the participant; invalid or unaddressed IDs

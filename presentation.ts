@@ -1,9 +1,9 @@
-import { type HydratedAct, type PublicAct, type RoomChangeAct, sameName } from './model.js';
+import { sameName } from './model.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { participantIdentity } from './participant-identity.js';
 export { participantIdentity } from './participant-identity.js';
-import { formatActivityId, MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
+import { MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { Activity, UnreadActivitySummary, ParticipantSummary } from './square-facade.js';
 import { grepSnippet } from './search.js';
@@ -159,7 +159,7 @@ function previewBodyFacts(body: string, maxLen = BODY_PREVIEW_LENGTH): { text: s
 
 const UNREAD_PREVIEW_CHARS = 120;
 
-export function renderRoomChangeText(event: RoomChangeAct | Activity): string {
+function renderRoomChangeText(event: Activity): string {
   const actor = event.actor ?? 'someone';
   const identity = actor === 'someone' ? actor : participantIdentity(actor);
   switch (event.kind) {
@@ -194,22 +194,14 @@ interface RenderedEvent {
   bodyClipped: boolean;
 }
 
-function eventId(event: HydratedAct | Activity): string {
-  return 'index' in event ? formatActivityId(event.index) : event.id;
-}
-function replyId(reply: number | string): string {
-  return typeof reply === 'number' ? formatActivityId(reply) : reply;
-}
-
 function renderEventCliFacts(
-  event: HydratedAct | Activity,
+  event: Activity,
   opts: { now?: number; preview?: number; mention?: string } = {}
 ): RenderedEvent {
   const now = opts.now;
   const maxBody = opts.preview;
   switch (event.kind) {
     case 'join':
-      return { text: `· ${renderRoomChangeText(event)}`, bodyClipped: false };
     case 'listen':
     case 'ignore':
     case 'unlisten':
@@ -221,39 +213,36 @@ function renderEventCliFacts(
         : body;
       const mention = opts.mention;
       const mentionSuffix =
-        mention !== undefined && (event.reach === 'bell' || event.mentions?.some((name) => sameName(name, mention)))
+        mention !== undefined && (event.reach === 'bell' || event.mentions.some((name) => sameName(name, mention)))
           ? ` · calls your name across the square — ${participantIdentity(mention)}`
           : '';
-      const replySuffix = event.reply === undefined ? '' : ` · replies to ${replyId(event.reply)}`;
-      const meta = ` · ${eventId(event)} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}`;
+      const replySuffix = event.reply === undefined ? '' : ` · replies to ${event.reply}`;
+      const meta = ` · ${event.id} · ${formatRelativeTime(event.at, now)}${mentionSuffix}${replySuffix}`;
       return { text: `● ${participantIdentity(event.actor)}${style('dim', meta)}${bodySuffix(visibleBody.text)}`, bodyClipped: visibleBody.clipped };
     }
     case 'done': {
       const body = renderedBody(event.body, maxBody);
       return {
-        text: `${style('dim', '○')} ${participantIdentity(event.actor)} stepped out of the square — done${style('dim', ` · ${eventId(event)} · ${formatRelativeTime(event.at, now)}`)}${bodySuffix(body.text)}`,
+        text: `${style('dim', '○')} ${participantIdentity(event.actor)} stepped out of the square — done${style('dim', ` · ${event.id} · ${formatRelativeTime(event.at, now)}`)}${bodySuffix(body.text)}`,
         bodyClipped: body.clipped,
       };
     }
-    case 'say':
-    case 'read':
-      return { text: '', bodyClipped: false };
   }
 }
 
 export function renderEventCli(
-  event: HydratedAct | Activity,
+  event: Activity,
   opts: { now?: number; preview?: number; mention?: string } = {}
 ): string {
   return renderEventCliFacts(event, opts).text;
 }
 
 function renderPresenceOnlySay(
-  event: Extract<HydratedAct, { kind: 'say' }> | Activity,
+  event: Activity,
   opts: { now?: number } = {}
 ): string {
-  const targets = event.reach === 'bell' ? [] : event.mentions ?? [];
-  const meta = style('dim', ` · ${eventId(event)} · ${formatRelativeTime(event.at, opts.now)}`);
+  const targets = event.reach === 'bell' ? [] : event.mentions;
+  const meta = style('dim', ` · ${event.id} · ${formatRelativeTime(event.at, opts.now)}`);
   if (targets.length === 0) {
     return `● ${participantIdentity(event.actor)}${meta}`;
   }
@@ -267,27 +256,13 @@ function renderPresenceOnlySay(
 }
 
 export function renderAmbientEventFacts(
-  event: HydratedAct | Activity,
-  viewer: string,
-  opts: { now?: number; preview?: number; presencePreview?: number; mention?: string; perception?: Perception } = {}
+  event: Activity,
+  opts: { now?: number; preview?: number; mention?: string; perception?: Perception } = {}
 ): RenderedEvent {
   if (event.kind !== 'say') return renderEventCliFacts(event, opts);
   if (opts.perception === undefined) throw new Error('Ambient say rendering requires a settled perception');
-  const seen = opts.perception;
-  if (seen === 'presence') {
-    const presence = renderPresenceOnlySay(event, opts);
-    const body = opts.presencePreview === undefined ? { text: '', clipped: false } : renderedBody(event.body, opts.presencePreview);
-    return { text: `${presence}${bodySuffix(body.text)}`, bodyClipped: body.clipped };
-  }
+  if (opts.perception === 'presence') return { text: renderPresenceOnlySay(event, opts), bodyClipped: false };
   return renderEventCliFacts(event, opts);
-}
-
-export function renderAmbientEvent(
-  event: HydratedAct | Activity,
-  viewer: string,
-  opts: { now?: number; preview?: number; presencePreview?: number; mention?: string; perception?: Perception } = {}
-): string {
-  return renderAmbientEventFacts(event, viewer, opts).text;
 }
 
 function draftSavedLines(draftPath: string | undefined): string[] {
@@ -344,16 +319,15 @@ export function renderPresenceAnchor(names: readonly string[]): string {
 const GREP_PREVIEW_CHARS = 160;
 
 export function renderGrepActivitiesView(
-  visible: readonly HydratedAct[],
+  visible: readonly Activity[],
   totalMatches: number,
   full: boolean | undefined,
   squarePath: string,
   pattern: string,
   fixed = false,
-  perception?: (act: HydratedAct) => Perception,
   surface: PresentationSurface = 'cli',
 ): string {
-  const publicVisible = visible.filter((act): act is PublicAct => act.kind === 'say' || act.kind === 'done');
+  const publicVisible = visible.filter((act) => act.kind === 'say' || act.kind === 'done');
   if (totalMatches === 0) return `○ no activity matched ${quoteShell(pattern)}`;
   const matchLabel = totalMatches === 1 ? 'match' : 'matches';
   const chunks = [publicVisible.length === totalMatches ? `${totalMatches} ${matchLabel}` : `${publicVisible.length} of ${totalMatches} ${matchLabel}`];
@@ -361,11 +335,7 @@ export function renderGrepActivitiesView(
 
   for (const act of publicVisible) {
     const rawBody = act.body ?? '';
-    const header = `${style('dim', formatActivityId(act.index))} · ${participantIdentity(act.actor)} · ${style('dim', formatTimestamp(act.at))}`;
-    if (perception?.(act) === 'presence') {
-      chunks.push(header);
-      continue;
-    }
+    const header = `${style('dim', act.id)} · ${participantIdentity(act.actor)} · ${style('dim', formatTimestamp(act.at))}`;
     if (full === true) {
       const body = rawBody.split('\n').map((line) => `  ${line}`).join('\n');
       chunks.push(`${header}\n${body}`);
@@ -388,14 +358,10 @@ export function renderGrepActivitiesView(
     chunks.push(`${header}\n  ${text.trim()}${omitted}`);
   }
 
-  if (publicVisible.length === 1) {
+  if (publicVisible.length === 1 || truncated) {
     chunks.push(surface === 'tool'
-      ? formatToolAction('history', { location: displayPath(squarePath), at: [formatActivityId(publicVisible[0].index)], context: 2, ...(truncated ? { full: true } : {}) })
-      : `${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2${truncated ? ' --full' : ''}`);
-  } else if (truncated && publicVisible.length > 1) {
-    chunks.push(surface === 'tool'
-      ? formatToolAction('history', { location: displayPath(squarePath), at: [formatActivityId(publicVisible[0].index)], context: 2, full: true })
-      : `${commandPrefix(squarePath)} history --at ${formatActivityId(publicVisible[0].index)} -C 2 --full`);
+      ? formatToolAction('history', { location: displayPath(squarePath), at: [publicVisible[0].id], context: 2, ...(truncated ? { full: true } : {}) })
+      : `${commandPrefix(squarePath)} history --at ${publicVisible[0].id} -C 2${truncated ? ' --full' : ''}`);
   }
   return chunks.join('\n\n');
 }

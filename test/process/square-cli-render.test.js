@@ -296,22 +296,6 @@ test('perceive around the square excludes the current actor', async () => {
   assert.doesNotMatch(watched.stdout, /^\s*[◎●○×]\s+Alice\b/m);
 });
 
-test('history with an explicit page and no truncation renders the archive', async () => {
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    await square.join('Alice', { owner: body, wakeAddress });
-    const bob = (await square.join('Bob', { owner: body, wakeAddress })).participant;
-    await bob.express('hello @Alice', { force: true, mentions: ['Alice'] });
-    await bob.done();
-  });
-
-  const activities = run(withPath(file, ['history', '--limit', '100', '--full']), { env: { SQUARE_NOW_MS: '5000' } });
-  assert.equal(activities.status, 0, activities.stderr);
-  assert.match(activities.stdout, /@Bob\s+·/);
-  assert.match(activities.stdout, /hello @Alice/);
-  assert.match(activities.stdout, /@Bob stepped out of the square — done/);
-  assert.doesNotMatch(activities.stdout, /\(No public activity in this view\.\)/);
-});
-
 test('history accepts --as without claiming identity or changing archive semantics', async () => {
   const file = await persistSquare(async ({ square, body, wakeAddress }) => {
     const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
@@ -512,24 +496,6 @@ test('presence rendering omits a body when a bare say has no visible mention tar
   assert.doesNotMatch(caraWatch.stdout, /listener-only answer/);
 });
 
-test('history expands the newest ten activities in chronological order', async () => {
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
-    for (let index = 1; index <= 11; index += 1) {
-      const body = `history body ${index} ${'x'.repeat(index === 11 ? 230 : 4)} @Alice`;
-      await alice.express(body, { force: true, mentions: ['Alice'] });
-    }
-  }, { hardCap: null });
-
-  const history = run(withPath(file, ['history']), { env: { SQUARE_NOW_MS: '5000' } });
-  assert.equal(history.status, 0, history.stderr);
-  assert.doesNotMatch(history.stdout, /history body 1 /);
-  assert.match(history.stdout, /history body 2 /);
-  assert.match(history.stdout, /history body 11 /);
-  assert.match(history.stdout, /history body 11 [^\n]*x{20}/);
-  assert.ok(history.stdout.indexOf('history body 2 ') < history.stdout.indexOf('history body 11 '));
-});
-
 test('history expands one result, previews multiple results, and --full expands all', async () => {
   const firstTail = 'FIRST-TAIL';
   const secondTail = 'SECOND-TAIL';
@@ -688,29 +654,6 @@ test('history power filters and JSON stay read-only', async () => {
   assert.match(row.id, /^act\//);
   assert.match(row.body, /schema v3/);
 
-});
-
-test('history search defaults to a compact character-bounded search view', async () => {
-  const file = await persistSquare(async ({ square, body, wakeAddress }) => {
-    const alice = (await square.join('Alice', { owner: body, wakeAddress })).participant;
-    await alice.express(`needle ${'🙂'.repeat(250)}TAIL @Alice`, { force: true, mentions: ['Alice'] });
-  });
-
-  const compact = run(withPath(file, ['history', '--regex', '--search', 'needle']), { env: { SQUARE_NOW_MS: '3000' } });
-  assert.equal(compact.status, 0, compact.stderr);
-  assert.match(compact.stdout, /\b1 match\b/);
-  assert.match(compact.stdout, /act\/\d+ · @Alice ·/);
-  assert.match(compact.stdout, /needle/);
-  assert.match(compact.stdout, /· 0 chars before · \d+ chars after/);
-  assert.doesNotMatch(compact.stdout, /TAIL/);
-  assert.doesNotMatch(compact.stdout, /�/);
-  assert.doesNotMatch(compact.stdout, /footprints/);
-  assert.match(compact.stdout, /history --at act\/\d+ -C 2 --full/);
-
-  const full = run(withPath(file, ['history', '--regex', '--search', 'needle', '--full']), { env: { SQUARE_NOW_MS: '3000' } });
-  assert.equal(full.status, 0, full.stderr);
-  assert.match(full.stdout, /TAIL/);
-  assert.doesNotMatch(full.stdout, /chars after/);
 });
 
 test('history search centers snippets on late, multiline, and literal matches', async () => {

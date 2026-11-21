@@ -1,16 +1,17 @@
 // Human-facing scenes for settled operations, with surface-specific next actions.
 import { sameName } from './model.js';
-import { formatActivityId } from './square-core.js';
+import { parseActivityId } from './square-core.js';
+import { isNarratedActivity } from './square-api.js';
 import type {
-  PerceiveOptions, PerceiveResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
+  Activity, PerceiveOptions, PerceiveResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
   JoinResult, LifecycleResult, ListenerChangeResult, OperationFailureDetail, SquareErrorFacts,
   StatusResult, DiscoveryResult, MuteResult,
 } from './square-facade.js';
 import {
   type PresentationSurface, displayPath, formatToolAction, commandPrefix, joinRecoveryCommand, participantCommandPrefix, participantIdentity,
-  quoteShell, renderAmbientEvent, renderAmbientEventFacts,
+  quoteShell, renderAmbientEventFacts,
   renderEventCli, renderGrepActivitiesView, renderPresenceAnchor,
-  renderRoomChangeText, renderWatchAlreadyActive, renderWatchReplaced, renderWatchStatus,
+  renderWatchAlreadyActive, renderWatchReplaced, renderWatchStatus,
   renderUnreadSummary, takeoverRecoveryLines, withPathOutput, truncateChars,
 } from './presentation.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
@@ -67,9 +68,9 @@ export function renderJoinResult(data: JoinResult, owner?: string, surface: Pres
   if (after === undefined) return undefined;
   const entry = after.entry;
   const name = data.participant.name;
-  const activities = (entry?.recentActivities ?? []).map((event) => renderAmbientEvent(event, name, {
+  const activities = (entry?.recentActivities ?? []).map((event) => renderAmbientEventFacts(event, {
     now: after.now, preview: 200, perception: event.perception,
-  })).filter(Boolean).join('\n\n');
+  }).text).filter(Boolean).join('\n\n');
   const fallback = after.deliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
     '', surface === 'tool' ? formatToolAction('perceive', { location: displayPath(after.location), as: name, idle: '30m' }) : `${participantCommandPrefix(after.location, name, owner)} perceive --idle 30m`,
     '  · stay within earshot — keep this perceive open for new activity',
@@ -151,9 +152,9 @@ export function renderPerceiveOutcome(
     return withPathOutput(location, stop === 'already-active'
       ? renderWatchAlreadyActive(statusOptions) : renderWatchReplaced(statusOptions), header);
   }
-  const rendered = data.activities.map((activity) => renderAmbientEvent(activity, name, {
+  const rendered = data.activities.map((activity) => renderAmbientEventFacts(activity, {
     now: projection.now, perception: activity.perception, mention: options.mention ? name : undefined,
-  })).filter(Boolean).join('\n\n');
+  }).text).filter(Boolean).join('\n\n');
   const remaining = data.remaining === 0 ? ''
     : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${surface === 'tool' ? formatToolAction('perceive', { location: displayPath(location), as: name, ...(options.from?.length ? { from: options.from } : {}), ...(options.mention ? { mention: true } : {}), ...(options.limit !== undefined ? { limit: options.limit } : {}) }) : continuationCommand(location, name, options, owner)}`;
   const terminal = stop === undefined ? '' : renderWatchStatus({
@@ -168,7 +169,7 @@ export function renderPerceiveOutcome(
 
 function renderHistoryProjection(
   projection: HistoryObservation,
-  visible: HistoryObservation['visibleActivities'],
+  visible: readonly Activity[],
   full: boolean,
   squarePath: string,
   surface: PresentationSurface,
@@ -181,13 +182,13 @@ function renderHistoryProjection(
   for (const activity of shown) {
     const rendered = renderEventCli(activity, { now: projection.now, preview });
     if (rendered !== '') chunks.push(rendered);
-    for (const participant of projection.presenceAnchors[activity.index] ?? []) {
+    for (const participant of projection.presenceAnchors[parseActivityId(activity.id)!] ?? []) {
       if (!anchored.some((existing) => sameName(existing, participant))) anchored.push(participant);
     }
   }
   if (chunks.length === 0) return '○ no activity matches this history query';
   if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && (activity.body?.length ?? 0) > preview)) {
-    const ids = shown.map((activity) => formatActivityId(activity.index));
+    const ids = shown.map((activity) => activity.id);
     chunks.push(surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), at: ids, full: true }) : `${commandPrefix(squarePath)} history --at ${ids.join(',')} --full`);
   }
   if (anchored.length > 0) chunks.push(renderPresenceAnchor(anchored));
@@ -196,22 +197,6 @@ function renderHistoryProjection(
 
 export function historyContinuationCommand(squarePath: string, args: readonly string[]): string {
   return `${commandPrefix(squarePath)} history ${args.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
-}
-
-/** The same query spelled as CLI arguments, for a continuation someone can actually run. */
-function historyQueryArgs(query: HistoryQuery): string[] {
-  const args: string[] = [];
-  if (query.from?.length) args.push('--from', query.from.join(','));
-  if (query.since !== undefined) args.push('--since', formatTimestamp(query.since));
-  if (query.at?.length) args.push('--at', query.at.join(','));
-  if (query.context !== undefined) args.push('-C', String(query.context));
-  if (query.mention !== undefined) args.push('--mention', query.mention);
-  if (query.search !== undefined) {
-    args.push('--search', query.search.text);
-    if (query.search.mode === 'regex') args.push('--regex');
-  }
-  if (query.order !== undefined) args.push('--order', query.order);
-  return args;
 }
 
 export function renderHistoryResult(
@@ -224,11 +209,12 @@ export function renderHistoryResult(
   const query = options.query ?? {};
   const full = options.full === true;
   const search = query.search;
+  const shown = data.activities.filter((activity) => isNarratedActivity(activity.kind));
   const output = search === undefined
-    ? renderHistoryProjection(projection, projection.visibleActivities, full, squarePath, options.surface ?? 'cli')
-    : renderGrepActivitiesView(projection.visibleActivities, projection.totalMatches, full, squarePath, search.text, search.mode === 'literal', () => 'full', options.surface);
+    ? renderHistoryProjection(projection, shown, full, squarePath, options.surface ?? 'cli')
+    : renderGrepActivitiesView(shown, projection.totalMatches, full, squarePath, search.text, search.mode === 'literal', options.surface);
   const next = projection.continuation;
-  const base = options.continuationArgs ?? [...historyQueryArgs(query), ...(full ? ['--full'] : [])];
+  const base = options.continuationArgs ?? [];
   const continuation = next === undefined ? '' : `\n\n${options.surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), ...(query.from?.length ? { from: query.from } : {}), ...(query.since !== undefined ? { since: formatTimestamp(query.since) } : {}), ...(query.at?.length ? { at: query.at } : {}), ...(query.context !== undefined ? { context: query.context } : {}), ...(query.mention !== undefined ? { mention: query.mention } : {}), ...(query.search !== undefined ? { search: query.search.text, ...(query.search.mode === 'regex' ? { regex: true } : {}) } : {}), ...(query.order !== undefined ? { order: query.order } : {}), ...(full ? { full: true } : {}), [next.direction]: next.cursor, limit: next.limit }) : historyContinuationCommand(squarePath, [...base, `--${next.direction}`, next.cursor, '--limit', String(next.limit)])}`;
   return withPathOutput(squarePath, output + continuation, { participantCount: projection.standingCount });
 }
@@ -275,7 +261,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
   const cap = data.hardCap === null ? 'unlimited' : `${data.hardCap} each`;
   const visible = data.latestActivity === undefined
     ? { text: '', bodyClipped: false }
-    : renderAmbientEventFacts(data.latestActivity, presentation.viewer, {
+    : renderAmbientEventFacts(data.latestActivity, {
         now: data.now,
         preview: 200,
         perception: presentation.latestPerception,

@@ -96,7 +96,7 @@ test('entry hydrates only its newest public page and settles viewer perception w
     assert.deepEqual(entry.recentActivities.map((a) => a.perception), ['full', 'full', 'full']);
     assert.deepEqual(reads.batches, [[239, 240, 241]]);
     assert.deepEqual(reads.ordinals, []);
-    assert.equal(entry.joinContext, 'context');
+    assert.equal(entry.joinContext, 'context\n---');
     assert.equal(entry.joinedBefore, false);
     const ambient = (await square.artifact.read(facts => entryPresentation(facts, '', 1))).value;
     assert.equal(ambient.recentActivities[0].perception, 'presence');
@@ -114,7 +114,6 @@ test('history filters audience, senders and search in storage before paging and 
     const selected = (await square.artifact.read((facts) => selectHistory(facts, query, query.limit, NON_READ))).value;
     assert.deepEqual(selected.activities.map((a) => a.index), [209]);
     assert.equal(selected.totalMatches, 2);
-    assert.deepEqual(selected.visibleActivities.map((activity) => activity.index), [209]);
     assert.deepEqual(selected.continuation, { direction: 'before', cursor: 'act/209', limit: 1 });
     const app = await archiveSquare(t, fixture(acts));
     const outcome = await app.history({ ...query, observe: true });
@@ -142,7 +141,6 @@ test('context uses existing activity positions while facade omits read', async (
   try {
     const app = await archiveSquare(t, fixture(acts));
     const application = await app.history({ observe: true, at: ['act/50'], context: 1 });
-    assert.deepEqual(application.observation.visibleActivities.map((a) => a.index), [7, 80]);
     assert.deepEqual(application.observation.activities.map((activity) => activity.index), [7, 50, 80]);
     assert.deepEqual(application.activities.map((activity) => activity.id), ['act/7', 'act/80']);
     assert.equal(application.observation.continuation, undefined);
@@ -178,7 +176,6 @@ test('hidden listener events occupy history positions without becoming terminal 
   const recent = await app.history({ observe: true, limit: 3, order: 'desc' });
   assert.deepEqual(recent.observation.activities.map((activity) => activity.index), [101, 80, 50]);
   assert.deepEqual(recent.activities.map((activity) => activity.id), ['act/101', 'act/80', 'act/50']);
-  assert.deepEqual(recent.observation.visibleActivities.map((activity) => activity.index), [101]);
   assert.deepEqual(recent.observation.continuation, { direction: 'before', cursor: 'act/101', limit: 3 });
   assert.deepEqual(recent.observation.sayNumbers, { 101: 2 });
   assert.deepEqual(recent.observation.presenceAnchors, { 101: ['Alice'] });
@@ -188,7 +185,6 @@ test('hidden listener events occupy history positions without becoming terminal 
   assert.deepEqual(forward.observation.continuation, { direction: 'after', cursor: 'act/7', limit: 3 });
   const hidden = await app.history({ observe: true, cursor: { id: 'act/101', direction: 'before' }, limit: 2 });
   assert.deepEqual(hidden.activities.map((activity) => activity.kind), ['listen', 'ignore']);
-  assert.deepEqual(hidden.observation.visibleActivities, []);
   assert.equal(hidden.observation.continuation, undefined);
 });
 

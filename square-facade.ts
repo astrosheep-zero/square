@@ -313,7 +313,6 @@ export interface HistoryObservation extends SquareObservation {
   readonly sayNumbers: Readonly<Record<number, number>>;
   readonly presenceAnchors: Readonly<Record<number, readonly string[]>>;
   readonly totalMatches: number;
-  readonly visibleActivities: readonly ArchiveRecord[];
   readonly continuation?: HistoryContinuation;
 }
 export interface ListenerObservation extends SquareObservation {

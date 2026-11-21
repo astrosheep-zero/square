@@ -549,7 +549,7 @@ export class SqliteSquare {
       let entry, deliveryAvailable = false;
       try {
         const observed = await this.withHostPresence((facts, available) => ({
-          entry: entryPresentation(facts, participant.name, options.last ?? HISTORY_DEFAULT_LIMIT),
+          entry: entryPresentation(facts, participant.name, last),
           deliveryAvailable: available(participant.name),
         }), control);
         entry = observed.entry;

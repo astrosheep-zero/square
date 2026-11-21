@@ -66,9 +66,6 @@ export interface WatchOptions {
   takeover?: boolean;
 }
 
-export type PublicAct = Extract<HydratedAct, { kind: 'say' | 'done' }>;
-export type RoomChangeAct = Extract<HydratedAct, { kind: 'join' | 'done' | 'listen' | 'ignore' | 'unlisten' }>;
-
 export function formatHardCap(hardCap: HardCap): string {
   return hardCap === null ? '-1' : String(hardCap);
 }
