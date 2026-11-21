@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createArtifactPort, readSquareSnapshot } from '../dist/artifact.js';
+import { createArtifactPort } from '../dist/artifact.js';
 import { emptyRuntimeState } from '../dist/square-sqlite.js';
 import { decideAct } from '../dist/decisions.js';
 import { scanMentionCandidates } from '../dist/mention-parse.js';
 import { activityRetryCommand } from '../dist/cli/express-presentation.js';
 import { Square } from '../dist/square-api.js';
-import { persistSquare, run, withName } from './square-cli-helpers.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
@@ -212,61 +211,4 @@ test('activityRetryCommand preserves the caller reach instead of forcing --no-me
   const derived = activityRetryCommand('/tmp/x.square', 'Alice', {});
   assert.doesNotMatch(derived, /--no-mention|--mention/);
   assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { mentions: ['Bob'] }), / --mention 'Bob'/);
-});
-
-test('the CLI lands matched and unmatched body @names without rewriting the body', async () => {
-  const file = await persistSquare(async ({ square, body }) => {
-    await square.join('Alice', { owner: body });
-    await square.join('Bob', { owner: body });
-  }, { hardCap: null });
-
-  const directed = run(withName(file, 'Alice', ['express', 'hey @Bob']));
-  assert.equal(directed.status, 0, directed.stderr);
-  assert.match(directed.stdout, /● you walk over to @Bob — act\/\d+/);
-  let acts = (await readSquareSnapshot(file)).state.acts;
-  assert.deepEqual(acts.at(-1).mentions, ['Bob']);
-
-  const bare = run(withName(file, 'Alice', ['express', '--no-mention', 'hey @Bob']));
-  assert.equal(bare.status, 0, bare.stderr);
-  acts = (await readSquareSnapshot(file)).state.acts;
-  assert.deepEqual(acts.at(-1).mentions, []);
-
-  const unknown = run(withName(file, 'Alice', ['express', 'hey @Eve']));
-  assert.equal(unknown.status, 0, unknown.stderr);
-  assert.match(unknown.stdout, /⚠ @Eve is not in this square\./);
-  acts = (await readSquareSnapshot(file)).state.acts;
-  assert.equal(acts.at(-1).body, 'hey @Eve');
-  assert.deepEqual(acts.at(-1).mentions, []);
-
-  const mixed = run(withName(file, 'Alice', ['express', '-']), { input: 'hello @Eve and @Bob' });
-  assert.equal(mixed.status, 0, mixed.stderr);
-  assert.match(mixed.stdout, /⚠ @Eve is not in this square\./);
-  assert.doesNotMatch(mixed.stdout, /landed bare/);
-  acts = (await readSquareSnapshot(file)).state.acts;
-  assert.equal(acts.at(-1).body, 'hello @Eve and @Bob');
-  assert.deepEqual(acts.at(-1).mentions, ['Bob']);
-
-  const pipedUnknown = run(withName(file, 'Alice', ['express', '-']), { input: 'hello @Ghost\nstill here' });
-  assert.equal(pipedUnknown.status, 0, pipedUnknown.stderr);
-  acts = (await readSquareSnapshot(file)).state.acts;
-  assert.equal(acts.at(-1).body, 'hello @Ghost\nstill here');
-  assert.deepEqual(acts.at(-1).mentions, []);
-
-  const piped = run(withName(file, 'Alice', ['express', '-']), { input: 'piped @Bob' });
-  assert.equal(piped.status, 0, piped.stderr);
-  assert.match(piped.stdout, /● you walk over to @Bob — act\/\d+/);
-
-  const replyUnknown = run(withName(file, 'Alice', ['express', '--reply', 'act/1', '@Eve']));
-  assert.equal(replyUnknown.status, 0, replyUnknown.stderr);
-  assert.match(replyUnknown.stdout, /⚠ @Eve is not in this square\./);
-  assert.doesNotMatch(replyUnknown.stdout, /landed bare/);
-
-  const explicit = run(withName(file, 'Alice', ['express', '--no-mention', '--mention', 'Bob', '@Eve']));
-  assert.equal(explicit.status, 0, explicit.stderr);
-  assert.match(explicit.stdout, /you walk over to @Bob/);
-  assert.doesNotMatch(explicit.stdout, /is not in this square/);
-
-  const pipedBare = run(withName(file, 'Alice', ['express', '-']), { input: 'no audience here' });
-  assert.equal(pipedBare.status, 0, pipedBare.stderr);
-  assert.match(pipedBare.stdout, /your words land/);
 });

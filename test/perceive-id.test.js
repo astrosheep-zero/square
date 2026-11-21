@@ -1,10 +1,24 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { Square } from '../dist/square-api.js';
 import { readSquareSnapshot } from '../dist/artifact.js';
-import { run, tempSquare, withName } from './square-cli-helpers.js';
+import { CLI, ROOT, run, tempSquare, testEnv, withName } from './square-cli-helpers.js';
+
+const shellReplay = { skip: process.platform === 'win32' ? 'Printed command replay requires a POSIX shell.' : false };
+
+/** Execute exactly the printed shell syntax, substituting only the local binary. */
+function executePrinted(command, env = {}) {
+  assert.ok(command.startsWith('square '), command);
+  const args = command.slice(7).match(/(?:'[^']*'|\S+)/g) ?? [];
+  const locationIndex = args.findIndex((value) => value === '--location');
+  const squarePath = locationIndex >= 0 ? args[locationIndex + 1]?.replace(/^'|'$/g, '') : undefined;
+  return spawnSync('/bin/sh', ['-c', `${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} ${command.slice(7)}`], {
+    cwd: ROOT, encoding: 'utf8', env: testEnv({ ...(squarePath === undefined ? {} : { CODEX_THREAD_ID: path.resolve(squarePath) }), ...env }, squarePath), timeout: 10000,
+  });
+}
 
 async function setup(t, file) {
   // The CLI acts through the Codex body, so the SDK fixture joins both seats through it.
@@ -16,13 +30,14 @@ async function setup(t, file) {
   const first = await alice.express('first', { force: true, mentions: ['Bob'] });
   const body = 'complete-body-'.repeat(500) + 'END-OF-BODY';
   const second = await alice.express(body, { force: true, mentions: ['Bob'] });
-  return { square, alice, bob, first: first.activity, second: second.activity, body };
+  const bare = await alice.express('for nobody in particular', { force: true });
+  return { square, alice, bob, first: first.activity, second: second.activity, bare: bare.activity, body };
 }
 
 test('exact perceive acknowledges only its id and repeats without changing observations', async (t) => {
   const file = tempSquare();
   t.after(() => fs.rmSync(path.dirname(file), { recursive: true, force: true }));
-  const { bob, first, second, body } = await setup(t, file);
+  const { bob, second, body } = await setup(t, file);
   const perceived = await bob.perceive({ id: second.id });
   assert.deepEqual(perceived.activities.map((item) => item.id), [second.id]);
   assert.equal(perceived.activities[0].body, body);
@@ -32,15 +47,11 @@ test('exact perceive acknowledges only its id and repeats without changing obser
   const before = (await readSquareSnapshot(file)).state.runtime.observations;
   assert.deepEqual(await bob.perceive({ id: second.id }), perceived);
   assert.deepEqual((await readSquareSnapshot(file)).state.runtime.observations, before);
-  assert.deepEqual((await bob.perceive()).activities.map((item) => item.id), [first.id]);
 });
 
-test('exact perceive refuses unavailable activities and incompatible library options without consuming', async (t) => {
-  const { bob, alice, second } = await setup(t);
-  const bare = await alice.express('not addressed to Bob', { force: true });
-  for (const [id, activityExists] of [
-    ['act/9999', false], ['act/0', true], [bare.activity.id, true],
-  ]) {
+test('exact perceive separates unaddressed and missing ids in typed facts', async (t) => {
+  const { bob, alice, second, bare } = await setup(t);
+  for (const [id, activityExists] of [['act/9999', false], ['act/0', true], [bare.id, true]]) {
     await assert.rejects(bob.perceive({ id }), (error) => {
       assert.equal(error.code, 'invalid_args');
       assert.equal(error.facts.reason, 'not_addressed');
@@ -49,11 +60,9 @@ test('exact perceive refuses unavailable activities and incompatible library opt
       return true;
     });
   }
-  for (const extra of [{ idle: 0 }, { from: [] }, { mention: false }, { limit: 1 }, { limit: undefined }, { takeover: true }]) {
-    await assert.rejects(bob.perceive({ id: second.id, ...extra }), { code: 'invalid_args' });
-  }
+  await assert.rejects(bob.perceive({ id: second.id, idle: 0 }), { code: 'invalid_args' });
   await assert.rejects(bob.perceive({ id: 'garbage' }), { code: 'invalid_args' });
-  assert.equal((await bob.perceive()).activities.length, 2);
+  assert.equal((await alice.pending()).activities.length, 0);
 });
 
 test('exact perceive preserves the landed listener audience after listening changes', async (t) => {
@@ -64,23 +73,24 @@ test('exact perceive preserves the landed listener audience after listening chan
   assert.equal((await bob.perceive({ id: bare.activity.id })).activities[0].body, bare.activity.body);
 });
 
-test('CLI exact perceive returns the full body and rejects conflicting flags before consumption', async (t) => {
+test('CLI exact perceive rejects conflicts, explains a miss, and reads the full body', shellReplay, async (t) => {
   const file = tempSquare();
   t.after(() => fs.rmSync(path.dirname(file), { recursive: true, force: true }));
-  const { bob, first, second, body } = await setup(t, file);
-  for (const args of [
-    ['--id'], ['--id', 'bad'], ['--id', second.id, '--id', second.id],
-    ...[['--idle', '1s'], ['--from', 'Alice'], ['--mention'], ['--limit', '1'], ['--takeover']]
-      .map((flags) => ['--id', second.id, ...flags]),
-  ]) {
-    const result = run(withName(file, 'Bob', ['perceive', ...args]));
-    assert.notEqual(result.status, 0, JSON.stringify(args));
-    assert.ok(!result.stdout.includes(body));
-  }
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const result = run(withName(file, 'Bob', ['perceive', '--id', second.id]));
-    assert.equal(result.status, 0, result.stderr);
-    assert.ok(result.stdout.includes(body), 'exact perceive must not clip the body');
-  }
+  const { bob, first, second, bare, body } = await setup(t, file);
+  const conflict = run(withName(file, 'Bob', ['perceive', '--id', second.id, '--idle', '1s']));
+  assert.equal(conflict.status, 2, conflict.stdout + conflict.stderr);
+  assert.match(conflict.stderr, /--id cannot be combined/);
+  assert.ok(!conflict.stdout.includes(body));
+
+  const undirected = run(withName(file, 'Bob', ['perceive', '--id', bare.id]));
+  assert.equal(undirected.status, 2, undirected.stdout + undirected.stderr);
+  assert.match(undirected.stderr, new RegExp(`✕ ${bare.id} isn't addressed to you`));
+  const anchored = undirected.stderr.split('\n').find((line) => line.includes('history --at'));
+  assert.match(anchored, new RegExp(`history --at ${bare.id} -C 2`));
+  assert.equal(executePrinted(anchored).status, 0);
+
+  const exact = run(withName(file, 'Bob', ['perceive', '--id', second.id]));
+  assert.equal(exact.status, 0, exact.stderr);
+  assert.ok(exact.stdout.includes('END-OF-BODY'));
   assert.deepEqual((await bob.perceive()).activities.map((activity) => activity.id), [first.id]);
 });

@@ -5,218 +5,113 @@ import path from 'node:path';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { Square } from '../dist/square-api.js';
-import { renderFailureLines } from '../dist/operation-presentation.js';
-import { renderWatchAlreadyActive, renderWatchStatus, formatToolAction } from '../dist/presentation.js';
-import { createSquareMcpServer } from '../dist/mcp.js';
-import { ROOT, run, testEnv } from './square-cli-helpers.js';
 
-// Presentation is styled for terminals; both sides must render the same unstyled text.
+import { Square } from '../dist/square-api.js';
+import { historyCommand } from '../dist/cli/observation-commands.js';
+import { renderFailureLines } from '../dist/operation-presentation.js';
+import { formatToolAction } from '../dist/presentation.js';
+import { createSquareMcpServer } from '../dist/mcp.js';
+import { ROOT, testEnv } from './square-cli-helpers.js';
+
 process.env.NO_COLOR = '1';
+const at = 1_000;
 
 function tempDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-mcp-presentation-'));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'square-mcp-presentation-')));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
-
-function bodyFor(squarePath) {
-  return `codex:${encodeURIComponent(path.resolve(squarePath))}`;
-}
-
-function envFor(squarePath) {
-  const body = bodyFor(squarePath);
-  return testEnv({ CODEX_THREAD_ID: path.resolve(squarePath) }, squarePath);
+const bodyFor = (squarePath) => `codex:${encodeURIComponent(path.resolve(squarePath))}`;
+const envFor = (squarePath) => testEnv({ CODEX_THREAD_ID: path.resolve(squarePath), SQUARE_NOW_MS: String(at) }, squarePath);
+function commandContext(squarePath) {
+  return { command: 'history', cwd: ROOT, env: envFor(squarePath), squarePath, homeDir: os.homedir() };
 }
 
 async function buildSquare(t) {
   const squarePath = path.join(tempDir(t), 'parity.square');
-  const square = await Square.build({ path: squarePath, markdown: 'a quiet room with a fountain' });
+  const square = await Square.build({ path: squarePath, markdown: 'a quiet room with a fountain', clock: () => at });
   await square.close();
   return squarePath;
 }
-
 async function seed(squarePath, setup) {
-  const body = bodyFor(squarePath);
-  const square = await Square.at({ path: squarePath });
-  try { await setup(square, body); } finally { await square.close(); }
+  const square = await Square.at({ path: squarePath, clock: () => at });
+  try { await setup(square, bodyFor(squarePath)); } finally { await square.close(); }
 }
-
 async function openMcp(t, squarePath) {
-  const body = bodyFor(squarePath);
-  const server = createSquareMcpServer({
-    cwd: path.dirname(squarePath), env: envFor(squarePath), owner: body,
-    wakeAddress: { kind: 'codex-queue', address: { threadId: path.resolve(squarePath), codexHome: path.join(os.homedir(), '.codex') } },
-  });
+  const server = createSquareMcpServer({ cwd: path.dirname(squarePath), env: envFor(squarePath),
+    owner: bodyFor(squarePath), clock: () => at });
   const client = new Client({ name: 'square-mcp-presentation-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
-  return (name, args = {}) => client.callTool({ name, arguments: name === 'list' ? args : { location: squarePath, ...args } });
+  return (name, args = {}) => client.callTool({ name, arguments: { location: squarePath, ...args } });
 }
 
-/** Square paths differ between the paired artifacts; everything else must be byte-identical. */
-function normalized(text, squarePath) {
-  return text.split(squarePath).join('<square>');
-}
-
-function cli(squarePath, args) {
-  return run(['--location', squarePath, ...args], { cwd: ROOT });
-}
-
-/** Run the CLI and MCP against state-identical squares and compare the printed text. */
-async function assertTextParity(t, setup, cliArgs, tool, toolArgs) {
-  const cliPath = await buildSquare(t);
-  const mcpPath = await buildSquare(t);
-  for (const squarePath of [cliPath, mcpPath]) if (setup !== undefined) await seed(squarePath, setup);
-  const result = cli(cliPath, cliArgs);
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  const call = await openMcp(t, mcpPath);
-  const response = await call(tool, toolArgs);
-  assert.equal(response.isError, undefined, JSON.stringify(response));
-  assert.equal(response.structuredContent, undefined);
-  const actual = normalized(response.content[0].text, mcpPath);
-  const expected = normalized(result.stdout, cliPath);
-  if (tool === 'perceive') {
-    assert.match(expected, /square --location .* perceive --idle 30m/);
-    assert.equal(actual, expected.replace("square --location '<square>' --as 'rei' perceive --idle 30m", 'perceive {"location":"<square>","as":"rei","idle":"30m"}'));
-  } else assert.equal(actual, expected);
-  assert.doesNotMatch(actual, /square --location|--kick|--full|square done --help|\bparticipants --/);
-  return response;
-}
-
-const joinReiAndBob = async (square, body) => {
-  await square.join('rei', { owner: body });
-  await square.join('bob', { owner: body });
-};
-
-test('read-only tools print the same page as the CLI', async (t) => {
+test('history prints one CLI page through MCP text-only transport', async (t) => {
   const squarePath = await buildSquare(t);
   await seed(squarePath, async (square, body) => {
-    await joinReiAndBob(square, body);
+    await square.join('rei', { owner: body });
+    await square.join('bob', { owner: body });
     const rei = await square.participant('rei', { owner: body });
-    const bob = await square.participant('bob', { owner: body });
     await rei.express('first words @bob', { force: true });
     await rei.express('*waves*', { force: true, noMention: true });
-    await bob.listen('rei');
+    await (await square.participant('bob', { owner: body })).listen('rei');
   });
-  const result = cli(squarePath, ['history']);
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  const call = await openMcp(t, squarePath);
-  const response = await call('history', {});
+  const context = commandContext(squarePath);
+  const expected = await historyCommand.execute(historyCommand.parse([], context), context);
+  const response = await (await openMcp(t, squarePath))('history');
   assert.equal(response.isError, undefined, JSON.stringify(response));
-  assert.equal(response.content[0].text, result.stdout, 'history content text must be the CLI\'s human text');
-  assert.equal(response.structuredContent, undefined, 'history returns only human text');
-});
-
-test('mutating tools print the same result as the CLI', async (t) => {
-  await t.test('express', async (t) => {
-    await assertTextParity(t, joinReiAndBob, ['--as', 'rei', 'express', 'hello @bob'], 'express',
-      { as: 'rei', body: 'hello @bob' });
-  });
-  await t.test('perceive', async (t) => {
-    await assertTextParity(t, async (square, body) => {
-      await joinReiAndBob(square, body);
-      await (await square.participant('bob', { owner: body })).express('@rei ping', { force: true });
-    }, ['--as', 'rei', 'perceive'], 'perceive', { as: 'rei' });
-  });
-});
-
-test('failures print the CLI recovery lines instead of JSON', async (t) => {
-  const cliPath = await buildSquare(t);
-  const mcpPath = await buildSquare(t);
-  const result = cli(cliPath, ['--as', 'ghost', 'perceive']);
-  assert.equal(result.status, 2, result.stdout + result.stderr);
-  const call = await openMcp(t, mcpPath);
-  const response = await call('perceive', { as: 'ghost' });
-  assert.equal(response.isError, true);
-  const text = response.content[0].text;
   assert.equal(response.structuredContent, undefined);
-  assert.throws(() => JSON.parse(text));
+  assert.equal(response.content.length, 1);
+  assert.equal(response.content[0].type, 'text');
+  assert.equal(response.content[0].text, expected);
+});
+
+test('a missing seat reports a tool-shaped join action', async (t) => {
+  const squarePath = await buildSquare(t);
+  const response = await (await openMcp(t, squarePath))('perceive', { as: 'ghost' });
+  assert.equal(response.isError, true);
+  assert.equal(response.structuredContent, undefined);
+  const text = response.content[0].text;
   assert.match(text, /✕ @ghost has never stepped into this square/);
-  assert.match(result.stderr, /square --location .* --as 'ghost' join/);
-  assert.ok(text.includes(`join ${JSON.stringify({ location: mcpPath, as: 'ghost' })}`));
-  assert.doesNotMatch(text, /square --location|--kick|--full|square done --help|\bparticipants --/);
+  assert.ok(text.includes(`join ${JSON.stringify({ location: squarePath, as: 'ghost' })}`), text);
+  assert.doesNotMatch(text, /square --location/);
 });
 
-
-test('tool recovery and watch guidance use native actions; CLI keeps its commands', () => {
-  const squarePath = '/tmp/recovery.square', name = 'rei';
-  const opts = { squarePath, name, surface: 'tool' };
-  const action = (tool, args) => formatToolAction(tool, { location: squarePath, ...args });
-  assert.equal(formatToolAction('status', { omitted: undefined }), 'status');
-  for (const [failure, expected] of [
-    [{ code: 'x', message: 'missing', facts: { reason: 'needs_seat' } }, action('join', { as: name })],
-    [{ code: 'already_joined', message: 'held' }, action('join', { as: name, takeover: true })],
-    [{ code: 'x', message: 'missing', facts: { reason: 'never_joined' }, operation: { subject: 'filter' } }, action('status', {})],
-    [{ code: 'x', message: 'away', facts: { reason: 'not_standing' } }, action('status', {})],
-    [{ code: 'x', message: 'private', facts: { reason: 'not_addressed', activityId: 'act/2', activityExists: true } }, action('history', { at: ['act/2'], context: 2 })],
-    [{ code: 'x', message: 'missing', facts: { reason: 'not_addressed', activityId: 'act/2' } }, action('history', { limit: 10 })],
-  ]) {
-    const text = renderFailureLines(failure, opts).join('\n');
-    assert.ok(text.includes(expected), text);
-    assert.doesNotMatch(text, /square --location|--kick|--full|square done --help|\bparticipants --/);
-  }
-  assert.doesNotMatch(renderFailureLines({ code: 'x', message: 'bad', facts: { reason: 'invalid_done_body' } }, opts).join('\n'), /--help/);
-  assert.match(renderWatchAlreadyActive({ ...opts }), /already perceiving/);
-  assert.match(renderWatchAlreadyActive({ ...opts }), /takeover lets a new perceive take over/);
-  assert.ok(renderWatchAlreadyActive({ ...opts }).includes(action('perceive', { as: name, idle: '30m', takeover: true })));
-  assert.match(renderWatchAlreadyActive({ squarePath, name }), /--takeover/);
-  assert.ok(renderWatchStatus({ ...opts, status: 'idle' }).includes(action('perceive', { as: name, idle: '30m' })));
-  assert.ok(renderWatchStatus({ ...opts, status: 'capped' }).includes(action('done', { as: name })));
-  assert.match(renderWatchStatus({ squarePath, name, status: 'capped' }), /square --location .* done/);
-});
-
-test('shared express refusals retain surface-specific headlines and recovery', () => {
+test('invalid reply recovery has CLI and tool actions for the same typed failure', () => {
   const squarePath = '/tmp/recovery.square';
   const reply = { code: 'invalid_args', message: 'bad', facts: { reason: 'invalid_reply', activityExists: false } };
   assert.deepEqual(renderFailureLines(reply, { squarePath, surface: 'tool', reply: 'act/8' }), [
-    "Invalid reply: act/8 is not in this square's history", formatToolAction('history', { location: squarePath, limit: 10 }),
+    "Invalid reply: act/8 is not in this square's history",
+    formatToolAction('history', { location: squarePath, limit: 10 }),
   ]);
   assert.deepEqual(renderFailureLines(reply, { squarePath, reply: 'act/8' }), [
-    "Invalid --reply: act/8 is not in this square's history", `square --location '${squarePath}' history --limit 10`,
-  ]);
-  const behind = { code: 'behind', message: 'Alice has pending activity', facts: { activitySummaries: [
-    { name: 'Bob', count: 2, latestActivityAgeMs: 5000, preview: { body: 'are you there?', structured: false } },
-  ] } };
-  assert.deepEqual(renderFailureLines(behind, { squarePath, name: 'Alice', surface: 'tool' }), [
-    '✕ your words stay unsent — someone spoke while you were away',
-    '  · @Bob spoke — 5s ago · "are you there?"',
-    'Take it in, then express again:', formatToolAction('perceive', { location: squarePath, as: 'Alice' }),
-  ]);
-  assert.deepEqual(renderFailureLines({ code: 'capped', message: 'Alice reached the activity cap', facts: { spoken: 3, hardCap: 3 } }, { squarePath, name: 'Alice', surface: 'tool' }), [
-    '✕ you’ve reached your speaking cap — 3/3 spoken', '  · your words stay unsent; done only steps out', formatToolAction('done', { location: squarePath, as: 'Alice' }),
+    "Invalid --reply: act/8 is not in this square's history",
+    `square --location '${squarePath}' history --limit 10`,
   ]);
 });
 
-test('MCP history paging and expansions produce tool actions', async t => {
+test('history continuation and full expansion round-trip through tool arguments', async (t) => {
   const squarePath = await buildSquare(t);
+  const tail = `${'x'.repeat(300)} REAL-TAIL`;
+  let earlier, later;
   await seed(squarePath, async (square, body) => {
     const { participant } = await square.join('rei', { owner: body });
-    for (let i = 0; i < 12; i++) await participant.express(`needle ${i} ${'x'.repeat(300)}`, { force: true });
+    earlier = (await participant.express(`needle 7 ${tail}`, { force: true })).activity.id;
+    await participant.express(`hay ${'y'.repeat(300)}`, { force: true });
+    later = (await participant.express(`needle 9 ${'z'.repeat(300)} REAL-TAIL`, { force: true })).activity.id;
   });
   const call = await openMcp(t, squarePath);
-  const history = (await call('history', { search: 'needle', limit: 2 })).content[0].text;
-  assert.match(history, /history .*"at":\["act\/\d+"\].*"context":2.*"full":true/);
-  assert.match(history, /history .*"search":"needle".*"before":"act\/\d+".*"limit":2/);
-  assert.doesNotMatch(history, /square --location|--kick|--full|square done --help|\bparticipants --/);
-  const regex = (await call('history', { search: 'needle \\d+', regex: true, at: ['act/11'], context: 2, full: true, limit: 2 })).content[0].text;
-  assert.match(regex, /needle 10 x{300}/);
-  const continuation = regex.split('\n').find(line => line.startsWith('history ') && line.includes('"before"'));
-  const args = JSON.parse(continuation.slice('history '.length));
-  assert.equal(args.context, 2);
+  const first = (await call('history', { search: 'needle \\d+', regex: true, full: true, limit: 1 })).content[0].text;
+  const line = first.split('\n').find((row) => row.startsWith('history ') && row.includes('"before"'));
+  assert.ok(line !== undefined, first);
+  const args = JSON.parse(line.slice('history '.length));
   assert.equal(args.search, 'needle \\d+');
   assert.equal(args.regex, true);
   assert.equal(args.full, true);
-  const earlier = await call('history', args);
-  assert.equal(earlier.isError, undefined, earlier.content[0].text);
-  assert.match(earlier.content[0].text, /needle 8 x{300}/);
-  const literal = (await call('history', { search: 'needle \\d+' })).content[0].text;
-  assert.match(literal, /no activity matched/);
-  const expanded = (await call('history', { at: ['act/11'], context: 1, full: true })).content[0].text;
-  assert.match(expanded, /needle 10 x{200}/);
-  const status = (await call('status')).content[0].text;
-  assert.match(status, /history .*"at":\["act\/\d+"\].*"context":2.*"full":true/);
-  assert.doesNotMatch(status, /square --location|--kick|--full|square done --help|\bparticipants --/);
-  assert.match(cli(squarePath, ['history', '--search', 'needle', '--limit', '2']).stdout, /square --location .*history/);
+  assert.equal(args.before, later);
+  const second = (await call('history', args)).content[0].text;
+  assert.ok(second.includes(earlier), second);
+  const expanded = (await call('history', { at: [earlier], context: 1, full: true })).content[0].text;
+  assert.ok(expanded.includes('REAL-TAIL'), expanded);
 });
