@@ -134,24 +134,6 @@ export function deliveryLedgerLocation(env: NodeJS.ProcessEnv = process.env, hom
   return env.SQUARE_DELIVERY ?? path.join(homeDir, '.square', 'delivery.v5.sqlite');
 }
 
-function encodeDetails(details: Readonly<Record<string, unknown>>): string {
-  const ancestors = new Set<object>();
-  const encode = (value: unknown): unknown => {
-    if (value === null || typeof value === 'string' || typeof value === 'boolean'
-      || typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value !== 'object' || !value || ancestors.has(value)
-      || !Array.isArray(value) && ![Object.prototype, null].includes(Object.getPrototypeOf(value)))
-      throw new TypeError('Expected JSON card details');
-    ancestors.add(value);
-    const result = Array.isArray(value) ? Array.from(value, encode)
-      : Object.fromEntries(Object.keys(value).sort().map(key => [key, encode((value as Record<string, unknown>)[key])]));
-    ancestors.delete(value);
-    return result;
-  };
-  if (!details || typeof details !== 'object' || Array.isArray(details)) throw new TypeError('Expected a card details object');
-  return JSON.stringify(encode(details));
-}
-
 /** One user-owned ledger; producers supply finished text and callers choose routes. */
 export class DeliveryLedger {
   private readonly settlements = new Set<Promise<unknown>>();
@@ -216,7 +198,7 @@ export class DeliveryLedger {
     validateOwner(input.owner);
     const key = copyDeliveryKey(input.key);
     if (typeof input.text !== 'string') throw new TypeError('Expected card text');
-    return this.store.post({ ...input, key, details: input.details === undefined ? null : encodeDetails(input.details) }, signal);
+    return this.store.post({ ...input, key }, signal);
   }
   suppress(input: { readonly owner: Owner; readonly key: DeliveryKey; readonly scope: 'exact' | 'prefix'; readonly expiresAt?: number }, signal?: AbortSignal): Promise<SuppressionResult> {
     validateOwner(input.owner);

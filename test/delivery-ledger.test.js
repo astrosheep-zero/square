@@ -340,6 +340,7 @@ test('suppression blocks before and after claim, then permanent exact tombstones
   await batch.settle('released');
   assert.equal((await f.ledger.receipts(owner)).length, 0);
   assert.equal(await f.ledger.pending(owner, { generation: f.session.generation }).then(cards => cards.length), 0);
+  const matching = await f.ledger.suppress({ owner, key: ["p"], scope: 'prefix', expiresAt: Date.now() + day });
   await f.post(["p","2"]);
   const first = await f.ledger.suppress({ owner, key: ["p","2"], scope: 'exact' });
   const repeated = await f.ledger.suppress({ owner, key: ["p","2"], scope: 'exact' });
@@ -347,7 +348,17 @@ test('suppression blocks before and after claim, then permanent exact tombstones
   assert.equal(f.read("SELECT COUNT(*) AS n FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL", owner, '["p","2"]')[0].n, 1);
   assert.equal(first.status, 'suppressed');
   assert.equal(f.read('SELECT * FROM cards WHERE key=?', '["p","2"]').length, 0);
+  await f.ledger.releaseSuppression({ owner, id: matching.id });
+  assert.equal((await f.post(["p","3"])).status, 'posted');
   assert.equal((await f.post(["p","2"])).status, 'suppressed');
+  assert.deepEqual((await f.ledger.pending(owner, { generation: f.session.generation })).map(card => card.key), [["p","3"]]);
+  const seq = f.read('SELECT next_seq FROM meta')[0].next_seq;
+  const empty = new DatabaseSync(f.location);
+  try { empty.prepare('INSERT INTO suppressions VALUES(?,?,?,?,?,?)').run('', owner, '["empty-id"]', 'exact', Date.now(), null); }
+  finally { empty.close(); }
+  assert.equal((await f.post(["empty-id"])).status, 'suppressed');
+  assert.equal(f.read('SELECT next_seq FROM meta')[0].next_seq, seq);
+  assert.equal(f.read('SELECT * FROM cards WHERE key=?', '["empty-id"]').length, 0);
 });
 
 test('batch exact suppression is idempotent, owner-scoped, and preserves held presentation evidence', async t => {
@@ -405,15 +416,6 @@ test('expiry restores eligibility and released suppression cannot be renewed', a
   const released = await f.ledger.suppress({ owner, key: ["x"], scope: 'exact', expiresAt: 200 });
   assert.equal(await f.ledger.releaseSuppression({ owner, id: released.id }), true);
   assert.equal(await f.ledger.renewSuppression({ owner, id: released.id, expiresAt: 300 }), false);
-});
-
-test('a permanent exact suppression survives release of a matching prefix hold', async t => {
-  const f = await fixture(t);
-  const prefix = await f.ledger.suppress({ owner, key: ["p"], scope: 'prefix', expiresAt: Date.now() + day });
-  await f.post(["p","1"]); await f.post(["p","2"]);
-  await f.ledger.suppress({ owner, key: ["p","1"], scope: 'exact' });
-  await f.ledger.releaseSuppression({ owner, id: prefix.id });
-  assert.deepEqual((await f.ledger.pending(owner, { generation: f.session.generation })).map(card => card.key), [["p","2"]]);
 });
 
 test('producer-neutral post helper dispatches a non-Square card through a supplied transport', async t => {
@@ -1140,6 +1142,10 @@ test('unsupported existing formats and foreign databases are refused without cha
   const original = await fs.readFile(foreign);
   await assert.rejects(DeliveryLedger.open({ location: foreign }), /format/);
   assert.deepEqual(await fs.readFile(foreign), original);
+  const plain = path.join(path.dirname(f.location), 'plain.sqlite');
+  await fs.writeFile(plain, 'not a database');
+  await assert.rejects(DeliveryLedger.open({ location: plain }));
+  assert.equal(await fs.readFile(plain, 'utf8'), 'not a database');
   await assert.rejects(DeliveryLedger.open({ location: 'relative.sqlite' }), /absolute/);
 });
 

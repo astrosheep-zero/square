@@ -93,8 +93,11 @@ recall an external send already past its final check. Producers can call
 `ledger.suppress({owner, key, scope: 'exact' | 'prefix', expiresAt?})` to suppress one key or a key
 prefix. Omit `expiresAt` for permanent suppression within ledger retention, or supply an expiry for
 temporary suppression. This does not consume Square activity; producer-owned exact ACK is described
-in [square-api.md](square-api.md). The ledger does not match producer metadata. Ledger Format5
-and Square Format13 are the current runtime formats. Ordinary opens refuse older files read-only.
+in [square-api.md](square-api.md). The ledger does not match producer metadata. The SQLite constructor
+and row encoding are private to the ledger's storage owner. Ledger Format5 and Square Format13 are the
+current runtime formats; ordinary opens refuse older files read-only. The exact offline conversion
+rebuilds only the three key-bearing groups (`cards`, `receipts`, `suppressions`) and preserves all
+other evidence.
 The explicit offline Ledger4→5 and Square12→13 edges are described in [migration.md](migration.md).
 The new default does not open or change older ledger files. `SQUARE_DELIVERY` still overrides the
 default; an explicitly selected file must have a supported format.

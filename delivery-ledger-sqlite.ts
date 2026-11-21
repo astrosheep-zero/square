@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseSync as NodeDatabaseSync, DatabaseSyncOptions, SQLInputValue } from 'node:sqlite';
 
 const bunSqlite = 'bun:sqlite';
-export const { DatabaseSync } = await (process.versions.bun
+const { DatabaseSync } = await (process.versions.bun
   ? import(bunSqlite).then(({ Database }) => ({
       DatabaseSync: class {
         private readonly db: InstanceType<typeof Database>;
@@ -38,28 +38,35 @@ const FORMAT = 5;
 const APPLICATION_ID = 0x444c4752;
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const LIVE_CARD_CAP = 200;
-const SCHEMA = `CREATE TABLE meta (format INTEGER NOT NULL, next_seq INTEGER NOT NULL, next_receipt_seq INTEGER NOT NULL);
-CREATE TABLE sessions (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, state TEXT NOT NULL, routes_json TEXT NOT NULL, at REAL NOT NULL);
-CREATE TABLE cards (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, text TEXT NOT NULL, details TEXT, posted_at REAL NOT NULL, UNIQUE(owner,key));
-CREATE INDEX cards_owner ON cards(owner,seq);
-CREATE TABLE suppressions (id TEXT PRIMARY KEY, owner TEXT, key TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('exact','prefix')), created_at REAL NOT NULL, expires_at REAL, CHECK ((owner IS NOT NULL AND id<>'ledger-mute') OR (owner IS NULL AND id='ledger-mute' AND scope='prefix' AND key='[]' AND expires_at IS NOT NULL AND expires_at BETWEEN -1.7976931348623157e308 AND 1.7976931348623157e308)));
+const CARDS_SQL = `CREATE TABLE cards (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, text TEXT NOT NULL, details TEXT, posted_at REAL NOT NULL, UNIQUE(owner,key));
+CREATE INDEX cards_owner ON cards(owner,seq)`;
+const RECEIPTS_SQL = `CREATE TABLE receipts (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL, UNIQUE(owner,key));
+CREATE INDEX receipts_owner_seq ON receipts(owner,seq);
+CREATE INDEX receipts_time ON receipts(at)`;
+function suppressionsSql(version: 4 | 5): string {
+  return `CREATE TABLE suppressions (id TEXT PRIMARY KEY, owner TEXT${version === 4 ? ' NOT NULL' : ''}, key TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('exact','prefix')), created_at REAL NOT NULL, expires_at REAL${version === 5 ? `, CHECK ((owner IS NOT NULL AND id<>'ledger-mute') OR (owner IS NULL AND id='ledger-mute' AND scope='prefix' AND key='[]' AND expires_at IS NOT NULL AND expires_at BETWEEN -1.7976931348623157e308 AND 1.7976931348623157e308))` : ''});
 CREATE INDEX suppressions_owner ON suppressions(owner);
 CREATE INDEX suppressions_exact_key ON suppressions(owner,key) WHERE scope='exact';
 CREATE INDEX suppressions_prefix_owner ON suppressions(owner) WHERE scope='prefix';
 CREATE INDEX suppressions_expiry ON suppressions(expires_at) WHERE expires_at IS NOT NULL;
 CREATE UNIQUE INDEX suppressions_permanent_exact ON suppressions(owner,key) WHERE scope='exact' AND expires_at IS NULL;
-CREATE INDEX suppressions_permanent_created ON suppressions(created_at) WHERE expires_at IS NULL;
+CREATE INDEX suppressions_permanent_created ON suppressions(created_at) WHERE expires_at IS NULL`;
+}
+function ledgerSchema(version: 4 | 5): string {
+  return `CREATE TABLE meta (format INTEGER NOT NULL, next_seq INTEGER NOT NULL, next_receipt_seq INTEGER NOT NULL);
+CREATE TABLE sessions (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, state TEXT NOT NULL, routes_json TEXT NOT NULL, at REAL NOT NULL);
+${CARDS_SQL};
+${suppressionsSql(version)};
 CREATE TABLE attempts (token TEXT PRIMARY KEY, seq INTEGER NOT NULL, generation TEXT NOT NULL, track TEXT NOT NULL, route_kind TEXT, outcome TEXT NOT NULL, correlation_json TEXT NOT NULL, started_at REAL NOT NULL, expires_at REAL NOT NULL, settled_at REAL);
 CREATE INDEX attempts_seq ON attempts(seq);
-CREATE TABLE receipts (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL, UNIQUE(owner,key));
-CREATE INDEX receipts_owner_seq ON receipts(owner,seq);
-CREATE INDEX receipts_time ON receipts(at);
+${RECEIPTS_SQL};
 CREATE TABLE cancellations (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, through_seq INTEGER NOT NULL);`;
+}
 
 function validate(db: DatabaseSync, location: string): void {
   const header = db.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get();
   if (header?.application_id !== APPLICATION_ID || header.user_version !== FORMAT) throw new Error('Unsupported delivery ledger format');
-  validateSchema(db, SCHEMA, location);
+  validateSchema(db, ledgerSchema(5), location);
   const meta = db.prepare('SELECT * FROM meta').all();
   if (meta.length !== 1 || meta[0].format !== FORMAT
     || ![meta[0].next_seq, meta[0].next_receipt_seq].every(value => Number.isSafeInteger(value) && Number(value) >= 1))
@@ -80,6 +87,23 @@ function attempt(row: Row): DeliveryAttempt {
     ...(row.settled_at === null ? {} : { settledAt: row.settled_at as number }) };
 }
 function holds(row: DeliveryAttempt): boolean { return !['failed', 'released'].includes(row.outcome); }
+function encodeDetails(details: Readonly<Record<string, unknown>>): string {
+  const ancestors = new Set<object>();
+  const encode = (value: unknown): unknown => {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean'
+      || typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value !== 'object' || !value || ancestors.has(value)
+      || !Array.isArray(value) && ![Object.prototype, null].includes(Object.getPrototypeOf(value)))
+      throw new TypeError('Expected JSON card details');
+    ancestors.add(value);
+    const result = Array.isArray(value) ? Array.from(value, encode)
+      : Object.fromEntries(Object.keys(value).sort().map(key => [key, encode((value as Record<string, unknown>)[key])]));
+    ancestors.delete(value);
+    return result;
+  };
+  if (!details || typeof details !== 'object' || Array.isArray(details)) throw new TypeError('Expected a card details object');
+  return JSON.stringify(encode(details));
+}
 
 /** All ledger file access and SQL are confined here. Transactions never span external effects. */
 export class LedgerStore {
@@ -102,7 +126,7 @@ export class LedgerStore {
         await (await fs.open(temporary, 'wx', 0o600)).close();
         initial = await retrySqliteBusy(() => new DatabaseSync(temporary), signal);
         await inSqliteTransaction(initial, true, () => undefined, () => {
-          initial!.exec(SCHEMA);
+          initial!.exec(ledgerSchema(5));
           initial!.prepare('INSERT INTO meta VALUES(?,1,1)').run(FORMAT);
           initial!.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=${FORMAT}`);
         }, signal);
@@ -275,8 +299,8 @@ export class LedgerStore {
       return true;
     }, signal);
   }
-  post(value: { owner: string; key: DeliveryKey; text: string; details: string | null }, signal?: AbortSignal): Promise<PostResult> {
-    const input = { ...value, key: encodeDeliveryKey(value.key) };
+  post(value: { owner: string; key: DeliveryKey; text: string; details?: Readonly<Record<string, unknown>> }, signal?: AbortSignal): Promise<PostResult> {
+    const input = { ...value, key: encodeDeliveryKey(value.key), details: value.details === undefined ? null : encodeDetails(value.details) };
     return this.transaction(true, now => {
       const s = this.getSession(input.owner);
       if (!s) return { status: 'unknown-session' };
@@ -286,7 +310,7 @@ export class LedgerStore {
         if (this.listAttempts(previous.seq as number).some(a => ['accepted', 'unknown', 'presented'].includes(a.outcome))) return { status: 'duplicate' };
         return { status: previous.text !== input.text || previous.details !== input.details ? 'conflict' : this.isSuppressed(input.owner, input.key, now) ? 'suppressed' : 'duplicate' };
       }
-      if (this.db.prepare("SELECT 1 FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL").get(input.owner, input.key)) return { status: 'suppressed' };
+      if (this.permanentExactId(input.owner, input.key) !== undefined) return { status: 'suppressed' };
       const suppressed = this.isSuppressed(input.owner, input.key, now);
       const seq = Number(this.db.prepare('SELECT next_seq FROM meta').get()!.next_seq);
       if (!Number.isSafeInteger(seq + 1)) throw new RangeError('Delivery sequence exhausted');
@@ -316,17 +340,17 @@ export class LedgerStore {
       for (const key of encoded) this.suppressCard({ owner, key, scope: 'exact' }, now);
     }, signal);
   }
+  private permanentExactId(owner: string, key: string): string | undefined {
+    return (this.db.prepare("SELECT id FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL").get(owner, key) as Row | undefined)?.id as string | undefined;
+  }
   private suppressCard(input: { owner: string; key: string; scope: 'exact' | 'prefix'; expiresAt?: number }, now: number): SuppressionResult {
-    const permanentId = input.scope === 'exact' && input.expiresAt === undefined
-      ? (this.db.prepare("SELECT id FROM suppressions WHERE owner=? AND key=? AND scope='exact' AND expires_at IS NULL").get(input.owner, input.key) as Row | undefined)?.id as string | undefined
-      : undefined;
+    const permanent = input.scope === 'exact' && input.expiresAt === undefined;
+    const permanentId = permanent ? this.permanentExactId(input.owner, input.key) : undefined;
     const id = permanentId ?? randomUUID();
     const matching = this.matchingCards(input.owner, input.key, input.scope);
     const inCustody = matching.some(row => this.awaitingEffect(row.seq as number));
     if (permanentId === undefined) this.db.prepare('INSERT INTO suppressions VALUES(?,?,?,?,?,?)').run(id, input.owner, input.key, input.scope, now, input.expiresAt ?? null);
-    if (input.scope === 'exact' && input.expiresAt === undefined) for (const row of matching) {
-      if (!this.awaitingEffect(row.seq as number)) this.deleteCard(row.seq as number);
-    }
+    if (permanent && !inCustody) for (const row of matching) this.deleteCard(row.seq as number);
     return { id, status: inCustody ? 'in-custody' : 'suppressed' };
   }
   setSuppression(value: { owner: string | null; id: string; key: DeliveryKey; scope: 'exact' | 'prefix'; expiresAt: number }, signal?: AbortSignal): Promise<SuppressionResult> {
@@ -554,12 +578,13 @@ export class LedgerStore {
 }
 
 type LedgerSnapshot = Record<'meta' | 'sessions' | 'cards' | 'suppressions' | 'attempts' | 'receipts' | 'cancellations', Row[]>;
+const KEY_TABLES = ['cards', 'receipts', 'suppressions'] as const;
 function migrationSnapshot(db: DatabaseSync, location: string, signal?: AbortSignal): { version: 4 | 5; rows: LedgerSnapshot } {
   signal?.throwIfAborted();
   const header = db.prepare('SELECT application_id, user_version FROM pragma_application_id, pragma_user_version').get();
   if (header?.application_id !== APPLICATION_ID || ![4, 5].includes(Number(header.user_version))) throw new Error('Unsupported delivery ledger format');
   const version = header.user_version as 4 | 5;
-  validateSchema(db, version === 4 ? FORMAT4_SCHEMA : SCHEMA, location);
+  validateSchema(db, ledgerSchema(version), location);
   const check = db.prepare('PRAGMA integrity_check').all();
   if (check.length !== 1 || check[0].integrity_check !== 'ok') throw new Error('Invalid delivery ledger integrity');
   const tables = ['meta', 'sessions', 'cards', 'suppressions', 'attempts', 'receipts', 'cancellations'] as const;
@@ -625,42 +650,37 @@ export async function migrateLedgerStore(location: string, convertKey: (legacy: 
   };
   signal?.throwIfAborted();
   const probe = await retrySqliteBusy(() => open(true), signal);
-  let source: ReturnType<typeof migrationSnapshot>;
-  let converted: LedgerSnapshot;
-  try {
-    ({ source, converted } = await inSqliteTransaction(probe, false, () => migrationSnapshot(probe, location, signal), snapshot => {
-      const converted = structuredClone(snapshot.rows);
-      if (snapshot.version === 4) {
-        const identities = new Map<string, string>();
-        for (const table of ['cards', 'receipts', 'suppressions'] as const) {
-          for (const row of converted[table]) {
-            signal?.throwIfAborted();
-            const legacy = row.key as string;
-            row.key = (table === 'suppressions' && row.scope === 'prefix' ? convertPrefix : convertKey)(legacy);
-            if (table === 'suppressions' && row.id === 'ledger-mute') throw new Error('Legacy suppression uses reserved global id');
-            const prefix = table === 'suppressions' && row.scope === 'prefix';
-            const identity = JSON.stringify([row.owner, prefix ? 'prefix' : 'exact', row.key]);
-            if (identities.has(identity) && identities.get(identity) !== legacy) throw new Error('Converted delivery key collision');
-            identities.set(identity, legacy);
-          }
-        }
-        // A converted hold must reach exactly the same existing identities, including receipt-only ones.
-        const exact = [...snapshot.rows.cards, ...snapshot.rows.receipts, ...snapshot.rows.suppressions];
-        const mapped = [...converted.cards, ...converted.receipts, ...converted.suppressions];
-        for (let i = 0; i < snapshot.rows.suppressions.length; i++) {
-          const old = snapshot.rows.suppressions[i], next = converted.suppressions[i];
-          if (old.scope !== 'prefix') continue;
-          for (let j = 0; j < exact.length; j++) {
-            if (exact[j].owner !== old.owner) continue;
-            if ((exact[j].key as string).startsWith(old.key as string) !== deliveryKeyPrefix(JSON.parse(next.key as string), JSON.parse(mapped[j].key as string)))
-              throw new Error('Converted suppression prefix changes existing membership');
-          }
-        }
+  const { source, converted } = await inSqliteTransaction(probe, false, () => migrationSnapshot(probe, location, signal), snapshot => {
+    if (snapshot.version === 5) return { source: snapshot, converted: undefined };
+    const converted = structuredClone(snapshot.rows);
+    const identities = new Map<string, string>();
+    for (const table of KEY_TABLES) {
+      for (const row of converted[table]) {
+        signal?.throwIfAborted();
+        const legacy = row.key as string;
+        row.key = (table === 'suppressions' && row.scope === 'prefix' ? convertPrefix : convertKey)(legacy);
+        if (table === 'suppressions' && row.id === 'ledger-mute') throw new Error('Legacy suppression uses reserved global id');
+        const prefix = table === 'suppressions' && row.scope === 'prefix';
+        const identity = JSON.stringify([row.owner, prefix ? 'prefix' : 'exact', row.key]);
+        if (identities.has(identity) && identities.get(identity) !== legacy) throw new Error('Converted delivery key collision');
+        identities.set(identity, legacy);
       }
-      return { source: snapshot, converted };
-    }, signal));
-  } finally { probe.close(); }
-  if (source.version === 5) return { location, fromVersion: 5, toVersion: 5, changed: false };
+    }
+    // A converted hold must reach exactly the same existing identities, including receipt-only ones.
+    const exact = [...snapshot.rows.cards, ...snapshot.rows.receipts, ...snapshot.rows.suppressions];
+    const mapped = [...converted.cards, ...converted.receipts, ...converted.suppressions];
+    for (let i = 0; i < snapshot.rows.suppressions.length; i++) {
+      const old = snapshot.rows.suppressions[i], next = converted.suppressions[i];
+      if (old.scope !== 'prefix') continue;
+      for (let j = 0; j < exact.length; j++) {
+        if (exact[j].owner !== old.owner) continue;
+        if ((exact[j].key as string).startsWith(old.key as string) !== deliveryKeyPrefix(JSON.parse(next.key as string), JSON.parse(mapped[j].key as string)))
+          throw new Error('Converted suppression prefix changes existing membership');
+      }
+    }
+    return { source: snapshot, converted };
+  }, signal).finally(() => probe.close());
+  if (converted === undefined) return { location, fromVersion: 5, toVersion: 5, changed: false };
   const db = await retrySqliteBusy(() => open(false), signal);
   let begun = false;
   try {
@@ -670,10 +690,8 @@ export async function migrateLedgerStore(location: string, convertKey: (legacy: 
     if (JSON.stringify(current) !== JSON.stringify(source)) throw new Error('Delivery ledger changed since migration preflight');
     // Rebuild all key-bearing tables together: no temporary old/new unique-key aliases.
     db.exec('DROP TABLE cards; DROP TABLE receipts; DROP TABLE suppressions');
-    for (const sql of SCHEMA.split(';').map(s => s.trim()).filter(Boolean)) {
-      if (/^CREATE TABLE (cards|receipts|suppressions)\b/.test(sql) || /^CREATE (?:UNIQUE )?INDEX \w+ ON (cards|receipts|suppressions)\b/.test(sql)) db.exec(sql);
-    }
-    for (const table of ['cards', 'receipts', 'suppressions'] as const) for (const row of converted[table]) {
+    db.exec([CARDS_SQL, suppressionsSql(5), RECEIPTS_SQL].join(';\n'));
+    for (const table of KEY_TABLES) for (const row of converted[table]) {
       signal?.throwIfAborted();
       const columns = Object.keys(row);
       db.prepare(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`).run(...columns.map(k => row[k]));
@@ -689,20 +707,3 @@ export async function migrateLedgerStore(location: string, convertKey: (legacy: 
   } finally { db.close(); }
 }
 
-const FORMAT4_SCHEMA = `CREATE TABLE meta (format INTEGER NOT NULL, next_seq INTEGER NOT NULL, next_receipt_seq INTEGER NOT NULL);
-CREATE TABLE sessions (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, state TEXT NOT NULL, routes_json TEXT NOT NULL, at REAL NOT NULL);
-CREATE TABLE cards (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, text TEXT NOT NULL, details TEXT, posted_at REAL NOT NULL, UNIQUE(owner,key));
-CREATE INDEX cards_owner ON cards(owner,seq);
-CREATE TABLE suppressions (id TEXT PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('exact','prefix')), created_at REAL NOT NULL, expires_at REAL);
-CREATE INDEX suppressions_owner ON suppressions(owner);
-CREATE INDEX suppressions_exact_key ON suppressions(owner,key) WHERE scope='exact';
-CREATE INDEX suppressions_prefix_owner ON suppressions(owner) WHERE scope='prefix';
-CREATE INDEX suppressions_expiry ON suppressions(expires_at) WHERE expires_at IS NOT NULL;
-CREATE UNIQUE INDEX suppressions_permanent_exact ON suppressions(owner,key) WHERE scope='exact' AND expires_at IS NULL;
-CREATE INDEX suppressions_permanent_created ON suppressions(created_at) WHERE expires_at IS NULL;
-CREATE TABLE attempts (token TEXT PRIMARY KEY, seq INTEGER NOT NULL, generation TEXT NOT NULL, track TEXT NOT NULL, route_kind TEXT, outcome TEXT NOT NULL, correlation_json TEXT NOT NULL, started_at REAL NOT NULL, expires_at REAL NOT NULL, settled_at REAL);
-CREATE INDEX attempts_seq ON attempts(seq);
-CREATE TABLE receipts (seq INTEGER PRIMARY KEY, owner TEXT NOT NULL, key TEXT NOT NULL, at REAL NOT NULL, UNIQUE(owner,key));
-CREATE INDEX receipts_owner_seq ON receipts(owner,seq);
-CREATE INDEX receipts_time ON receipts(at);
-CREATE TABLE cancellations (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, through_seq INTEGER NOT NULL);`;
