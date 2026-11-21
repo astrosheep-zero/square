@@ -1,8 +1,5 @@
-import { sameName } from './model.js';
-
 export type Participant = string;
 export type Reach = 'bell';
-export type Audience = { readonly kind: 'bell' } | { readonly kind: 'mentions'; readonly names: readonly Participant[] };
 export type ActivityId = `act/${number}`;
 export type Perception = 'full' | 'presence';
 export const MAX_IDENTITY_SET_SIZE = 10;
@@ -21,7 +18,7 @@ export function parseActivityId(value: string): number | undefined {
 export type Act =
   | { kind: 'join'; actor: Participant; at?: number }
   | { kind: 'done'; actor: Participant; at?: number; body?: string }
-  | { kind: 'say'; actor: Participant; at?: number; body?: string; metadata?: import('./model.js').ActivityMetadata; mentions?: readonly Participant[]; reply?: number }
+  | { kind: 'say'; actor: Participant; at?: number; body?: string; metadata?: import('./square-values.js').MessageMetadata; mentions?: readonly Participant[]; reply?: number }
   | { kind: 'read'; actor: Participant; at?: number; through: number }
   | { kind: 'listen'; actor: Participant; target: Participant; at?: number }
   | { kind: 'ignore'; actor: Participant; target: Participant; at?: number }
@@ -30,8 +27,4 @@ export type Act =
 export const NARRATED_ACTIVITY_KINDS: readonly Act['kind'][] = ['join', 'say', 'done'];
 export function isNarratedActivity(kind: Act['kind']): boolean {
   return NARRATED_ACTIVITY_KINDS.includes(kind);
-}
-
-export function audienceIncludes(audience: Audience, name: string): boolean {
-  return audience.kind === 'bell' || audience.names.some((mentioned) => sameName(mentioned, name));
 }

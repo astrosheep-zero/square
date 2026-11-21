@@ -87,10 +87,12 @@ controls audience, so an away warning for an ignored sender's target does not im
 Rejoining later never adds an absent recipient to an earlier activity's frozen audience.
 
 A live idle perceive owns matching activity notifications before producer export ownership is acquired.
-Matching uses its sender and directed-attention filters against the activity's landed delivery route;
-other activities and direct notices remain eligible. Release or expiry permits still-unconsumed activity
-at the next ordinary posting opportunity; perceived or ACKed activity is not exported. Starting a perceive
-cannot recall or retroactively suppress export ownership already committed.
+Matching compares its filters with the activity's landed delivery route at the recipient: the sender
+filter must name the landing actor, and the attention filter must be absent, accept a historical `bell`,
+or name the landed recipient of a `mention`/`reply`. Listener `attention` never matches a mention-only
+filter. Other activities and direct notices remain eligible. Release or expiry permits still-unconsumed
+activity at the next ordinary posting opportunity; perceived or ACKed activity is not exported. Starting
+a perceive cannot recall or retroactively suppress export ownership already committed.
 
 After landing, Square renders and posts a card per audience member to the host delivery ledger using
 `['square', canonicalPath, 'recipient', nameKey(recipient), 'join', capturedJoinGeneration, 'act', String(index)]`.

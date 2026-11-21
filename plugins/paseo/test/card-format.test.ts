@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activityLabel, cardReferences, reachLabel, shortOrigin, timeLabel } from "../shared/card-format.ts";
+import { activityLabel, isDirectCardReach, shortOrigin, timeLabel } from "../shared/card-format.ts";
 import { isCardPresentation, type CardPresentation } from "../shared/card-presentation.ts";
 
 const presentation: CardPresentation = { kind: "presentation", origin: "design", at: 0, reach: "attention", body: "hi" };
@@ -14,10 +14,9 @@ test("presentations reject malformed landing time or reach, yet accept cards tha
   }
 });
 
-test("only direct reach has a label", () => {
-  assert.deepEqual(["mention", "reply", "bell", "attention"].map(reach => reachLabel(reach as CardPresentation["reach"])),
-    ["mention", "reply", "bell", undefined]);
-  assert.equal(reachLabel("mention", "faye"), "@faye");
+test("typed reach decides directness independently of producer labels", () => {
+  assert.deepEqual(["mention", "reply", "bell", "attention", undefined].map(reach => isDirectCardReach(reach as CardPresentation["reach"] | undefined)),
+    [true, true, true, false, false]);
 });
 
 test("producer labels are plain text independent of directed reach; absent labels stay absent", () => {
@@ -48,11 +47,4 @@ test("time labels follow local calendar days across month boundaries", () => {
 test("path-like origins show only their meaningful tail", () => {
   assert.equal(shortOrigin("~/Developer/bio/.square/PUBLIC.square"), "PUBLIC.square");
   assert.equal(shortOrigin("design"), "design");
-});
-
-test("references merge contiguous activities without implying gaps or mixing origins", () => {
-  const refs = (origin: string, values: string[]) => values.map(ref => ({ ...presentation, origin, ref }));
-  assert.equal(cardReferences(refs("design", ["act/14", "act/15", "act/16", "act/20", "job/3"])), "act/14–16, act/20, job/3");
-  assert.equal(cardReferences([...refs("design", ["act/14", "act/15"]), ...refs("jobs", ["act/16"])]),
-    "design act/14–15, jobs act/16");
 });

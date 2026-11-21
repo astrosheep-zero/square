@@ -1,10 +1,19 @@
 import { SquareError, nameKey, sameName, validateOwner, validateName, type ActDraft, type Seat, type StoredAct, type WatchLease } from './model.js';
 import { newEndpointGeneration, validateEndpointGeneration } from './message.js';
 import { resolveAudience } from './attention.js';
-import type { ArtifactWriteAuthority, AttentionFact, LandedRecipient, ParticipantFact, SeatRef, SquareRead, SquareWrite } from './ports.js';
+import type { ArtifactWriteAuthority, AttentionFact, DirectedHead, LandedRecipient, ParticipantFact, SeatRef, SquareRead, SquareWrite } from './ports.js';
 import type { ProducerWrite } from './square-post.js';
 import { freshWatchLease } from './runtime.js';
-import { leaseOwnsNotification } from './perceive-selection.js';
+
+/** A live perceive owns only landed arrivals its sender and attention filters both satisfy. */
+function leaseOwnsArrival(lease: WatchLease, arrival: DirectedHead): boolean {
+  const senders = lease.filter?.participants;
+  const senderMatch = senders === undefined || senders.some(participant => sameName(participant, arrival.actor));
+  const mention = lease.filter?.mention;
+  const attentionMatch = mention === undefined || arrival.route === 'bell'
+    || ((arrival.route === 'mention' || arrival.route === 'reply') && sameName(mention, arrival.recipient));
+  return senderMatch && attentionMatch;
+}
 
 export interface LandingEffect {
   readonly activity: ActDraft & { readonly index: number };
@@ -82,7 +91,7 @@ export function wrapSquareWrite(read: SquareRead, writes: LandingWriter, authori
         if (post.kind === 'activity') {
           const lease = freshWatchLease(read, post.recipient, now);
           const arrival = read.directedAt(post.recipient, post.index);
-          if (lease && arrival?.generation === post.generation && leaseOwnsNotification(lease, arrival)) return false;
+          if (lease && arrival?.generation === post.generation && leaseOwnsArrival(lease, arrival)) return false;
         }
         return writes.acquirePost(post, token, pid, now, exportAt);
       },

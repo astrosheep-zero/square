@@ -1,5 +1,5 @@
 import { Box, Markdown, stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
-import { activityLabel, reachLabel, shortOrigin, timeLabel } from '../../dist/card-format.js';
+import { activityLabel, isDirectCardReach, shortOrigin, timeLabel } from '../../dist/card-format.js';
 import { z } from 'zod/v4';
 
 import { deliveryLedgerLocation } from '../../dist/square-api.js';
@@ -68,7 +68,7 @@ export function renderSquareCard(message, { expanded, outputPad = 1 }, theme) {
   const now = Date.now();
   const messages = items.map(item => {
     const structured = isCardPresentation(item);
-    const direct = structured && reachLabel(item.reach) !== undefined;
+    const direct = structured && isDirectCardReach(item.reach);
     const guide = fg(theme, 'warning')('│ ');
     const name = structured && item.author !== undefined
       ? fg(theme, 'accent')(style(theme, 'bold')(item.author)) : '';

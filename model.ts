@@ -7,7 +7,7 @@ export { WAKE_ROUTE_KINDS, MESSAGE_METADATA_MAX_BYTES as ACTIVITY_METADATA_MAX_B
 export type { WakeRouteKind, JsonValue, MessageMetadata as ActivityMetadata, WakeAddress, WakeRoute } from './square-values.js';
 export { SquareErrorBase, SquareError, InternalSquareError, isSquareError, validateOwner, nameKey } from './neutral.js';
 export type { Owner, SquareErrorCode, InternalSquareErrorCode, SquareErrorFacts } from './neutral.js';
-export type { Act, ActivityId, Audience, Reach } from './square-core.js';
+export type { Act, ActivityId, Reach } from './square-core.js';
 
 /** Artifact-owned custody binding. Generation is the join activity that established it. */
 export interface Seat {

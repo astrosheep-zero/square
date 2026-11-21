@@ -2,7 +2,7 @@ import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View, type TextStyle } from "react-native";
-import { activityLabel, reachLabel, shortOrigin, timeLabel } from "../shared/card-format";
+import { activityLabel, isDirectCardReach, shortOrigin, timeLabel } from "../shared/card-format";
 import type { SquareMessageData } from "../shared/message";
 import { outgoingActivityLabel } from "../shared/square-express";
 import { SquareMarkdownBody } from "./markdown";
@@ -44,7 +44,7 @@ export function SquareMessage({ item, theme, layout }: PluginTimelineItemProps<S
     if (!("origin" in entry)) return { body: entry.text, direct: false };
     return {
       body: entry.body, author: entry.author, label: activityLabel(entry.reach, entry.recipient, entry.replyTo, entry.label) || undefined,
-      direct: reachLabel(entry.reach) !== undefined, reference: entry.ref,
+      direct: isDirectCardReach(entry.reach), reference: entry.ref,
       time: entry.at === undefined ? undefined : timeLabel(entry.at),
     };
   });

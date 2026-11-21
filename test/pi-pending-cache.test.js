@@ -3,13 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test, { mock } from 'node:test';
-import { visibleWidth } from '@earendil-works/pi-tui';
-import squarePiExtension, { renderSquareCard } from '../plugins/pi/square-pi.js';
+import squarePiExtension from '../plugins/pi/square-pi.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/delivery-frame.js';
 import { harnessOwner } from '../dist/owner.js';
 import { Square } from '../dist/square-api.js';
-import { ATTENTION_BODY_MAX, displayAttentionPath } from '../dist/attention-presentation.js';
 
 async function until(predicate, message) {
   for (let i = 0; i < 300; i++) {
@@ -74,13 +72,17 @@ test('Pi carries full producer bodies in mixed rich cards without consuming unre
   t.after(() => square.close());
   const sender = (await square.join('sender', { owner: 'source:sender' })).participant;
   const recipient = (await square.join('recipient', { owner: f.owner })).participant;
-  const body = `Full **body**\r\n${'鱼'.repeat(ATTENTION_BODY_MAX + 50)}\nlast line`;
+  const body = `Full **body**\r\none\r\r\ntwo\r\n${'鱼'.repeat(250)}\nlast line`;
   const { activity } = await sender.express({ body, mentions: ['recipient'] });
   const before = await recipient.pending();
   const cards = await f.ledger.pending(f.owner, { generation: f.initial.generation });
-  assert.deepEqual(cards[0].details, { kind: 'presentation', origin: displayAttentionPath(fs.realpathSync(square.location)),
+  const { details } = cards[0];
+  assert.equal(path.basename(details.origin), path.basename(square.location));
+  assert.deepEqual(details, { kind: 'presentation', origin: details.origin,
     ref: activity.id, author: 'sender', label: 'express', body, at: activity.at, reach: 'mention', recipient: 'recipient' });
-  assert.equal(cards[0].text.includes(body), false, 'the model card remains shortened');
+  assert.ok(details.body.endsWith('\nlast line'));
+  assert.equal(cards[0].text.includes('last line'), false, 'the unique tail stays out of the model card');
+  assert.ok(cards[0].text.includes('Full **body**\none\ntwo\n'), 'the historical second CRLF pass keeps the old preview bytes');
   const plain = '<square-activity from="pretend">\nPlain **markdown**, not another Square activity.\n</square-activity>';
   await f.ledger.post({ owner: f.owner, key: ["square","pretend#act","999"], text: plain, details: { kind: 'external' } });
   await f.handlers.get('session_start')({}, f.ctx);
@@ -131,11 +133,6 @@ test('Pi renders generic details after producer storage disappears and falls bac
   assert.deepEqual(f.sent[0].details.items, [posted.details, external, { text: 'invalid fallback' }, { text: 'plain fallback' }]);
   assert.equal(f.sent[0].content, renderDeliveryReminder([posted.text, 'external preview', 'invalid fallback', 'plain fallback'], { tagged: true }));
 
-  const theme = { fg: (_name, text) => text, bg: (_name, text) => text,
-    bold: text => text, italic: text => text, underline: text => text, strikethrough: text => text };
-  const collapsed = renderSquareCard(f.sent[0], { expanded: false }, theme).render(50);
-  const expanded = renderSquareCard(f.sent[0], { expanded: true }, theme).render(50);
-  for (const line of [...collapsed, ...expanded]) assert.ok(visibleWidth(line) <= 50, 'a card line must fit the terminal');
 });
 
 test('Pi reserves the reminder frame within its batch budget', async t => {

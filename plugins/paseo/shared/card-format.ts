@@ -1,6 +1,11 @@
 import type { CardPresentation } from "./card-presentation.ts";
 
-export function reachLabel(reach?: CardPresentation["reach"], recipient?: string): string | undefined {
+/** Direct styling follows the typed landing route, never a display label. */
+export function isDirectCardReach(reach?: CardPresentation["reach"]): boolean {
+  return reach !== undefined && reach !== "attention";
+}
+
+function reachLabel(reach?: CardPresentation["reach"], recipient?: string): string | undefined {
   return reach === "mention" ? (recipient ? `@${recipient}` : "mention") : reach === "attention" ? undefined : reach;
 }
 
@@ -29,21 +34,4 @@ export function timeLabel(at: number, now = Date.now(), compact = false): string
 /** Display form: the meaningful tail of a path-like origin. */
 export function shortOrigin(origin: string): string {
   return origin.split(/[\\/]/).filter(Boolean).at(-1) || origin;
-}
-
-/** Only adjacent references from the same origin can form a range. */
-export function cardReferences(items: readonly CardPresentation[], originLabel: (origin: string) => string = origin => origin): string {
-  const multipleOrigins = new Set(items.map(item => item.origin)).size > 1;
-  const runs: { origin: string; ref: string; first?: number; last?: number }[] = [];
-  for (const item of items) {
-    if (item.ref === undefined) continue;
-    const match = /^act\/(\d+)$/.exec(item.ref);
-    const index = match ? Number(match[1]) : undefined;
-    const previous = runs.at(-1);
-    if (index !== undefined && previous?.origin === item.origin && previous.last !== undefined && previous.last + 1 === index) {
-      previous.last = index;
-    } else runs.push({ origin: item.origin, ref: item.ref, first: index, last: index });
-  }
-  return runs.map(run => `${multipleOrigins ? `${originLabel(run.origin)} ` : ""}${run.first !== run.last
-    ? `act/${run.first}–${run.last}` : run.ref}`).join(", ");
 }

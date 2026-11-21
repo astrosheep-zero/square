@@ -1,15 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { MAX_IDENTITY_SET_SIZE, audienceIncludes, formatActivityId, parseActivityId } from '../dist/square-core.js';
+import { formatActivityId, parseActivityId } from '../dist/square-core.js';
 import { NAME_GRAPHEME_SOURCE, validateName } from '../dist/model.js';
-
-test('settled audience membership is case-insensitive and a bell reaches everyone', () => {
-  assert.equal(audienceIncludes({ kind: 'mentions', names: ['Bob'] }, 'bob'), true);
-  assert.equal(audienceIncludes({ kind: 'mentions', names: [] }, 'Bob'), false);
-  assert.equal(audienceIncludes({ kind: 'bell' }, 'Anyone'), true);
-  assert.equal(MAX_IDENTITY_SET_SIZE, 10);
-});
 
 test('Unicode text-name fast path preserves full name acceptance and malformed boundaries', () => {
   const markedAkuId = 'aku/a\u0315/1234abcd'.normalize('NFC');

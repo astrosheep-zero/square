@@ -64,21 +64,26 @@ const hasCard = (cards, id) => cards.some(card => card.key[6] + '/' + card.key[7
 test('a live filtered perceive owns matching exports while excluded routes and notices remain eligible', { timeout: 10000 }, async t => {
   const c = await fixture(t);
   await c.bob.listen('Alice');
+  const question = (await c.bob.express({ body: 'question for Alice', force: true })).activity;
   const waiting = await armPerceive(c, { from: ['Alice'], mention: true });
   const matched = (await c.alice.express({ body: 'owned by perceive', mentions: ['Bob'], force: true })).activity;
+  const reply = (await c.alice.express({ body: 'answering your question', reply: question.id, force: true })).activity;
   assert.equal(hasCard(await c.cards(), matched.id), false);
+  assert.equal(hasCard(await c.cards(), reply.id), false);
   const excluded = (await c.carol.express({ body: 'excluded sender', mentions: ['Bob'], force: true })).activity;
   const listener = (await c.alice.express({ body: 'listener route outside attention filter', force: true })).activity;
   await c.square.send({ from: 'Alice', to: 'Bob', body: 'raw direct notice', metadata: { kind: 'notice' } });
   const before = await c.cards();
   assert.equal(hasCard(before, matched.id), false);
+  assert.equal(hasCard(before, reply.id), false);
   assert.equal(hasCard(before, excluded.id), true);
   assert.equal(hasCard(before, listener.id), true);
   assert.ok(before.some(card => card.text === 'raw direct notice'));
   waiting.resume();
-  assert.deepEqual((await waiting.result).activities.map(activity => activity.id), [matched.id]);
+  assert.deepEqual((await waiting.result).activities.map(activity => activity.id), [matched.id, reply.id]);
   await c.square.join('Bob', { owner: 'perceive:bob' });
   assert.equal(hasCard(await c.cards(), matched.id), false, 'consumption prevents export after perceive release');
+  assert.equal(hasCard(await c.cards(), reply.id), false, 'the replied-to arrival is consumed too');
   assert.deepEqual((await c.bob.pending()).activities.map(activity => activity.id), [excluded.id, listener.id]);
 });
 

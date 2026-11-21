@@ -1,14 +1,14 @@
 import { encodeDeliveryKey, type DeliveryKey } from './delivery-key.js';
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { DeliveryLedger, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
 import { dispatchPostedCard, isProducerDispatchRoute } from './notifications.js';
 import { retainDeliveryLedger } from './delivery-lifetime.js';
 import { openReadOnlyDeliveryLedger } from './notification-mute.js';
-import { projectNotification, displayAttentionPath } from './attention-presentation.js';
 import type { CardPresentation } from './card-presentation.js';
 import { coreDone } from './decisions.js';
-import { SquareError, activityMetadataHasContent, nameKey, type Seat } from './model.js';
+import { SquareError, activityMetadataHasContent, nameKey, type DirectedNotificationRoute, type Seat } from './model.js';
 import type { SquareArtifactPort, SquareRead } from './ports.js';
 import { formatActivityId } from './square-core.js';
 import { parseSquarePostKey, squarePostKey, type SquarePost } from './square-post.js';
@@ -23,12 +23,48 @@ const openLedger = (ledgerLocation: string, clock: () => number, signal?: AbortS
 function requireFiniteClock(clock: () => number): void {
   if (!Number.isFinite(clock())) throw new SquareError('invalid_args', 'Square time must be a finite number.');
 }
-function renderPost(location: string, post: SquarePost): { text: string; full: boolean } {
+const ATTENTION_BODY_MAX = 200;
+function displayAttentionPath(squarePath: string): string {
+  return squarePath.startsWith(homedir()) ? `~${squarePath.slice(homedir().length)}` : squarePath;
+}
+function activityDescription(actor: string, route: DirectedNotificationRoute): string {
+  switch (route) {
+    case 'mention': return `${actor} spoke your name`;
+    case 'reply': return `${actor} answered you`;
+    case 'attention': return `${actor} spoke · you’re listening`;
+    case 'bell': return `${actor} rang the bell`;
+  }
+}
+function escapeSquareTags(text: string): string {
+  return text.replace(/<(\/?)(square-|channel-|system-reminder)/gi, '<\\$1$2');
+}
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+/** One producer card: finished model text, rich body and the coverage the claim settles. */
+function renderPost(location: string, post: SquarePost, replyTo?: string): { text: string; full: boolean; details?: CardPresentation } {
   if (post.kind === 'notice') return { text: post.body ?? '', full: true };
-  const projected = projectNotification({ squarePath: location, actIndex: post.index, recipient: post.recipient,
-    actor: post.from, route: post.route!, body: post.body ?? '',
-    metadataOnly: !(post.body?.trim()) && activityMetadataHasContent(post.metadata) });
-  return { text: projected.text, full: projected.isFull };
+  const origin = displayAttentionPath(location), ref = formatActivityId(post.index), route = post.route!;
+  const rawBody = post.body ?? '';
+  const metadataOnly = !rawBody.trim() && activityMetadataHasContent(post.metadata);
+  const normalized = metadataOnly ? '(structured activity)' : rawBody.replace(/\r\n/g, '\n');
+  const remaining = normalized.length - ATTENTION_BODY_MAX;
+  const full = !metadataOnly && remaining <= 0;
+  // Historical wire bytes: the first pass can expose an adjacent CRLF pair, so the preview repeats it.
+  const previewBody = normalized.replace(/\r\n/g, '\n');
+  const preview = previewBody.length <= ATTENTION_BODY_MAX ? previewBody : `${previewBody.slice(0, ATTENTION_BODY_MAX).trimEnd()}…`;
+  const attributes = [
+    `square="${escapeAttribute(origin)}"`,
+    `as="${escapeAttribute(post.recipient)}"`,
+    `id="${escapeAttribute(ref)}"`,
+    `from="${escapeAttribute(post.from)}"`,
+    ...(remaining > 0 ? [`truncated="${remaining} more chars"`] : []),
+  ];
+  const text = [`<square-activity ${attributes.join(' ')}>`, `${activityDescription(post.from, route)}.`, '', escapeSquareTags(preview),
+    ...(full ? [] : ['', escapeSquareTags(`Use square_perceive with location=${JSON.stringify(location)}, as=${JSON.stringify(post.recipient)}, id=${JSON.stringify(ref)} for the full activity.`)]),
+    '</square-activity>'].join('\n');
+  return { text, full, details: { kind: 'presentation', origin, ref, author: post.from, label: 'express',
+    body: rawBody, at: post.at, reach: route, recipient: post.recipient, ...(replyTo === undefined ? {} : { replyTo }) } };
 }
 /** Local producer custody and current host attachment are different observations. */
 export async function deliverySessionsForSeats(ledger: DeliveryLedger, seats: readonly Seat[], signal?: AbortSignal): Promise<ReadonlyMap<string, DeliverySession | undefined>> {
@@ -168,7 +204,7 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
     for (const { post, replyTo } of snapshot.pending) {
       const session = sessions.get(post.owner);
       if (session?.state !== 'attached') continue;
-      const rendered = renderPost(location, post), token = randomUUID();
+      const rendered = renderPost(location, post, replyTo), token = randomUUID();
       const owned = (await artifact.transactAs({ kind: 'producer' }, facts =>
         facts.acquirePost({ ...post, full: rendered.full }, token, process.pid, clock()), signal)).value;
       if (!owned) continue;
@@ -180,10 +216,7 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
           || !(await artifact.read(facts => facts.ownsPost(token), signal)).value) continue;
         knownUnsent = false;
         const result = await ledger.post({ owner: post.owner, key: squarePostKey(location, post), text: rendered.text,
-          ...(post.kind === 'activity' ? { details: { kind: 'presentation', origin: displayAttentionPath(location),
-            ref: formatActivityId(post.index), author: post.from, label: 'express', body: post.body ?? '',
-            at: post.at, reach: post.route!, recipient: post.recipient,
-            ...(replyTo === undefined ? {} : { replyTo }) } satisfies CardPresentation } : {}),
+          ...(rendered.details === undefined ? {} : { details: rendered.details }),
         }, signal);
         posted = ['posted', 'duplicate', 'suppressed'].includes(result.status);
         knownUnsent = !posted;
