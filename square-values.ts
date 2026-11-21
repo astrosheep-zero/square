@@ -1,11 +1,11 @@
 import { SquareError, nameKey } from './neutral.js';
 
-export const WAKE_ROUTE_KINDS = ['opencode-server', 'codex-queue', 'paseo', 'http', 'keiyaku'] as const;
-export type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
+const WAKE_ROUTE_KINDS = ['opencode-server', 'codex-queue', 'paseo', 'http', 'keiyaku'] as const;
+type WakeRouteKind = typeof WAKE_ROUTE_KINDS[number];
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 export type MessageMetadata = Readonly<Record<string, JsonValue>>;
 export const MESSAGE_METADATA_MAX_BYTES = 16 * 1024;
-export const MESSAGE_METADATA_MAX_DEPTH = 256;
+const MESSAGE_METADATA_MAX_DEPTH = 256;
 
 /** Validate the bounded, lossless JSON object carried by a message. */
 export function validateMessageMetadata(value: unknown): MessageMetadata | undefined {
@@ -73,14 +73,6 @@ export interface WakeAddress {
 }
 export function isWakeRouteKind(value: unknown): value is WakeRouteKind {
   return typeof value === 'string' && (WAKE_ROUTE_KINDS as readonly string[]).includes(value);
-}
-export interface WakeRoute {
-  epoch?: number;
-  location: string;
-  participant: string;
-  kind: WakeRouteKind;
-  address: Record<string, string>;
-  updatedAt: number;
 }
 export function sameName(a: string, b: string): boolean { return nameKey(a) === nameKey(b); }
 const TEXT_NAME_GRAPHEME_SOURCE = String.raw`[[\p{L}\p{N}\p{M}_\x2D]--[\p{Variation_Selector}]]`;

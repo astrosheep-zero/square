@@ -23,19 +23,3 @@ export async function canonicalPath(value: string): Promise<string> {
     }
   }
 }
-
-/** The synchronous face of {@link canonicalPath}, using the native realpath. */
-export function canonicalPathSync(value: string): string {
-  let current = path.resolve(value);
-  const suffix: string[] = [];
-  for (;;) {
-    try { return path.join(fs.realpathSync.native(current), ...suffix.reverse()); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return path.resolve(value);
-      const parent = path.dirname(current);
-      if (parent === current) return path.resolve(value);
-      suffix.push(path.basename(current));
-      current = parent;
-    }
-  }
-}

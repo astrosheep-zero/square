@@ -28,6 +28,7 @@ does not erase that output effect. This is observer-level evidence, not proof of
 
 Each async Stop captures its payload's native turn ID, ledger attachment generation and queue address.
 A private OS-backed lock for that coordinate, generation and turn deduplicates overlapping callbacks.
+The overlap fence uses the shared agent-delivery file lock, separate from ledger/queue evidence.
 After winning the lock the watcher records a local Stop epoch (token + turn ID) in the receiver-owned
 boundary file; recording before the lock would let a duplicate Stop retire both watchers. The store
 returns the exact epoch it committed from that locked write, so the watcher never re-reads shared

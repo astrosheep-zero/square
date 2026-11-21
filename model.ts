@@ -3,8 +3,8 @@
 import type { Act, ActivityId, Reach } from './square-core.js';
 import type { Owner } from './neutral.js';
 import type { WakeAddress } from './square-values.js';
-export { WAKE_ROUTE_KINDS, MESSAGE_METADATA_MAX_BYTES as ACTIVITY_METADATA_MAX_BYTES, MESSAGE_METADATA_MAX_DEPTH as ACTIVITY_METADATA_MAX_DEPTH, validateMessageMetadata as validateActivityMetadata, messageMetadataHasContent as activityMetadataHasContent, isWakeRouteKind, sameName, NAME_GRAPHEME_SOURCE, validateName } from './square-values.js';
-export type { WakeRouteKind, JsonValue, MessageMetadata as ActivityMetadata, WakeAddress, WakeRoute } from './square-values.js';
+export { MESSAGE_METADATA_MAX_BYTES as ACTIVITY_METADATA_MAX_BYTES, validateMessageMetadata as validateActivityMetadata, messageMetadataHasContent as activityMetadataHasContent, isWakeRouteKind, sameName, NAME_GRAPHEME_SOURCE, validateName } from './square-values.js';
+export type { JsonValue, MessageMetadata as ActivityMetadata, WakeAddress } from './square-values.js';
 export { SquareErrorBase, SquareError, InternalSquareError, isSquareError, validateOwner, nameKey } from './neutral.js';
 export type { Owner, SquareErrorCode, InternalSquareErrorCode, SquareErrorFacts } from './neutral.js';
 export type { Act, ActivityId, Reach } from './square-core.js';

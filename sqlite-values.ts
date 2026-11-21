@@ -56,16 +56,6 @@ export function immutable<T>(value: T): T {
     }
     return value;
 }
-// Sorted object keys express small-value structural equality, never whole-state comparison.
-export function stableJson(value: unknown): string {
-    if (value === null || typeof value !== 'object') {
-        requireFact(value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value), 'value contains a non-finite or unsupported JSON value.');
-        return encode(value);
-    }
-    if (Array.isArray(value))
-        return '[' + value.map(stableJson).join(',') + ']';
-    return '{' + Object.keys(value).sort().map(k => encode(k) + ':' + stableJson((value as Record<string, unknown>)[k])).join(',') + '}';
-}
 export function pageRows<T>(rows: Row[], page: IndexPage, decode: (row: Row) => T): FactPage<T> {
     const hasMore = rows.length > page.limit;
     if (hasMore)

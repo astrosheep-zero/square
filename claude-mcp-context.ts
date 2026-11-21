@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { deliveryLedgerLocation } from './delivery-ledger.js';
 import { z } from 'zod/v4';
-import { withFileLock } from './file-lock.js';
+import { withFileLock } from './packages/agent-delivery/src/file-lock.js';
 import { SquareError } from './model.js';
 import { requireAkumaActor } from './owner.js';
 

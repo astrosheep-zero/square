@@ -5,7 +5,7 @@ import { connect } from './packages/agent-delivery/src/index.js';
 import { codexQueueEndpoint } from './packages/agent-delivery/src/codex-endpoint.js';
 import { DeliveryLedger, deliveryLedgerLocation } from './delivery-ledger.js';
 import { harnessOwner } from './owner.js';
-import { withFileLock } from './file-lock.js';
+import { withFileLock } from './packages/agent-delivery/src/file-lock.js';
 import { canonicalPath } from './canonical-path.js';
 import { codexWakeAddress, codexBoundaryStore } from './codex-address.js';
 import { parseCodexHookText } from './codex-hook.js';
