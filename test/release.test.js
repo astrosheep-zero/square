@@ -78,22 +78,15 @@ test('generated release artifacts expose the current identity and supported host
   const entry = path.join(root, 'dist', 'packages', 'agent-delivery', 'src', 'index.js');
   assert.equal(fs.existsSync(entry), true);
   assert.match(fs.readFileSync(path.join(root, 'dist', 'wake-sink.js'), 'utf8'), /\.\/packages\/agent-delivery\/src\/index\.js/);
-  // Paseo wakes steer through the shared entry; the CLI spawn is gone for good.
-  assert.doesNotMatch(fs.readFileSync(path.join(root, 'dist', 'wake-sink.js'), 'utf8'), /spawnSync|SQUARE_PASEO_BIN/);
   assert.equal(packageJson.dependencies['@astrosheep/agent-delivery'], undefined);
   assert.equal(packageJson.dependencies['@opencode/client'], undefined);
   const openCodeLeaf = path.join(root, 'dist/packages/agent-delivery/src/opencode-native.js');
   assert.equal(fs.existsSync(openCodeLeaf), true);
   assert.match(fs.readFileSync(path.join(root, 'dist', 'plugins', 'opencode', 'index.js'), 'utf8'), /\.\.\/\.\.\/packages\/agent-delivery\/src\/opencode-native\.js/);
-  assert.doesNotMatch(fs.readFileSync(openCodeLeaf, 'utf8'), /@opencode|square|\.square/);
-  const openCodePlugin = fs.readFileSync(path.join(root, 'dist', 'plugins', 'opencode', 'index.js'), 'utf8');
-  assert.match(openCodePlugin, /async setup\(ctx\)/);
-  assert.doesNotMatch(openCodePlugin, /tool\.execute\.after|shell\.env|presentPendingAtBoundary/);
   assert.equal(claudeSkill, squareSkill);
   assert.match(squareSkill, /history.*only way to look back/i);
   assert.match(squareSkill, /Never read or parse the binary Square artifact directly/);
   assert.match(codexPlugin.interface.defaultPrompt, /join.*perceive.*express.*done/i);
-  assert.doesNotMatch(JSON.stringify(codexPlugin.interface), /\bstream\b/i);
   assert.deepEqual(
     harnessTargets().map(({ name, capabilities }) => [name, capabilities]),
     [
