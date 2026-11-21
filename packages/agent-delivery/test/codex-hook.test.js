@@ -17,6 +17,14 @@ const input = (event, turn_id = 'turn-1') => ({ session_id: 'target', hook_event
 test('Stop epochs are unique, exact and invalidated by every active/lifecycle boundary', async () => {
   const { file, boundaries } = await fixture()
   const other = createCodexBoundaryStore(file)
+  const first = await boundaries.record('target', 'Stop', { turnId: 'turn-a' })
+  const second = await boundaries.record('target', 'Stop', { turnId: 'turn-b' })
+  assert.ok(first); assert.ok(second)
+  assert.equal(first.turnId, 'turn-a')
+  assert.equal(second.turnId, 'turn-b')
+  assert.notEqual(first.token, second.token)
+  assert.equal(await other.queueEligible('target', first), false)
+  assert.equal(await other.queueEligible('target', second), true)
   const run = event => handleCodexHook(input(event), { boundaries })
   for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Interrupt', 'SessionEnd']) {
     await run('SessionStart')

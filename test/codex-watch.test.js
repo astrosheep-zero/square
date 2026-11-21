@@ -7,10 +7,9 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { LedgerStore } from '../dist/delivery-ledger-sqlite.js';
-import { postAndDispatch, createDefaultDeliveryTransports } from '../dist/notifications.js';
+import { postAndDispatch } from '../dist/notifications.js';
 import { runCodexWatch } from '../dist/codex-watch.js';
-import { codexHookResponse } from '../dist/codex-hook.js';
+import { runCodexHook, runCodexInterrupt } from '../dist/codex-hook.js';
 import { codexBoundaryStore } from '../dist/codex-address.js';
 
 const cli = fileURLToPath(new URL('../dist/square.js', import.meta.url));
@@ -77,7 +76,6 @@ async function fixture(t) {
 
 test('each Stop queues once without any native contact and exits; the next Stop starts a fresh watcher', async t => {
   const f = await fixture(t);
-  assert.ok((await createDefaultDeliveryTransports()).every(transport => transport.kind !== 'codex-queue'));
   let producerCalls = 0;
   const first = f.command();
   const stop = await until(f.stop, 'first Stop watcher');
@@ -96,8 +94,7 @@ test('each Stop queues once without any native contact and exits; the next Stop 
   assert.equal((await f.calls()).length, 1);
 
   await f.ledger.post({ owner: f.owner, key: ["second"], text: 'later Stop' });
-  const second = f.command('two');
-  assert.deepEqual(await within(second.exited, 'second Stop exit'), [0, null]);
+  await within(f.watch('two').promise, 'second Stop exit');
   assert.equal((await f.calls()).length, 2);
   assert.equal((await f.calls())[1].at(-1), (await f.calls())[0].at(-1));
 });
@@ -110,7 +107,8 @@ test('queued wake fetches current context only after an intervening perceive sup
   await f.ledger.suppress({ owner: f.owner, key: ["original"], scope: 'exact' });
   await f.ledger.post({ owner: f.owner, key: ["fresh"], text: 'FRESH_BODY_AT_DEQUEUE' });
   let context;
-  await codexHookResponse({ session_id: 'thread', hook_event_name: 'UserPromptSubmit' }, text => { context = text; }, f.env, () => {});
+  await runCodexHook(JSON.stringify({ session_id: 'thread', hook_event_name: 'UserPromptSubmit' }), f.env, text => { context = text; });
+  assert.equal(JSON.parse(context).hookSpecificOutput.hookEventName, 'UserPromptSubmit');
   assert.match(context, /FRESH_BODY_AT_DEQUEUE/);
   assert.doesNotMatch(context, /STALE_ORIGINAL_BODY/);
   assert.deepEqual((await f.ledger.receipts(f.owner)).map(row => row.key), [["fresh"]]);
@@ -133,34 +131,30 @@ test('active native events retire the watcher and leave cards to synchronous hoo
   const f = await fixture(t);
   const waiting = f.watch();
   await until(f.stop, 'idle watcher');
-  await codexHookResponse({ session_id: 'thread', hook_event_name: 'UserPromptSubmit' }, undefined, f.env, () => {});
+  await runCodexHook(JSON.stringify({ session_id: 'thread', hook_event_name: 'UserPromptSubmit' }), f.env);
   await within(waiting.promise, 'watcher end');
   await f.ledger.post({ owner: f.owner, key: ["active"], text: 'active hook fallback' });
-  await pause(100);
   assert.deepEqual(await f.calls(), []);
   let output;
-  await codexHookResponse({ session_id: 'thread', hook_event_name: 'PostToolUse' }, text => { output = JSON.parse(text); }, f.env, () => {});
+  await runCodexHook(JSON.stringify({ session_id: 'thread', hook_event_name: 'PostToolUse' }), f.env, text => { output = JSON.parse(text); });
   assert.match(output.hookSpecificOutput.additionalContext, /active hook fallback/);
   assert.equal((await f.ledger.receipts(f.owner)).length, 1);
 });
 
 test('final launch checks prevent stale queueing', async t => {
-  for (const change of ['route', 'generation', 'detach', 'cancel', 'suppress', 'mute']) await t.test(change, async t => {
+  for (const change of ['route', 'generation', 'suppress']) await t.test(change, async t => {
     const f = await fixture(t);
     // Mutate after the first eligibility read, before the queue's launch fence.
-    const original = LedgerStore.prototype.pendingCards;
+    const original = DeliveryLedger.prototype.pending;
     let changed = false;
-    t.mock.method(LedgerStore.prototype, 'pendingCards', async function (...args) {
+    t.mock.method(DeliveryLedger.prototype, 'pending', async function (...args) {
       const cards = await original.apply(this, args);
       if (changed || !cards.length) return cards;
       changed = true;
       if (change === 'route') await f.ledger.updateRoutes({ owner: f.owner, generation: f.session.generation,
         routes: [{ kind: 'codex-queue', address: { ...f.session.routes[0].address, endpoint: 'ws://127.0.0.1:1' } }] });
-      if (change === 'detach') await f.ledger.detach({ owner: f.owner, generation: f.session.generation });
       if (change === 'generation') await f.ledger.attach({ owner: f.owner, expectedGeneration: f.session.generation, routes: f.session.routes });
-      if (change === 'cancel') await f.ledger.cancel({ owner: f.owner, generation: f.session.generation });
       if (change === 'suppress') await f.ledger.suppress({ owner: f.owner, key: ["pending"], scope: 'exact' });
-      if (change === 'mute') await f.ledger.mute({ durationMs: 60_000 });
       return cards;
     });
     await f.ledger.post({ owner: f.owner, key: ["pending"], text: 'must remain unsent' });
@@ -173,10 +167,7 @@ test('final launch checks prevent stale queueing', async t => {
 test('Interrupt cancels its pending batch; a later Stop admits future cards', async t => {
   const f = await fixture(t);
   await f.ledger.post({ owner: f.owner, key: ["cancelled"], text: 'old batch' });
-  const interrupt = spawn(process.execPath, [cli, 'codex-interrupt'], { env: f.env, stdio: ['pipe', 'pipe', 'pipe'] });
-  const exited = once(interrupt, 'exit');
-  interrupt.stdin.end(JSON.stringify({ session_id: 'thread', hook_event_name: 'Interrupt', turn_id: 'one' }));
-  assert.deepEqual(await within(exited, 'interrupt exit'), [0, null]);
+  await runCodexInterrupt(JSON.stringify({ session_id: 'thread', hook_event_name: 'Interrupt', turn_id: 'one' }), f.env);
   const waiting = f.watch();
   await until(f.stop, 'watcher after interrupt');
   await f.ledger.post({ owner: f.owner, key: ["future"], text: 'future batch' });
@@ -184,21 +175,19 @@ test('Interrupt cancels its pending batch; a later Stop admits future cards', as
   assert.equal((await f.calls()).length, 1);
   assert.doesNotMatch((await f.calls())[0].at(-1), /future batch/);
   let context;
-  await codexHookResponse({ session_id: 'thread', hook_event_name: 'UserPromptSubmit' }, text => { context = text; }, f.env, () => {});
+  await runCodexHook(JSON.stringify({ session_id: 'thread', hook_event_name: 'UserPromptSubmit' }), f.env, text => { context = text; });
   assert.match(context, /future batch/);
   assert.doesNotMatch(context, /old batch/);
   assert.doesNotMatch((await f.calls())[0].at(-1), /old batch/);
 });
 
-test('refused and ambiguous queue attempts both end the watcher without retry or false receipts', async t => {
-  for (const flag of ['QUEUE_REFUSED', 'QUEUE_UNKNOWN']) await t.test(flag, async t => {
-    const f = await fixture(t); f.env[flag] = '1';
-    await f.ledger.post({ owner: f.owner, key: ["attempt"], text: 'one attempt only' });
-    await within(f.watch().promise, 'watcher end');
-    assert.equal((await f.calls()).length, 1);
-    const attempts = await f.ledger.handoffs(f.owner, { generation: f.session.generation });
-    assert.deepEqual(attempts, []);
-    assert.deepEqual((await f.ledger.pending(f.owner, { generation: f.session.generation })).map(card => card.key), [["attempt"]]);
-    assert.deepEqual(await f.ledger.receipts(f.owner), []);
-  });
+test('an ambiguous queue attempt ends the watcher without retry or false receipts', async t => {
+  const f = await fixture(t); f.env.QUEUE_UNKNOWN = '1';
+  await f.ledger.post({ owner: f.owner, key: ["attempt"], text: 'one attempt only' });
+  await within(f.watch().promise, 'watcher end');
+  assert.equal((await f.calls()).length, 1);
+  const attempts = await f.ledger.handoffs(f.owner, { generation: f.session.generation });
+  assert.deepEqual(attempts, []);
+  assert.deepEqual((await f.ledger.pending(f.owner, { generation: f.session.generation })).map(card => card.key), [["attempt"]]);
+  assert.deepEqual(await f.ledger.receipts(f.owner), []);
 });

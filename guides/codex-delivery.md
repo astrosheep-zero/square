@@ -29,8 +29,10 @@ does not erase that output effect. This is observer-level evidence, not proof of
 Each async Stop captures its payload's native turn ID, ledger attachment generation and queue address.
 A private OS-backed lock for that coordinate, generation and turn deduplicates overlapping callbacks.
 After winning the lock the watcher records a local Stop epoch (token + turn ID) in the receiver-owned
-boundary file; recording before the lock would let a duplicate Stop retire both watchers. A different
-Stop or replacement attachment does not wait for the old watcher's lock.
+boundary file; recording before the lock would let a duplicate Stop retire both watchers. The store
+returns the exact epoch it committed from that locked write, so the watcher never re-reads shared
+state for its authority: a later Stop owns a different epoch. A different Stop or replacement
+attachment does not wait for the old watcher's lock.
 
 On every reconciliation the watcher re-checks its captured epoch against the local boundary file.
 A newer Stop replaces the epoch and retires older watchers; any active native event (SessionStart,

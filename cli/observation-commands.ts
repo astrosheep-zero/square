@@ -412,11 +412,11 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
   present: (result) => process.stdout.write(result),
 };
 
-function hookCommand(runHook: (input: string) => string | Promise<string>): CommandSpec<undefined, string> {
+function hookCommand(runHook: (input: string) => Promise<void>): CommandSpec<undefined, void> {
   return {
     parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
     execute: async () => runHook(await readStdin()),
-    present: (result) => process.stdout.write(result),
+    present: () => {},
   };
 }
 
@@ -425,12 +425,8 @@ export const claudeModCommand: CommandSpec<undefined, string> = {
   execute: async () => runClaudeMod(await readStdin(), process.env),
   present: () => {},
 };
-export const codexHookCommand: CommandSpec<undefined, string> = {
-  parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
-  execute: async () => runCodexHook(await readStdin(), process.env, text => new Promise<void>((resolve, reject) => {
-    process.stdout.write(text, error => error ? reject(error) : resolve());
-  })),
-  present: () => {},
-};
+export const codexHookCommand = hookCommand(input => runCodexHook(input, process.env, text => new Promise<void>((resolve, reject) => {
+  process.stdout.write(text, error => error ? reject(error) : resolve());
+})));
 export const codexWatchCommand = hookCommand(input => runCodexWatch(input, process.env));
 export const codexInterruptCommand = hookCommand(input => runCodexInterrupt(input, process.env));

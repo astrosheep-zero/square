@@ -132,7 +132,9 @@ const result = await handleCodexHook(inputFromCodex, {
 Install synchronous SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop,
 Interrupt and SessionEnd handlers. Only the three active prompt/tool boundaries
 pull text into event-correct `additionalContext`. Stop requires `turn_id` and
-records a unique `{token, turnId}` epoch; it never sweeps or sends. Active and
+records a unique `{token, turnId}` epoch; it never sweeps or sends. A successful
+Stop `record` returns the epoch it committed, so capture that return instead of
+re-reading: a later read may already name a newer Stop's epoch. Active and
 lifecycle events disarm. End blocks late callbacks until a new SessionStart.
 SessionResume is not a verified 0.166.0 hook and is not supported as coverage.
 Old or malformed boundary files cannot authorize a queue.

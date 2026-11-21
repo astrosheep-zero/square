@@ -1,11 +1,20 @@
 import { copyDeliveryKey, type DeliveryKey } from './delivery-key.js';
 import type { DeliveryLedger, DeliveryRoute, DeliveryTransport, HandoffResult, PostResult } from './delivery-ledger.js';
 import type { Owner } from './owner.js';
-import { createDefaultDeliveryTransports } from './wake-transports.js';
-export { createDefaultDeliveryTransports } from './wake-transports.js';
 
 const DEFAULT_DELIVERY_WAIT_MS = 5000;
 const NATIVE_RECEIVER_ROUTES = new Set(['codex-queue', 'claude-mod', 'pi-native']);
+
+/** Native receivers own their effects; producers never target Claude's private helper. */
+async function createDefaultDeliveryTransports(): Promise<readonly DeliveryTransport[]> {
+  const [{ HttpWakeTransport }, { PaseoWakeTransport }, { KeiyakuWakeTransport }] = await Promise.all([
+    import('./http-delivery.js'),
+    import('./paseo-delivery.js'),
+    import('./keiyaku-delivery.js'),
+  ]);
+  return [new HttpWakeTransport(), new PaseoWakeTransport(), new KeiyakuWakeTransport()];
+}
+
 /** Native receiver custody is never acquired by producer dispatch. */
 export function isProducerDispatchRoute(route: DeliveryRoute): boolean {
   return !NATIVE_RECEIVER_ROUTES.has(route.kind);

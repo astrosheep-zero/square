@@ -7,7 +7,7 @@ export interface CodexBoundary { readonly stop?: CodexStopEpoch; readonly ended?
 export interface CodexBoundaryStore {
   read(sessionId: string): Promise<CodexBoundary | undefined>
   queueEligible(sessionId: string, epoch?: CodexStopEpoch): Promise<boolean>
-  record(sessionId: string, event: 'Stop' | 'non-stop' | 'start' | 'end', options?: { readonly signal?: AbortSignal; readonly turnId?: string }): Promise<void>
+  record(sessionId: string, event: 'Stop' | 'non-stop' | 'start' | 'end', options?: { readonly signal?: AbortSignal; readonly turnId?: string }): Promise<void | CodexStopEpoch>
 }
 interface BoundaryFile { v: 2; threads: Record<string, CodexBoundary> }
 const empty = (): BoundaryFile => ({ v: 2, threads: Object.create(null) })
@@ -41,12 +41,13 @@ export function createCodexBoundaryStore(file: string): CodexBoundaryStore {
     },
     async record(id, event, options = {}) {
       if (!identity(id)) return
-      await withFileLock(`${file}.lock`, { retryMs: 10, signal: options.signal }, async () => {
+      return withFileLock(`${file}.lock`, { retryMs: 10, signal: options.signal }, async () => {
         const state = await load()
         // A late callback cannot reopen an ended native session.
         if (state.threads[id]?.ended && event !== 'start') return
-        state.threads[id] = event === 'end' ? { ended: true }
+        const next: CodexBoundary = event === 'end' ? { ended: true }
           : event === 'Stop' && identity(options.turnId) ? { stop: { token: randomUUID(), turnId: options.turnId } } : {}
+        state.threads[id] = next
         options.signal?.throwIfAborted()
         const temporary = `${file}.${randomUUID()}.tmp`
         try {
@@ -54,6 +55,7 @@ export function createCodexBoundaryStore(file: string): CodexBoundaryStore {
           options.signal?.throwIfAborted()
           await fs.rename(temporary, file)
         } finally { await fs.unlink(temporary).catch(() => {}) }
+        return next.stop
       })
     },
   }

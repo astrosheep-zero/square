@@ -12,7 +12,7 @@ import { attachDeliverySession } from '../dist/session-lifecycle.js';
 import { dispatchEligibleCards, postAndDispatch } from '../dist/notifications.js';
 import { runCodexWatch } from '../dist/codex-watch.js';
 import { runClaudeMod } from '../dist/claude-mod.js';
-import { codexHookResponse } from '../dist/codex-hook.js';
+import { runCodexHook } from '../dist/codex-hook.js';
 import { receiveOpenCodePending } from '../dist/plugins/opencode-shared/delivery.js';
 import { retainDeliveryLedger } from '../dist/delivery-lifetime.js';
 
@@ -247,8 +247,7 @@ test('host, watcher, notification and OpenCode entry signals bound busy ledger o
     runCodexWatch(JSON.stringify({ hook_event_name: 'Stop', session_id: 'busy', turn_id: 'turn' }), f.env, abort.signal),
   ];
   const traces = [];
-  const hook = codexHookResponse({ hook_event_name: 'PostToolUse', session_id: 'busy' }, () => assert.fail('no output'),
-    { ...f.env, SQUARE_CODEX_HOOK_BUDGET_MS: '30' }, line => traces.push(line));
+  const hook = runCodexHook(JSON.stringify({ hook_event_name: 'PostToolUse', session_id: 'busy' }), { ...f.env, SQUARE_CODEX_HOOK_BUDGET_MS: '30' }, () => assert.fail('no output'), line => traces.push(line));
   await sleep(50);
   abort.abort(reason);
   await Promise.all([...rejected, ...watches, hook]);

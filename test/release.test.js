@@ -131,7 +131,6 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
     'dist/codex-watch.js',
     'dist/delivery-ledger.js',
     'dist/delivery-ledger.d.ts',
-    'dist/codex-queue.js',
     ...['codex', 'codex-cli', 'codex-hook', 'codex-boundary', 'codex-endpoint', 'codex-queue', 'file-lock']
       .flatMap((name) => ['js', 'd.ts'].map((ext) => `dist/packages/agent-delivery/src/${name}.${ext}`)),
     'plugins/pi/square-pi.js',
