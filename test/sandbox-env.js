@@ -1,8 +1,8 @@
-// Test processes must not inherit a live harness session, the real square
-// registry or a real Paseo daemon: library calls read the ambient environment.
-// A real PI_SESSION_ID would bind participants to the session running the suite.
-// Loaded via `node --import`, so it runs in every test child process before the
-// test file itself. Spawned CLI children override these variables via testEnv.
+// Test processes must not inherit a live harness session or a real Paseo
+// daemon: library calls read the ambient environment. A real PI_SESSION_ID
+// would bind participants to the session running the suite. Loaded via
+// `node --import`, so it runs in every test child process before the test file
+// itself. Spawned CLI children override these variables via testEnv.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,6 +30,5 @@ process.env.PASEO_AGENT_ID = '';
 // Every test process owns its disposable delivery ledger, never the live user's ledger.
 process.env.SQUARE_DELIVERY = path.join(state, 'delivery.sqlite');
 delete process.env.SQUARE_HOST_LEDGER_ROOT;
-process.env.SQUARE_INDEX = path.join(state, 'index.ndjsonl');
 
 process.on('exit', () => fs.rmSync(state, { recursive: true, force: true }));

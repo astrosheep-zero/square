@@ -1,30 +1,16 @@
 # Default suite timing evidence
 
-Same machine. Same Node/npm commands. `/usr/bin/time -p` real seconds.
-
-## Commands
-
-Default suite (Contract Verification):
+Timed commands, run from each tree's root after building that tree once:
 
 ```
-/usr/bin/time -p node --test test/square-cli.test.js
-/usr/bin/time -p npm test
+/usr/bin/time -p env -u SQUARE_HOST_LEDGER_ROOT node --import ./test/sandbox-env.js --test test/*.test.js
+/usr/bin/time -p env -u SQUARE_HOST_LEDGER_ROOT node --import ./test/sandbox-env.js --test test/process/square-cli-render.test.js
 ```
 
-Isolated CLI rendering, outside `test/*.test.js`. The script builds first because these cases import `dist`:
+Each round is one warmup plus three measured runs per tree, with the file glob
+expanded inside that tree's working directory; medians are `real` seconds.
 
-```
-npm run test:cli-process
-```
-
-That script is `npm run build && node --test test/process/square-cli-render.test.js`.
-
-## Measurements
-
-| Suite | Command | Before | After |
-| --- | --- | --- | --- |
-| CLI smoke | `/usr/bin/time -p node --test test/square-cli.test.js` | 74.77s | 10.43s |
-| Default `npm test` | `/usr/bin/time -p npm test` | 79.64s | 14.02s |
-| Isolated CLI rendering | `npm run test:cli-process` | n/a | 17.64s real (29 pass) |
-
-Isolated rendering is not part of the default glob. Run `npm run test:cli-process` to keep those assertions green.
+| Suite | Parent a7f1fcaa median | Candidate median |
+| --- | --- | --- |
+| Default suite | 19.05s | 17.70s |
+| Opt-in CLI rendering | 24.09s | 3.43s |

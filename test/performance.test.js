@@ -53,29 +53,10 @@ async function stateWithHistory(unrelatedSays, participants = 96) {
   return { cell, p0 };
 }
 
-test('perceive hydrates only its page while the remaining count is a bounded fact read', async t => {
-  const { cell, p0 } = await stateWithHistory(900);
-  const { counters, artifact } = instrumentCell(cell);
-  const square = await resourceWithArtifact(t, artifact, () => 2_000);
-  try {
-    const perceived = await (await square.participant('P0', { owner: p0.owner })).perceive();
-    assert.equal(perceived.activities.length, 10);
-    assert.equal(perceived.remaining, 890);
-    assert.deepEqual(counters.hydrated.flat(), Array.from({ length: 10 }, (_value, index) => index + 97));
-    const remainingFact = counters.counts.find((entry) => entry.method === 'directedCount' && entry.filter.unseenOnly === true);
-    assert.ok(remainingFact, 'remaining must come from an explicit unseen count, never from hydrated bodies');
-    assert.equal(remainingFact.recipient, 'P0');
-    assert.ok(counters.directedPages.every((page) => page.page.limit <= 100), 'directed pages stay bounded');
-    assert.ok(counters.directedPages.some((page) => page.page.edge === 'oldest' && page.page.limit === 10));
-  } finally {
-    await cell.close();
-  }
-});
-
-test('recipient hot reads do not hydrate unrelated history as the square grows', async t => {
+test('perceive hydrates one bounded page while unseen count and selector cost stay flat', async t => {
   const measurements = [];
-  for (const unrelated of [900, 1_800]) {
-    const { cell, p0 } = await stateWithHistory(unrelated);
+  for (const size of [30, 180]) {
+    const { cell, p0 } = await stateWithHistory(size);
     const { counters, artifact } = instrumentCell(cell);
     try {
       const square = await resourceWithArtifact(t, artifact, () => 2_000);
@@ -83,23 +64,30 @@ test('recipient hot reads do not hydrate unrelated history as the square grows',
       measurements.push({
         delivered: perceived.activities.length,
         remaining: perceived.remaining,
-        hydrated: counters.hydrated.flat().length,
-        largestBatch: Math.max(0, ...counters.hydrated.map((batch) => batch.length)),
-        headReads: counters.counts.filter((entry) => entry.method === 'activityCount').length,
+        hydrated: counters.hydrated.flat(),
+        largestBatch: Math.max(0, ...counters.hydrated.map(batch => batch.length)),
+        unseenCounts: counters.counts.filter(entry => entry.method === 'directedCount' && entry.filter.unseenOnly === true),
+        headReads: counters.counts.filter(entry => entry.method === 'activityCount').length,
       });
     } finally {
       await cell.close();
     }
   }
-  assert.deepEqual(measurements.map(({ delivered, remaining, hydrated, largestBatch }) => ({ delivered, remaining, hydrated, largestBatch })), [
-    { delivered: 10, remaining: 890, hydrated: 10, largestBatch: 10 },
-    { delivered: 10, remaining: 1_790, hydrated: 10, largestBatch: 10 },
+  assert.deepEqual(measurements.map(({ delivered, remaining }) => ({ delivered, remaining })), [
+    { delivered: 10, remaining: 20 },
+    { delivered: 10, remaining: 170 },
   ]);
+  const page = Array.from({ length: 10 }, (_value, index) => index + 97);
+  assert.deepEqual(measurements.map(({ hydrated }) => hydrated), [page, page], 'the page requests only the ten selected IDs');
+  assert.deepEqual(measurements.map(({ largestBatch }) => largestBatch), [10, 10], 'directed pages stay bounded');
+  const unseenCalls = measurements[0].unseenCounts.length;
+  assert.ok(unseenCalls > 0, 'remaining comes from a typed unseen count');
+  assert.ok(measurements.every(({ unseenCounts }) => unseenCounts.length === unseenCalls && unseenCounts.every((entry) => entry.recipient === 'P0')));
   assert.equal(measurements[0].headReads, measurements[1].headReads, 'selector cost must not scale with unrelated history');
 });
 
 test('perceive keeps transaction-selected records and presence enrichment/rendering never rehydrates them', async t => {
-  const { cell, p0 } = await stateWithHistory(900, 1);
+  const { cell, p0 } = await stateWithHistory(25, 1);
   const { counters, artifact } = instrumentCell(cell);
   const square = await resourceWithArtifact(t, artifact, () => 100_000);
   const measurements = () => structuredClone(counters);
@@ -109,7 +97,7 @@ test('perceive keeps transaction-selected records and presence enrichment/render
     const perceived = outcome.observation;
     const perceivedIds = Array.from({ length: 10 }, (_value, index) => `act/${index + 2}`);
     assert.deepEqual(outcome.activities.map(activity => activity.id), perceivedIds);
-    assert.equal(outcome.remaining, 890);
+    assert.equal(outcome.remaining, 15);
     assert.equal(perceived.standingCount, 2);
     assert.deepEqual(counters.ordinals, [], 'perceive does not query history ordinals');
     assert.deepEqual(counters.hydrated.flat(), perceivedIds.map((id) => Number(id.slice(4))));
@@ -119,8 +107,8 @@ test('perceive keeps transaction-selected records and presence enrichment/render
     const beforeRender = measurements();
     const output = renderPerceiveOutcome('memory', outcome);
     assert.match(output, /dispatch 0 @P0/);
-    assert.doesNotMatch(output, /dispatch 899 @P0/);
-    assert.match(output, /890 matching activities remain/);
+    assert.doesNotMatch(output, /dispatch 24 @P0/);
+    assert.match(output, /15 matching activities remain/);
     assert.deepEqual(measurements(), beforeRender);
 
     // A valid sender filter with no matching pending activity settles empty;

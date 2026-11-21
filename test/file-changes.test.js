@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { observeFileVersion, observeFileMetadata } from '../dist/file-changes.js';
 import { createArtifactPort, prepareSquareBuild, writeSquareFile, observeSquareRevision } from '../dist/artifact.js';
@@ -13,16 +12,19 @@ function fixture(t) {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return path.join(directory, 'SQUARE.square');
 }
-function fakeWatch(t) {
+
+function fakeWatch(t, { unavailable = false } = {}) {
   const callbacks = [];
   let closed = 0;
+  let failing = unavailable;
   t.mock.method(fs, 'watch', (_directory, callback) => {
+    if (failing) throw Object.assign(new Error('no watcher capacity'), { code: 'ENOSPC' });
     callbacks.push(callback);
     const watcher = new EventEmitter();
     watcher.close = () => { closed++; };
     return watcher;
   });
-  return { callbacks, closed: () => closed };
+  return { callbacks, closed: () => closed, recover: () => { failing = false; } };
 }
 
 test('canonical subscribers share watcher and read; abort/close stay local and final release disposes it', async (t) => {
@@ -78,45 +80,55 @@ test('an edge during a shared read is rechecked, including a waiter arriving aft
   assert.equal(reads, 2);
 });
 
-test('unavailable watches recover on the real fallback interval without loading history', async (t) => {
+test('an unavailable watcher recovers a real commit through the fallback interval', async (t) => {
   const file = fixture(t);
   await writeSquareFile(file, await prepareSquareBuild({ force: true, hardCap: null }, 'fallback'));
+  t.mock.timers.enable({ apis: ['setInterval'] });
   t.mock.method(fs, 'watch', () => { throw Object.assign(new Error('no watcher capacity'), { code: 'ENOSPC' }); });
+  const observer = await observeSquareRevision(file);
   const cell = createArtifactPort(file);
-  t.after(() => cell.close());
+  t.after(async () => { await cell.close(); observer.close(); });
+  const baseline = await observer.read();
+  const waiting = observer.changed(baseline, 4_000);
   await cell.transactAs({ kind: 'join', participant: 'Alice', owner: ':' },
     facts => facts.land({ kind: 'join', actor: 'Alice', at: 1 }));
-  const baseline = await cell.revision();
-  const waiting = cell.changed(baseline, 4_000);
-  await sleep(40);
-  await cell.transactAs({ kind: 'participant', seat: (await cell.read(facts => facts.seat('Alice'))).value },
-    facts => facts.land({ kind: 'say', actor: 'Alice', at: 2, body: 'wake revision observer' }));
+  t.mock.timers.tick(2_000);
   assert.equal(await waiting, true);
+  assert.equal(await observer.read(), 1);
 });
 
-test('missing revisions stay quiet across reconciliation and wake on return', async (t) => {
+test('a missing revision stays quiet, then appears and disappears on real filesystem edges', async (t) => {
   const file = fixture(t);
-  const watcher = fakeWatch(t);
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const watcher = fakeWatch(t, { unavailable: true });
+  const first = await observeSquareRevision(file);
+  assert.equal(await first.read(), null);
+  const controller = new AbortController();
+  const reason = new Error('caller stopped waiting');
+  const cancelled = assert.rejects(first.changed(null, Infinity, controller.signal), (error) => error === reason);
+  t.mock.timers.tick(2_000);
+  assert.equal(await first.read(), null);
+  controller.abort(reason);
+  await cancelled;
+  first.close();
+
+  watcher.recover();
   const observer = await observeSquareRevision(file);
   t.after(() => observer.close());
-  assert.equal(await observer.read(), null);
-  const quiet = observer.changed(null, 80);
-  watcher.callbacks[0]('rename', path.basename(file));
-  assert.equal(await quiet, false);
-
   const appeared = observer.changed(null, 4_000);
-  await writeSquareFile(file, prepareSquareBuild({ force: true, hardCap: null }, 'returned'));
-  watcher.callbacks[0]('rename', path.basename(file));
+  await writeSquareFile(file, await prepareSquareBuild({ force: true, hardCap: null }, 'returned'));
+  watcher.callbacks.at(-1)('rename', path.basename(file));
   assert.equal(await appeared, true);
   assert.equal(await observer.read(), 0);
-  const removed = observer.changed(0, 1_000);
+
+  const removed = observer.changed(0, 4_000);
   fs.unlinkSync(file);
-  watcher.callbacks[0]('rename', path.basename(file));
+  watcher.callbacks.at(-1)('rename', path.basename(file));
   assert.equal(await removed, true);
   assert.equal(await observer.read(), null);
 
   fs.writeFileSync(file, 'not a database');
-  watcher.callbacks[0]('change', path.basename(file));
+  watcher.callbacks.at(-1)('change', path.basename(file));
   await assert.rejects(observer.read(), { code: 'invalid_args' });
 });
 
