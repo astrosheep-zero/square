@@ -31,7 +31,7 @@ export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string
     `${style('blocked', '✕')} you are already perceiving`,
     `  · an active perceive is already running for ${participantIdentity(opts.name)}`,
     `  · ${opts.surface === 'tool' ? 'takeover' : '--takeover'} lets a new perceive take over`,
-    participantAction(opts.surface, opts.squarePath, opts.name, opts.owner, 'perceive', { idle: '30m', takeover: true }),
+    participantAction(opts.surface, opts.squarePath, opts.name, opts.owner, 'perceive', { wait: '30m', takeover: true }),
   ].join('\n');
 }
 
@@ -68,7 +68,7 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
           ? style('dim', `○ dust settles on the flagstones — ${formatDuration(idleMs)} of quiet`)
           : style('dim', '○ only footsteps in the square — nothing new for you');
       // The quiet report never repeats the perceive just run.
-      const hints = [participantAction(opts.surface, opts.squarePath, opts.name, opts.owner, 'perceive', { idle: '30m' })];
+      const hints = [participantAction(opts.surface, opts.squarePath, opts.name, opts.owner, 'perceive', { wait: '30m' })];
       return [
         quiet,
         ...(opts.showPerceiveHint === false ? [] : hints),
@@ -124,10 +124,10 @@ export function renderPerceiveOutcome(
     : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${surface === 'tool' ? formatToolAction('perceive', { location: displayPath(location), as: name, ...(options.from?.length ? { from: options.from } : {}), ...(options.mention ? { mention: true } : {}), ...(options.limit !== undefined ? { limit: options.limit } : {}) }) : continuationCommand(location, name, options, owner)}`;
   const terminal = stop === undefined ? '' : renderWatchStatus({
     ...statusOptions, status: stop,
-    ...(stop === 'idle' && options.idle !== undefined ? { idleMs: options.idle } : {}),
+    ...(stop === 'idle' && options.wait !== undefined ? { idleMs: options.wait } : {}),
   });
   const fallback = stop === undefined && !projection.deliveryAvailable && data.remaining === 0
-    ? `${participantAction(surface, location, name, owner, 'perceive', { idle: '30m' })}\n  stay available for new activity` : '';
+    ? `${participantAction(surface, location, name, owner, 'perceive', { wait: '30m' })}\n  stay available for new activity` : '';
   const hint = data.hint === undefined ? '' : style('dim', `· ${data.hint}`);
   return withPathOutput(location, [terminal, rendered, hint, remaining, fallback].filter(Boolean).join('\n\n'), header);
 }

@@ -185,13 +185,13 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
   tool('perceive', 'Take in what reached you since you last looked: mentions, replies, and words from those you listen to.', {
     as: participant,
     id: activityId.optional().describe('Open this one activity in full, like act/12.'),
-    idle: z.string().optional().describe('When nothing is waiting, wait for activity or this much quiet, like "30s".'),
+    wait: z.string().optional().describe('If nothing is waiting, block until something arrives or this much time passes, like "30s".'),
     from: stringArray.optional().describe('Only what these participants said.'),
     mention: z.boolean().optional().describe('Only what was addressed to you.'),
     limit: z.number().int().min(1).max(PERCEIVE_MAX_LIMIT).optional().describe('At most this many at once (default 10).'),
     takeover: z.boolean().optional().describe('Take over from another active idle perceive for this participant.'),
-  }, async (square, { as, idle, ...args }, control, binding) => {
-    const options: PerceiveOptions = { ...args, ...(idle === undefined ? {} : { idle: parseDurationMs(idle, 'idle') }) };
+  }, async (square, { as, wait, ...args }, control, binding) => {
+    const options: PerceiveOptions = { ...args, ...(wait === undefined ? {} : { wait: parseDurationMs(wait, 'wait') }) };
     const result = await (await selectOwnSeat(square, binding.identity.owner, as)).perceive({ ...options, observe: true }, control);
     // The CLI always spells the default cap in its continuation, so the tool does too; an exact id keeps its own coordinates.
     const renderOptions = options.id === undefined ? { ...options, limit: options.limit ?? PERCEIVE_DEFAULT_LIMIT } : options;

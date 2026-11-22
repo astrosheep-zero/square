@@ -500,7 +500,7 @@ test('stdio disconnect aborts throttled express and idle perceive without later 
   await request('tools/call', { name: 'express', arguments: { location: squarePath, body: 'first word' } });
   await request('tools/call', { name: 'perceive', arguments: { location: squarePath } });
   send('tools/call', { name: 'express', arguments: { location: squarePath, body: 'orphan expression' } });
-  send('tools/call', { name: 'perceive', arguments: { location: squarePath, idle: '60s' } });
+  send('tools/call', { name: 'perceive', arguments: { location: squarePath, wait: '60s' } });
   await request('ping');
   await sleep(100);
 

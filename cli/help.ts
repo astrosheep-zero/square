@@ -49,9 +49,9 @@ const COMMANDS: readonly CommandHelp[] = [
   { names: ['unlisten'], usage: '--as <name> unlisten <participant>', usesSquare: true, group: 'participant', summary: "Stop listening to one participant's future activity." },
   { names: ['ignore'], usage: '--as <name> ignore <participant>', usesSquare: true, group: 'participant', summary: 'Stop hearing one participant\'s future activity.' },
   {
-    names: ['perceive'], usage: '--as <name> perceive [--id <activity-id>] [--idle <duration>] [--from <names>] [--mention] [--limit <count>] [--takeover]', usesSquare: true, group: 'participant',
+    names: ['perceive'], usage: '--as <name> perceive [--id <activity-id>] [--wait <duration>] [--from <names>] [--mention] [--limit <count>] [--takeover]', usesSquare: true, group: 'participant',
     summary: 'Perceive directed conversation since you last looked.',
-    details: ['Modes:', '  --id <activity-id> Open one activity addressed to you in full.', '  --idle <duration>  Wait for something relevant, or for quiet to last this long.', '', 'Filters:', '  --from <names>     Match only comma-separated participants.', '  --mention          Match direct attention for your current participant.', '  --limit <count>    Return one page (default 10, maximum 100).', '', 'Recovery:', '  --takeover         Take over from another active perceive for this participant.'],
+    details: ['Modes:', '  --id <activity-id> Open one activity addressed to you in full.', '  --wait <duration>  If nothing is waiting, block until something arrives or this much time passes.', '', 'Filters:', '  --from <names>     Match only comma-separated participants.', '  --mention          Match direct attention for your current participant.', '  --limit <count>    Return one page (default 10, maximum 100).', '', 'Recovery:', '  --takeover         Take over from another active perceive for this participant.'],
   },
   { names: ['done'], usage: '--as <name> done', usesSquare: true, group: 'participant', summary: 'Step out of the square.' },
   {

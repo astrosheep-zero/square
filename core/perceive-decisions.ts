@@ -10,7 +10,7 @@ import { consumeReceived, ReceiveError, selectReceivedHeads, type ReceiveRead, t
 
 export interface PerceiveOptions extends ObservationOptions {
   readonly id?: ActivityId;
-  readonly idle?: number;
+  readonly wait?: number;
   readonly from?: readonly string[];
   readonly mention?: boolean;
   readonly limit?: number;
@@ -99,7 +99,7 @@ export function decidePerceive(facts: SquareWrite, requestedName: string, option
   if (options.id !== undefined) {
     viewer = resolveKnownName(facts, requestedName);
     perceiveLimit(options.limit);
-    if (['idle', 'from', 'mention', 'limit'].some((key) => Object.hasOwn(options, key))) throw new SquareError('invalid_args', 'Perceive id cannot be combined with idle, from, mention or limit.');
+    if (['wait', 'from', 'mention', 'limit'].some((key) => Object.hasOwn(options, key))) throw new SquareError('invalid_args', 'Perceive id cannot be combined with wait, from, mention or limit.');
     const index = parseActivityId(options.id);
     if (index === undefined) throw new SquareError('invalid_args', 'Invalid perceive id: expected an activity id like act/12.');
     selection = { kind: 'exact', key: index, remainingQuery: filter };

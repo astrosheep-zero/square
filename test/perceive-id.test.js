@@ -60,7 +60,7 @@ test('exact perceive separates unaddressed and missing ids in typed facts', asyn
       return true;
     });
   }
-  await assert.rejects(bob.perceive({ id: second.id, idle: 0 }), { code: 'invalid_args' });
+  await assert.rejects(bob.perceive({ id: second.id, wait: 0 }), { code: 'invalid_args' });
   await assert.rejects(bob.perceive({ id: 'garbage' }), { code: 'invalid_args' });
   assert.equal((await alice.pending()).activities.length, 0);
 });
@@ -77,7 +77,7 @@ test('CLI exact perceive rejects conflicts, explains a miss, and reads the full 
   const file = tempSquare();
   t.after(() => fs.rmSync(path.dirname(file), { recursive: true, force: true }));
   const { bob, first, second, bare, body } = await setup(t, file);
-  const conflict = run(withName(file, 'Bob', ['perceive', '--id', second.id, '--idle', '1s']));
+  const conflict = run(withName(file, 'Bob', ['perceive', '--id', second.id, '--wait', '1s']));
   assert.equal(conflict.status, 2, conflict.stdout + conflict.stderr);
   assert.match(conflict.stderr, /--id cannot be combined/);
   assert.ok(!conflict.stdout.includes(body));

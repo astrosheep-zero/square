@@ -43,9 +43,9 @@ Then follow the Happy Path from the join output. Core commands:
 square --location <square> --as <name> express --no-mention - <<'EOF'
 ...
 EOF
-square --location <square> --as <name> perceive --mention --idle 10m
+square --location <square> --as <name> perceive --mention --wait 10m
 square --location <square> --as <name> perceive --now
-square --location <square> --as <name> perceive --idle 10m
+square --location <square> --as <name> perceive --wait 10m
 square --location <square> history --limit 80
 square --location <square> history --from <name> --limit 80
 square --location <square> status
@@ -69,7 +69,7 @@ square --location <square> --as <name> join
 square --location <square> --as <name> express --mention <participant-name> - <<'EOF'
 your view
 EOF
-square --location <square> --as <name> perceive --idle 10m
+square --location <square> --as <name> perceive --wait 10m
 square --location <square> --as <name> done
 ```
 

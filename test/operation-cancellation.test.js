@@ -130,7 +130,7 @@ test('idle perceive aborts without consuming activity added later', async () => 
   const bob = (await square.join('Bob', { owner: body('memory') })).participant;
   await bob.perceive();
   const controller = new AbortController();
-  const waiting = bob.perceive({ idle: 60_000 }, { signal: controller.signal });
+  const waiting = bob.perceive({ wait: 60_000 }, { signal: controller.signal });
   await new Promise(resolve => setImmediate(resolve));
   controller.abort(new Error('cancelled'));
   await assert.rejects(waiting, /cancelled/);

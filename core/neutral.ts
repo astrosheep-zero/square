@@ -50,7 +50,7 @@ export interface SquareErrorFacts {
 }
 
 export interface PerceiveWaitStart {
-  readonly idleMs: number;
+  readonly waitMs: number;
   readonly replacementRequested: boolean;
   readonly replaced: boolean;
 }

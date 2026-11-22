@@ -307,7 +307,7 @@ export class SeatedParticipant implements Participant {
     let name = this.name, subject: 'caller' | 'filter' = 'caller';
     let leaseId: string | undefined, seat: Seat | undefined;
     let selection = options;
-    const idle = options.idle ?? 0;
+    const wait = options.wait ?? 0;
     const complete = async (perceived: PerceiveSelection | undefined, reason: PerceiveReason = 'drained'): Promise<PerceiveResult> => {
       const view = perceived ?? (await this.resource.artifact.read(facts => observePerceiveSelection(facts, name, [], {
         unseenOnly: true, senders: selection.from, ...(selection.mention === true ? { attentionOnly: true } : {}),
@@ -342,10 +342,10 @@ export class SeatedParticipant implements Participant {
       checkControl(control);
       await reconcile(this.resource, control?.signal);
       validateName(name);
-      if (!Number.isFinite(idle) || idle < 0) throw new SquareError('invalid_args', 'Perceive idle duration must be a non-negative number');
-      if (options.id !== undefined && ['idle', 'from', 'mention', 'limit', 'takeover'].some(key => Object.hasOwn(options, key)))
-        throw new SquareError('invalid_args', 'Perceive id cannot be combined with idle, from, mention, limit or takeover');
-      if (Object.hasOwn(options, 'takeover') && idle === 0) throw new SquareError('invalid_args', 'Perceive takeover requires a positive idle duration');
+      if (!Number.isFinite(wait) || wait < 0) throw new SquareError('invalid_args', 'Perceive wait duration must be a non-negative number');
+      if (options.id !== undefined && ['wait', 'from', 'mention', 'limit', 'takeover'].some(key => Object.hasOwn(options, key)))
+        throw new SquareError('invalid_args', 'Perceive id cannot be combined with wait, from, mention, limit or takeover');
+      if (Object.hasOwn(options, 'takeover') && wait === 0) throw new SquareError('invalid_args', 'Perceive takeover requires a positive wait duration');
       perceiveLimit(options.limit);
       const probe = (await this.resource.artifact.read(facts => {
         name = resolveKnownName(facts, this.name);
@@ -355,11 +355,11 @@ export class SeatedParticipant implements Participant {
         const from = options.from?.map(target => resolveKnownName(facts, target));
         selection = { ...options, ...(from === undefined ? {} : { from }) };
         subject = 'caller';
-        if (idle !== 0 || options.id !== undefined) return undefined;
+        if (wait !== 0 || options.id !== undefined) return undefined;
         const page = selectPerceivePage(facts, name, selection);
         return page.indexes.length === 0 ? observePerceiveSelection(facts, page.participant, [], page.filter, this.resource.clock()) : undefined;
       }, control?.signal)).value;
-      if (idle === 0) {
+      if (wait === 0) {
         const data = probe ?? (await this.perceivePage(name, seat!, selection, control))!;
         return await complete(data);
       }
@@ -370,7 +370,7 @@ export class SeatedParticipant implements Participant {
       const start = await acquireWatchLease(this.resource.artifact, seat!, this.resource.clock(), crypto.randomUUID(), watch, control?.signal);
       if (start.type === 'active') return await complete(undefined, 'already-active');
       leaseId = start.leaseId;
-      control?.onProgress?.({ kind: 'perceive-started', participant: name, idleMs: idle, replacementRequested: options.takeover ?? false, replaced: start.replaced });
+      control?.onProgress?.({ kind: 'perceive-started', participant: name, waitMs: wait, replacementRequested: options.takeover ?? false, replaced: start.replaced });
       const quietSince = this.resource.clock();
       let nextHeartbeat = start.heartbeatAt + WATCH_HEARTBEAT_MS;
       while (true) {
@@ -385,11 +385,11 @@ export class SeatedParticipant implements Participant {
         const perceived = await this.perceivePage(name, seat!, selection, control, leaseId);
         if (perceived === null) return await complete(undefined, 'replaced');
         if (perceived.activities.length > 0) return await complete(perceived);
-        if (this.resource.clock() - quietSince >= idle) {
+        if (this.resource.clock() - quietSince >= wait) {
           const owns = await ownsWatchLease(this.resource.artifact, seat!, this.resource.clock(), leaseId, control?.signal);
           return await complete(undefined, owns ? 'idle' : 'replaced');
         }
-        const deadline = Math.min(nextHeartbeat, quietSince + idle);
+        const deadline = Math.min(nextHeartbeat, quietSince + wait);
         await this.resource.artifact.changed(baseline, Math.max(0, deadline - this.resource.clock()), control?.signal);
       }
     } catch (error) {

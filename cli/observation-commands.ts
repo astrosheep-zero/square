@@ -144,7 +144,7 @@ export const streamCommand: CommandSpec<StreamIntent> = {
 
 export const perceiveCommand: CommandSpec<PerceiveOptions> = {
   parse(argv, context) {
-    let idle: number | undefined;
+    let wait: number | undefined;
     let mention: boolean | undefined;
     let limit: number | undefined;
     let id: ActivityId | undefined;
@@ -160,8 +160,8 @@ export const perceiveCommand: CommandSpec<PerceiveOptions> = {
       } else if (argv[index] === '--from') {
         participants.push(...parseNameList(requireValue(argv, index, argv[index]), argv[index]));
         index += 1;
-      } else if (argv[index] === '--idle') {
-        idle = parseDurationMs(requireValue(argv, index, argv[index]), argv[index]);
+      } else if (argv[index] === '--wait') {
+        wait = parseDurationMs(requireValue(argv, index, argv[index]), argv[index]);
         index += 1;
       } else if (argv[index] === '--mention') {
         mention = true;
@@ -172,17 +172,17 @@ export const perceiveCommand: CommandSpec<PerceiveOptions> = {
       else if (argv[index] !== '--json') fail(`✕ perceive does not know ${argv[index]}\nsquare perceive --help`);
     }
     if (id !== undefined) {
-      if (argv.some((flag) => ['--idle', '--from', '--mention', '--limit', '--takeover'].includes(flag))) {
-        fail('✕ --id cannot be combined with --idle, --from, --mention, --limit or --takeover\nsquare perceive --help');
+      if (argv.some((flag) => ['--wait', '--from', '--mention', '--limit', '--takeover'].includes(flag))) {
+        fail('✕ --id cannot be combined with --wait, --from, --mention, --limit or --takeover\nsquare perceive --help');
       }
       return { id };
     }
-    if (takeover && idle === undefined) fail('--takeover can only be used with --idle.');
+    if (takeover && wait === undefined) fail('--takeover can only be used with --wait.');
     return {
       ...(participants.length > 0 ? { from: participants } : {}),
       ...(mention === undefined ? {} : { mention }),
       limit: limit ?? PERCEIVE_DEFAULT_LIMIT,
-      ...(idle === undefined ? {} : { idle }),
+      ...(wait === undefined ? {} : { wait }),
       ...(takeover ? { takeover } : {}),
     };
   },

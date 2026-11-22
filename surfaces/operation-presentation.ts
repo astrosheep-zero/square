@@ -70,7 +70,7 @@ export function renderJoinResult(data: JoinResult, owner?: string, surface: Pres
     now: after.now, preview: 200, perception: event.perception,
   }).text).filter(Boolean).join('\n\n');
   const fallback = after.deliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
-    '', participantAction(surface, after.location, name, owner, 'perceive', { idle: '30m' }),
+    '', participantAction(surface, after.location, name, owner, 'perceive', { wait: '30m' }),
     '  · stay within earshot — keep this perceive open for new activity',
   ];
   const entryLine = data.kind === 'joined' ? '● you stepped into the square'

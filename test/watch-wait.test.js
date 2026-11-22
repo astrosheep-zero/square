@@ -17,7 +17,7 @@ async function fixture(t) {
     await square.join('Host', { owner });
     await square.join('Bob', { owner });
   } finally { await square.close(); }
-  const child = spawn(process.execPath, [CLI, ...withPath(file, ['--owner', owner, '--as', 'Bob', 'perceive', '--mention', '--idle', '120ms'])], {
+  const child = spawn(process.execPath, [CLI, ...withPath(file, ['--owner', owner, '--as', 'Bob', 'perceive', '--mention', '--wait', '120ms'])], {
     cwd: ROOT, env: testEnv(), stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';

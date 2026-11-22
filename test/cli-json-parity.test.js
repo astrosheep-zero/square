@@ -131,10 +131,10 @@ test('an active perceive keeps its exit code and typed already-active result', a
   const controller = new AbortController();
   let started;
   const ready = new Promise((resolve) => { started = resolve; });
-  const waiting = participant.perceive({ idle: 60_000 }, { signal: controller.signal, onProgress: started });
+  const waiting = participant.perceive({ wait: 60_000 }, { signal: controller.signal, onProgress: started });
   try {
     await ready;
-    const result = await runAsync(withName(file, 'Alice', ['perceive', '--idle', '1m', '--json']), { cwd, env });
+    const result = await runAsync(withName(file, 'Alice', ['perceive', '--wait', '1m', '--json']), { cwd, env });
     assert.equal(result.status, 1, result.stdout + result.stderr);
     const receipt = JSON.parse(result.stdout);
     assert.equal(receipt.reason, 'already-active');

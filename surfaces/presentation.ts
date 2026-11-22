@@ -66,10 +66,10 @@ export function participantCommandPrefix(squarePath: string, name: string, owner
   return `square --location ${quoteShell(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath) ? squarePath : path.resolve(squarePath))} --as ${quoteShell(name)}${owner === undefined ? '' : ` --owner ${quoteShell(owner)}`}`;
 }
 
-export function participantAction(surface: PresentationSurface | undefined, squarePath: string, name: string, owner: string | undefined, verb: 'perceive' | 'done' | 'join', options: { idle?: '30m'; takeover?: true } = {}): string {
+export function participantAction(surface: PresentationSurface | undefined, squarePath: string, name: string, owner: string | undefined, verb: 'perceive' | 'done' | 'join', options: { wait?: '30m'; takeover?: true } = {}): string {
   return surface === 'tool'
     ? formatToolAction(verb, { location: displayPath(squarePath), as: name, ...options })
-    : `${participantCommandPrefix(squarePath, name, owner)} ${verb}${options.idle === undefined ? '' : ` --idle ${options.idle}`}${options.takeover ? ' --takeover' : ''}`;
+    : `${participantCommandPrefix(squarePath, name, owner)} ${verb}${options.wait === undefined ? '' : ` --wait ${options.wait}`}${options.takeover ? ' --takeover' : ''}`;
 }
 
 function formatAge(ms: number | undefined): string {

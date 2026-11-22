@@ -48,7 +48,7 @@ async function armPerceive(c, options = { from: ['Alice'] }) {
   };
   const bob = await waiter.participant('Bob', { owner: 'perceive:bob' });
   const abort = new AbortController();
-  const result = bob.perceive({ idle: 10_000, ...options }, { signal: abort.signal,
+  const result = bob.perceive({ wait: 10_000, ...options }, { signal: abort.signal,
     onProgress: progress => { if (progress.kind === 'perceive-started') started.resolve(); },
   });
   // Cleanup may cancel a still-running perceive; observe its rejection from the start.
