@@ -1,5 +1,9 @@
 # @astrosheep/agent-delivery
 
+Square owns this in-repo workspace and compiles its `src/` modules directly,
+not through the published npm specifier. The published package exports are a
+separate contract for external consumers. agent-delivery must not import Square.
+
 One-way plain-text delivery into an existing agent session. No replies, no
 completion or status checks, no automatic retry. Native `connect` transports
 never start services; Codex `transport: 'cli'` allows normal CLI startup unless

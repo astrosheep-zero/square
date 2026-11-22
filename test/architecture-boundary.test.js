@@ -9,7 +9,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const extensions = ['.ts', '.tsx', '.js', '.mjs', '.cts', '.mts', '.cjs'];
 const compiled = { '.js': ['.ts', '.tsx'], '.mjs': ['.mts'], '.cjs': ['.cts'] };
-const workspaces = ['packages/agent-delivery', 'packages/slack-bridge'].map((dir) => ({ dir, pkg: JSON.parse(fs.readFileSync(path.join(root, dir, 'package.json'), 'utf8')) }));
+const [agentDelivery, slackBridge] = ['packages/agent-delivery', 'packages/slack-bridge'].map((dir) => ({ dir, pkg: JSON.parse(fs.readFileSync(path.join(root, dir, 'package.json'), 'utf8')) }));
 const allowed = {
   core: ['core'], storage: ['core', 'storage'], artifact: ['core', 'storage', 'artifact'],
   ledger: ['core', 'storage', 'ledger'],
@@ -24,8 +24,15 @@ const allowed = {
   'slack-consumer': ['slack-consumer', 'entry'], 'example-consumer': ['example-consumer', 'entry', 'ledger'],
   'build-tooling': ['build-tooling'],
 };
+const [sdkEntry, paseoEntry, cliEntry] = ['index.ts', 'paseo.ts', 'square.ts'];
+const entryFiles = new Set([sdkEntry, paseoEntry, cliEntry]);
+const ledgerDriver = 'ledger/delivery-ledger-sqlite.ts';
+const sqliteOwners = new Set([ledgerDriver, 'packages/agent-delivery/src/file-lock.ts']);
+const artifactOwner = 'artifact/artifact.ts', artifactPort = 'core/ports.ts';
+const privateApp = new Set(['app/square.ts', 'app/participant.ts']);
+const artifactPortOwners = new Set([artifactOwner, ...privateApp, 'app/square-posting.ts', 'app/stream.ts', 'core/wakes.ts']);
 function layer(file) {
-  if (['index.ts', 'paseo.ts', 'square.ts'].includes(file)) return 'entry';
+  if (entryFiles.has(file)) return 'entry';
   if (file.startsWith('plugins/paseo/shared/')) return 'paseo-shared';
   if (file.startsWith('plugins/paseo/')) return 'paseo-plugin';
   if (file.startsWith('plugins/')) return 'square-plugin';
@@ -36,15 +43,12 @@ function layer(file) {
   const dir = file.split('/')[0];
   return ['core', 'storage', 'artifact', 'ledger', 'app', 'hosts', 'api', 'surfaces', 'cli'].includes(dir) ? dir : undefined;
 }
-function productionSources() {
-  function collect(dir) {
-    return fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((entry) => {
-      const file = path.posix.join(dir, entry.name);
-      if (entry.isDirectory()) return ['.git', '.keiyaku', '.agents', 'node_modules', 'dist', 'test', 'tests', 'guides', 'skills'].includes(entry.name) || entry.name.startsWith('.') ? [] : collect(file);
-      return extensions.includes(path.posix.extname(file)) ? [[file, fs.readFileSync(path.join(root, file), 'utf8')]] : [];
-    });
-  }
-  return new Map(collect(''));
+function collectSources(dir = '') {
+  return fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((entry) => {
+    const file = path.posix.join(dir, entry.name);
+    if (entry.isDirectory()) return ['.git', '.keiyaku', '.agents', 'node_modules', 'dist', 'test', 'tests', 'guides', 'skills'].includes(entry.name) || entry.name.startsWith('.') ? [] : collectSources(file);
+    return extensions.includes(path.posix.extname(file)) ? [[file, fs.readFileSync(path.join(root, file), 'utf8')]] : [];
+  });
 }
 const id = (node, name) => !!node && ts.isIdentifier(node) && node.text === name;
 const text = (node) => node && ts.isStringLiteralLike(node) ? node.text : undefined;
@@ -67,16 +71,9 @@ function requireScope(identifier) {
   if (ts.isFunctionExpression(binding) || ts.isClassExpression(binding)) return binding;
   if (ts.isVariableDeclaration(binding) || ts.isParameter(binding) || ts.isFunctionDeclaration(binding) || ts.isClassDeclaration(binding) || ts.isEnumDeclaration(binding)) return ts.getEnclosingBlockScopeContainer(binding);
 }
-function bindings(node) {
-  if (ts.isImportTypeNode(node)) return [node.qualifier?.getText().split('.')[0] ?? '*'];
-  if (ts.isImportEqualsDeclaration(node)) return ['*'];
-  const clause = node.importClause ?? node.exportClause;
-  const group = clause?.namedBindings ?? node.exportClause;
-  return [...(node.importClause?.name ? ['default'] : []), ...(group?.elements?.map((element) => (element.propertyName ?? element.name).text) ?? (group || !node.importClause?.name ? ['*'] : []))];
-}
 const sql = /^\s*(?:(?:CREATE|DROP|ALTER)\s+TABLE\b|INSERT(?:\s+OR\s+\w+)?\s+INTO\b|SELECT\s+[\s\S]+?\s+FROM\b|UPDATE\s+[\s\S]+?\s+SET\b|DELETE\s+FROM\b|PRAGMA\s+\w|BEGIN\s+(?:EXCLUSIVE|IMMEDIATE)\b)/i;
 const sqlite = /^(?:node:|bun:)sqlite$/;
-const sqlOwner = (file) => ['storage', 'artifact'].includes(layer(file)) || ['ledger/delivery-ledger-sqlite.ts', 'packages/agent-delivery/src/file-lock.ts'].includes(file);
+const sqlOwner = (file) => ['storage', 'artifact'].includes(layer(file)) || sqliteOwners.has(file);
 const ambient = /^(?:SQUARE_DELIVERY|SQUARE_NOW_MS|squareClock|CLAUDE_CODE_SESSION_ID|CODEX_THREAD_ID|OPENCODE_SESSION_ID|PI_SESSION_ID|PASEO_AGENT_ID)$/;
 function scan(file, source, issue) {
   const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
@@ -98,13 +95,19 @@ function scan(file, source, issue) {
           if (node.importClause?.name) values.unshift('default');
           if (types.length) record(node, text(specifier), types, true);
           if (values.length || !elements.length) record(node, text(specifier), values);
-        } else record(node, text(specifier), bindings(node), isType);
+        } else if (ts.isImportTypeNode(node)) {
+          record(node, text(specifier), [node.qualifier?.getText().split('.')[0] ?? '*'], isType);
+        } else {
+          const defaultName = node.importClause?.name ? ['default'] : [];
+          const names = elements?.map((item) => (item.propertyName ?? item.name).text) ?? (group || !defaultName.length ? ['*'] : []);
+          record(node, text(specifier), [...defaultName, ...names], isType);
+        }
       }
     }
     if (ts.isImportCall(node) || (ts.isCallExpression(node) && id(unwrap(node.expression), 'require'))) calls.push(node);
     const env = isEnv(node);
     if (env && writesEnv(node)) report('env-write', node, 'process.env');
-    const protectedLayer = ['core', 'app', 'api'].includes(layer(file)) || ['index.ts', 'hosts/notifications.ts'].includes(file);
+    const protectedLayer = ['core', 'app', 'api'].includes(layer(file)) || [sdkEntry, 'hosts/notifications.ts'].includes(file);
     const redactionDefault = file === 'core/diagnostic-redaction.ts' && ts.findAncestor(node, (parent) => ts.isParameter(parent) && parent.getText() === 'env: NodeJS.ProcessEnv = process.env');
     if (protectedLayer && !redactionDefault && (env || ambient.test(ts.isIdentifier(node) ? node.text : text(node) ?? '') || (ts.isQualifiedName(node) && id(node.left, 'NodeJS') && id(node.right, 'ProcessEnv')))) report('ambient-env', node);
     const sqlText = ts.isTemplateExpression(node) ? [node.head, ...node.templateSpans.map((span) => span.literal)].map((part) => part.text).join('?') : text(node) ?? '';
@@ -133,10 +136,9 @@ function resolve(edge, sources, pkg) {
   const { from, specifier } = edge;
   if (specifier?.startsWith('.')) return matchSource(path.posix.join(path.posix.dirname(from), specifier), sources);
   if (specifier && (path.posix.isAbsolute(specifier) || specifier.startsWith('file:') || specifier.startsWith('#'))) return undefined;
-  const workspace = [{ dir: '', pkg }, ...workspaces].find(({ pkg: candidate }) => specifier === candidate.name || specifier?.startsWith(`${candidate.name}/`));
+  const workspace = [{ dir: '', pkg }, agentDelivery, slackBridge].find(({ pkg: candidate }) => specifier === candidate.name || specifier?.startsWith(`${candidate.name}/`));
   if (!workspace) return specifier === undefined ? undefined : null;
-  const entry = workspace.pkg.exports?.[`.${specifier.slice(workspace.pkg.name.length)}`];
-  const target = packageTarget(entry, edge.typeOnly ? 'types' : 'default');
+  const target = packageTarget(workspace.pkg.exports?.[`.${specifier.slice(workspace.pkg.name.length)}`], edge.typeOnly ? 'types' : 'default');
   if (!target) return undefined;
   return matchSource(workspace.dir ? path.posix.join(workspace.dir, target.replace(/^\.\/dist\//, 'src/')) : target, sources);
 }
@@ -156,52 +158,52 @@ function violations(sources, pkg = manifest) {
     if (['core/receive.ts', 'core/attention.ts'].includes(from)) issue('leaf-import', edge);
     if (sqlite.test(specifier) && !sqlOwner(from)) issue('raw-sqlite', edge);
     if (origin === 'square-plugin' && from.startsWith('plugins/pi/') && /^(?:node:)?fs(?:\/promises)?$|^(?:node:|bun:)sqlite$/.test(specifier)) issue('pi-raw', edge);
-    if (target === 'core/ports.ts' && (!edge.typeOnly || names.includes('*') || (names.includes('SquareArtifactPort') && (!edge.explicit || !['artifact/artifact.ts', 'app/square.ts', 'app/participant.ts', 'app/square-posting.ts', 'app/stream.ts', 'core/wakes.ts'].includes(from))))) issue('artifact-port', edge);
+    if (target === artifactPort && (!edge.typeOnly || names.includes('*') || (names.includes('SquareArtifactPort') && (!edge.explicit || !artifactPortOwners.has(from))))) issue('artifact-port', edge);
     if (from === 'core/neutral.ts' && target?.startsWith('core/')) issue('neutral-edge', edge);
     if (origin === 'storage' && destination === 'core' && target !== 'core/neutral.ts') issue('neutral-edge', edge);
     if (from.startsWith('cli/') && destination === 'hosts' && names.includes('*')) issue('host-namespace', edge);
-    if (target === 'ledger/delivery-ledger-sqlite.ts' && origin !== 'ledger') issue('driver-private', edge);
-    if (['app/square.ts', 'app/participant.ts'].includes(target) && !['app', 'api'].includes(origin)) issue('app-private', edge);
-    if (target === 'artifact/artifact.ts' && !['artifact', 'app'].includes(origin)) issue('artifact-private', edge);
-    if (target === 'square.ts') issue('entry-import', edge);
+    if (target === ledgerDriver && origin !== 'ledger') issue('driver-private', edge);
+    if (privateApp.has(target) && !['app', 'api'].includes(origin)) issue('app-private', edge);
+    if (target === artifactOwner && !['artifact', 'app'].includes(origin)) issue('artifact-private', edge);
+    if (!['agent-delivery', 'slack-consumer', 'example-consumer', 'build-tooling'].includes(origin) && (specifier === agentDelivery.pkg.name || specifier?.startsWith(`${agentDelivery.pkg.name}/`))) issue('agent-delivery-package', edge);
+    if (target === cliEntry) issue('entry-import', edge);
   }
-  const sdk = new Set(['index.ts', 'api/square-api.ts', ...['default', 'types'].map((kind) => packageTarget(pkg.exports?.['.'], kind)).filter(Boolean).map((target) => matchSource(target, sources)).filter(Boolean)]);
+  const sdk = new Set([sdkEntry, 'api/square-api.ts', ...['default', 'types'].map((kind) => packageTarget(pkg.exports?.['.'], kind)).filter(Boolean).map((target) => matchSource(target, sources)).filter(Boolean)]);
   for (const file of sdk) for (const edge of outgoing.get(file) ?? []) if (edge.target) {
-    if (['cli', 'surfaces'].includes(layer(edge.target)) || edge.target === 'square.ts') issue('sdk-direction', edge);
+    if (['cli', 'surfaces'].includes(layer(edge.target)) || edge.target === cliEntry) issue('sdk-direction', edge);
     else sdk.add(edge.target);
   }
-  const visiting = new Set(), visited = new Set();
+  const visits = new Map();
   function visit(file) {
-    if (visiting.has(file)) { issue('cycle', { from: file }); return; }
-    if (visited.has(file)) return;
-    visiting.add(file);
+    if (visits.get(file) === 'active') { issue('cycle', { from: file }); return; }
+    if (visits.has(file)) return;
+    visits.set(file, 'active');
     for (const edge of outgoing.get(file) ?? []) if (edge.target) visit(edge.target);
-    visiting.delete(file); visited.add(file);
+    visits.set(file, 'done');
   }
   for (const file of sources.keys()) visit(file);
-  const bin = outgoing.get('square.ts') ?? [];
-  if (bin.length !== 1 || bin[0].typeOnly || bin[0].target !== 'cli/program.ts' || bin[0].names.join() !== 'runCli') issue('entry-shape', { from: 'square.ts' });
+  const bin = outgoing.get(cliEntry) ?? [];
+  if (bin.length !== 1 || bin[0].typeOnly || bin[0].target !== 'cli/program.ts' || bin[0].names.join() !== 'runCli') issue('entry-shape', { from: cliEntry });
   if (path.posix.normalize(pkg.bin?.square ?? '') !== 'dist/square.js') issue('package-bin', { from: 'package.json' });
   for (const [subpath, entry] of Object.entries(pkg.exports ?? {})) for (const exportPath of new Set([packageTarget(entry, 'default'), packageTarget(entry, 'types')])) {
     if (!exportPath) continue;
     const target = matchSource(exportPath, sources);
     if (!target) issue('package-target', { from: subpath, target: exportPath });
-    else if (target === 'square.ts' || sqlOwner(target) || ['app/square.ts', 'app/participant.ts', 'core/ports.ts'].includes(target)) issue('package-alias', { from: subpath, target });
+    else if (target === cliEntry || sqlOwner(target) || privateApp.has(target) || target === artifactPort) issue('package-alias', { from: subpath, target });
   }
   return found;
 }
 
 test('production graph respects directory ownership', () => {
-  assert.deepEqual(violations(productionSources()), []);
+  assert.deepEqual(violations(new Map(collectSources())), []);
 });
 
 test('new files are classified, dependencies resolved, and capabilities fenced', () => {
   const sources = new Map(['cli/program.ts', 'cli/help.ts', 'app/square.ts', 'api/square-api.ts', 'core/model.ts', 'core/ports.ts', 'ledger/delivery-ledger.ts', 'ledger/delivery-ledger-sqlite.ts', 'artifact/artifact.ts', 'hosts/harness.ts', 'plugins/paseo/client/grain.ts', 'packages/agent-delivery/src/index.ts', 'index.ts'].map((file) => [file, '']));
   sources.set('square.ts', "import { runCli } from './cli/program.js';");
   const fixturePkg = { name: manifest.name, bin: { square: './dist/square.js' }, exports: { '.': './dist/index.js' } };
-  const check = (files, code, target) => {
-    const issues = violations(new Map([...sources, ...Object.entries(files)]), fixturePkg);
-    const from = Object.keys(files)[0];
+  const check = (files, code, target, pkg = fixturePkg, from = Object.keys(files)[0]) => {
+    const issues = violations(new Map([...sources, ...Object.entries(files)]), pkg);
     assert.ok(issues.some((issue) => issue.code === code && issue.from === from && (issue.target ?? issue.specifier) === target), `${code}: ${JSON.stringify(issues)}`);
   };
   const pass = (files) => assert.deepEqual(violations(new Map([...sources, ...Object.entries(files)]), fixturePkg), []);
@@ -230,35 +232,30 @@ test('new files are classified, dependencies resolved, and capabilities fenced',
   check({ 'cli/new.ts': "import * as host from '../hosts/harness.js';" }, 'host-namespace', 'hosts/harness.ts');
   check({ 'plugins/pi/new.ts': "import 'fs';" }, 'pi-raw', 'fs');
   check({ 'plugins/pi/new.ts': "import '../../app/square.js';" }, 'layer-direction', 'app/square.ts');
-  check({ 'plugins/opencode/new.ts': "import '../../ledger/delivery-ledger-sqlite.js';" }, 'driver-private', 'ledger/delivery-ledger-sqlite.ts');
+  for (const file of ['plugins/opencode/new.ts', 'plugins/pi/helper.ts']) check({ [file]: "import '../../ledger/delivery-ledger-sqlite.js';" }, 'driver-private', 'ledger/delivery-ledger-sqlite.ts');
   check({ 'packages/agent-delivery/src/new.ts': "import '../../../core/model.js';" }, 'layer-direction', 'core/model.ts');
   check({ 'plugins/paseo/shared/new.ts': "import '../../../core/model.js';" }, 'layer-direction', 'core/model.ts');
-  check({ 'index.ts': "import './plugins/paseo/client/grain.js';" }, 'layer-direction', 'plugins/paseo/client/grain.ts');
+  for (const file of ['index.ts', 'paseo.ts']) check({ [file]: "import './plugins/paseo/client/grain.js';" }, 'layer-direction', 'plugins/paseo/client/grain.ts');
   check({ 'index.ts': "import './cli/help.js';" }, 'sdk-direction', 'cli/help.ts');
-  check({ 'paseo.ts': "import './plugins/paseo/client/grain.js';" }, 'layer-direction', 'plugins/paseo/client/grain.ts');
-  const transit = new Map([...sources, ['index.ts', "import './paseo.js';"], ['paseo.ts', "import './surfaces/new.js';"], ['surfaces/new.ts', '']]);
-  assert.ok(violations(transit, fixturePkg).some(({ code, from, target }) => code === 'sdk-direction' && from === 'paseo.ts' && target === 'surfaces/new.ts'));
+  check({ 'index.ts': "import './paseo.js';", 'paseo.ts': "import './surfaces/new.js';", 'surfaces/new.ts': '' }, 'sdk-direction', 'surfaces/new.ts', fixturePkg, 'paseo.ts');
   check({ 'hosts/notifications.ts': 'process.env.PI_SESSION_ID;' }, 'ambient-env', 'hosts/notifications.ts');
   check({ 'api/types.ts': 'export const runtime = 1;' }, 'types-runtime', 'api/types.ts');
-  check({ 'core/receive.ts': "import './model.js';" }, 'leaf-import', 'core/model.ts');
-  check({ 'core/attention.ts': "import './model.js';" }, 'leaf-import', 'core/model.ts');
+  for (const file of ['core/receive.ts', 'core/attention.ts']) check({ [file]: "import './model.js';" }, 'leaf-import', 'core/model.ts');
   check({ 'plugins/pi/helper.ts': "import '../../app/square.js'; import 'node:sqlite';" }, 'layer-direction', 'app/square.ts');
-  check({ 'plugins/pi/helper.ts': "import '../../ledger/delivery-ledger-sqlite.js';" }, 'driver-private', 'ledger/delivery-ledger-sqlite.ts');
   check({ 'plugins/pi/helper.ts': "import '../../artifact/artifact.js';" }, 'artifact-private', 'artifact/artifact.ts');
   check({ 'core/new.ts': "import '../cli/program.js';" }, 'layer-direction', 'cli/program.ts');
   check({ 'index.ts': "import './square.js';" }, 'entry-import', 'square.ts');
   const pkg = { ...fixturePkg, exports: { ...fixturePkg.exports, './private': './dist/app/square.js' } };
-  const alias = new Map([...sources, ['plugins/pi/alias.ts', `import type * as Hidden from '${pkg.name}/private';`]]);
-  assert.ok(violations(alias, pkg).some(({ code }) => code === 'app-private'));
-  assert.ok(violations(alias, pkg).some(({ code }) => code === 'package-alias'));
   const split = { ...fixturePkg, exports: { ...fixturePkg.exports, './split': { types: './dist/app/square.d.ts', default: './dist/index.js' } } };
-  const mixed = new Map([...sources, ['plugins/pi/alias.ts', `import { value, type Hidden } from '${split.name}/split';`]]);
-  assert.ok(violations(mixed, split).some(({ code, from, target }) => code === 'app-private' && from === 'plugins/pi/alias.ts' && target === 'app/square.ts'));
-  assert.ok(violations(mixed, split).some(({ code, target }) => code === 'package-alias' && target === 'app/square.ts'));
+  const alias = { 'plugins/pi/alias.ts': `import type * as Hidden from '${pkg.name}/private';` };
+  check(alias, 'app-private', 'app/square.ts', pkg);
+  check(alias, 'package-alias', 'app/square.ts', pkg, './private');
+  const mixed = { 'plugins/pi/alias.ts': `import { value, type Hidden } from '${split.name}/split';` };
+  check(mixed, 'app-private', 'app/square.ts', split);
+  check(mixed, 'package-alias', 'app/square.ts', split, './split');
   assert.ok(violations(sources, { ...fixturePkg, bin: { square: './wrong.js' } }).some(({ code }) => code === 'package-bin'));
   assert.ok(violations(sources, { ...fixturePkg, exports: { ...fixturePkg.exports, './missing': './dist/missing.js' } }).some(({ code }) => code === 'package-target'));
-  check({ 'square.ts': "import './cli/help.js';" }, 'entry-shape', undefined);
-  check({ 'square.ts': "import type { runCli } from './cli/program.js';" }, 'entry-shape', undefined);
+  for (const source of ["import './cli/help.js';", "import type { runCli } from './cli/program.js';"]) check({ 'square.ts': source }, 'entry-shape', undefined);
   const launcher = "flag ? '@astrosheep/keiyaku' : pathToFileURL(override).href";
   pass({ 'hosts/keiyaku-delivery.ts': `import(${launcher});` });
   check({ 'hosts/keiyaku-delivery.ts': `require(${launcher});` }, 'dynamic-import', undefined);
@@ -266,4 +263,6 @@ test('new files are classified, dependencies resolved, and capabilities fenced',
   pass({ 'core/new.ts': "const target = './model.js'; import(target);" });
   check({ 'packages/agent-delivery/src/new.ts': `import '${fixturePkg.name}';` }, 'layer-direction', 'index.ts');
   check({ 'core/new.ts': "import '@astrosheep/agent-delivery';" }, 'layer-direction', 'packages/agent-delivery/src/index.ts');
+  check({ 'hosts/new.ts': "import '@astrosheep/agent-delivery';" }, 'agent-delivery-package', 'packages/agent-delivery/src/index.ts');
+  check({ 'hosts/new.ts': "import '@astrosheep/agent-delivery/private';" }, 'agent-delivery-package', '@astrosheep/agent-delivery/private');
 });

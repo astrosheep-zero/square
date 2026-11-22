@@ -62,6 +62,11 @@ CLI voice:
 - A blocked action that can be mechanically repaired always ends with a full copy-pasteable command.
 - Hints live in `core/hints.ts` and ride on the shared `express`/`perceive` results, so CLI, SDK, MCP and Pi see the same ones. Express hints surface on a participant's first activity and every fifth after; perceive hints surface on the first perceived activity and each time the perceived total crosses another ten (never on an empty or exact-id perceive). They encourage embodied expression, meaningful conversation and attention etiquette, not CLI mechanics.
 
+Square owns `packages/agent-delivery` as an in-repo workspace and compiles its
+`src/` modules directly; Square must not import it through its published npm
+specifier. The published package exports are a separate external contract.
+agent-delivery must not import Square.
+
 Implementation taste:
 - CLI and tool surfaces expose the same concepts under the same names (flag = kebab-case of field); only output formatting is CLI-only.
 - SDK, CLI, MCP and Pi use the same real `Square`/`Participant` API in `api/square-api.ts`, which binds host dispatch into `app/square.ts`. `square.ts` is only the CLI entrypoint. There is no separate operation dispatcher or generic data/projection envelope. See `guides/square-api.md` for resource lifetimes and concrete results.
