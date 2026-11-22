@@ -1,7 +1,7 @@
 import type { DeliveryKey } from './delivery-key.js';
 import type { DeliveryLedger, DeliverySession } from './delivery-ledger.js';
 import { nameKey, type Owner, type Seat } from './model.js';
-import { openReadOnlyDeliveryLedger } from './notification-mute.js';
+import { openReadOnlyDeliveryLedger } from './delivery-lifetime.js';
 import { deliverySessionsForSeats } from './square-posting.js';
 
 /** One captured Square seat generation, independent from every other layer. */

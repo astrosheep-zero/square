@@ -1,9 +1,23 @@
 import { SquareError, validateName } from './model.js';
 import { parseActivityId } from './square-core.js';
-import { validateMetadataMatch } from './delivery-deferral.js';
+import { validateMetadataMatch, type MetadataMatch } from './delivery-deferral.js';
 import { compileSearchPattern } from './search.js';
+import type { ActivitySearch } from './ports.js';
 import type { ActivityFilter } from './ports.js';
-import type { ActivityQuery } from './square-facade.js';
+import type { ActivityId } from './square-core.js';
+
+export interface ActivityCursor {
+  readonly id: ActivityId;
+  readonly direction: 'before' | 'after';
+}
+/** Shared filters; absent arrays are unrestricted, empty arrays match nothing. */
+export interface ActivityQuery {
+  readonly at?: readonly ActivityId[];
+  readonly from?: readonly string[];
+  readonly match?: MetadataMatch;
+  readonly search?: ActivitySearch;
+  readonly cursor?: ActivityCursor;
+}
 
 /** Both public read paths compile the same filters; neither resolves senders through membership. */
 export function activityQueryFilter(query: ActivityQuery, extraFields: readonly string[] = []): ActivityFilter {

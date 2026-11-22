@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { renderDeliveryReminder } from '../../delivery-frame.js';
+import { renderDeliveryReminder } from '../../boundary-presentation.js';
 import { DeliveryLedger, type DeliveryTransport, type TransportOutcome } from '../../delivery-ledger.js';
 import { retainDeliveryLedger } from '../../delivery-lifetime.js';
 import { harnessOwner, decodeHarnessOwner } from '../../owner.js';

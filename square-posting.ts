@@ -1,17 +1,22 @@
-import { encodeDeliveryKey, type DeliveryKey } from './delivery-key.js';
+import { encodeDeliveryKey, parseSquarePostKey, squarePostKey, type DeliveryKey } from './delivery-key.js';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { DeliveryLedger, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
-import { dispatchPostedCard, isProducerDispatchRoute } from './notifications.js';
-import { retainDeliveryLedger } from './delivery-lifetime.js';
-import { openReadOnlyDeliveryLedger } from './notification-mute.js';
-import type { CardPresentation } from './card-presentation.js';
+import { DeliveryLedger, type DeliveryRoute, type DeliverySession, type HandoffResult } from './delivery-ledger.js';
+import { isProducerDispatchRoute } from './session-lifecycle.js';
+import { openReadOnlyDeliveryLedger, retainDeliveryLedger } from './delivery-lifetime.js';
+import type { CardPresentation } from './plugins/paseo/shared/card-presentation.js';
 import { coreDone } from './decisions.js';
-import { SquareError, activityMetadataHasContent, nameKey, type DirectedNotificationRoute, type Seat } from './model.js';
-import type { SquareArtifactPort, SquareRead } from './ports.js';
+import { SquareError, activityMetadataHasContent, nameKey, type DirectedNotificationRoute, type Owner, type Seat } from './model.js';
+import type { SquareArtifactPort, SquarePost, SquareRead } from './ports.js';
 import { formatActivityId } from './square-core.js';
-import { parseSquarePostKey, squarePostKey, type SquarePost } from './square-post.js';
+
+/** Host dispatch capability bound once at the API composition root. */
+export type DispatchPostedCard = (ledger: DeliveryLedger, owner: Owner, key: DeliveryKey, options: {
+  readonly signal?: AbortSignal;
+  readonly track?: (result: HandoffResult) => void;
+  readonly squareMention?: boolean;
+}) => Promise<void>;
 
 function requireLedgerLocation(ledgerLocation: string): void {
   if (typeof ledgerLocation !== 'string' || !path.isAbsolute(ledgerLocation)) throw new TypeError('Expected a resolved absolute delivery ledger location');
@@ -183,7 +188,7 @@ async function suppressWithdrawn(artifact: SquareArtifactPort, ledger: DeliveryL
   }, signal);
 }
 /** One export path for Square activities and Square-owned notices. No transaction spans I/O. */
-export async function flushSquarePosts(artifact: SquareArtifactPort, location: string, clock: () => number, signal: AbortSignal | undefined, ledgerLocation: string): Promise<void> {
+export async function flushSquarePosts(artifact: SquareArtifactPort, location: string, clock: () => number, signal: AbortSignal | undefined, ledgerLocation: string, dispatch: DispatchPostedCard): Promise<void> {
   requireLedgerLocation(ledgerLocation);
   signal ??= AbortSignal.timeout(5000);
   // Delivery enrichment cannot turn a committed producer mutation into a retry of that mutation.
@@ -233,7 +238,7 @@ export async function flushSquarePosts(artifact: SquareArtifactPort, location: s
         .flatMap(card => { const id = parseSquarePostKey(location, card.key); return id ? [id] : []; });
       const posts = (await artifact.read(facts => facts.postsAt(pending)
         .filter(post => post.owner === owner && !post.consumed && currentPost(facts, post)), signal)).value;
-      for (const post of posts) await dispatchPostedCard(ledger, owner, squarePostKey(location, post), {
+      for (const post of posts) await dispatch(ledger, owner, squarePostKey(location, post), {
         signal, track: result => lifetime?.track(result), squareMention: post.kind === 'activity' && post.route === 'mention',
       });
     }

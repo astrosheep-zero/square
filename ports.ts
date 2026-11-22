@@ -1,9 +1,64 @@
-import type { ActDraft, HydratedAct, Owner, HardCap, Seat, StoredAct, WakeAddress, WatchLease, DirectedNotificationRoute } from './model.js';
-import type { ActivitySearch } from './square-facade.js';
+import type { ActDraft, HydratedAct, Owner, HardCap, Seat, StoredAct, WakeAddress, WatchLease, DirectedNotificationRoute, ActivityMetadata } from './model.js';
 import type { IndexPage, FactPage } from './neutral.js';
 import type { MetadataMatch } from './delivery-deferral.js';
-import type { ProducerRead, ProducerWrite } from './square-post.js';
-export type { IndexPage, FactPage } from './neutral.js';
+import type { SquarePostIdentity, SquarePostKeyFacts } from './delivery-key.js';
+
+export interface ActivitySearch { readonly text: string; readonly mode: 'literal' | 'regex' }
+
+/** Producer notices are not activities in the square. */
+export type NotificationId = `notice/${number}`;
+export interface SendInput {
+  readonly from: string;
+  readonly to: string | readonly string[];
+  readonly body: string;
+  readonly metadata?: ActivityMetadata;
+}
+export interface SendResult {
+  readonly id: NotificationId;
+  readonly at: number;
+  readonly from: string;
+  readonly to: readonly string[];
+  readonly body: string;
+  readonly metadata?: ActivityMetadata;
+}
+/** The caller supplies every scalar equality identifying one exact outcome. */
+export interface FutureAck {
+  readonly from: string;
+  readonly match: MetadataMatch;
+  readonly future: 'exact';
+}
+/** One Square-owned recipient card; neither an endpoint nor a shared message resource. */
+export interface SquarePost extends SquarePostKeyFacts {
+  readonly owner: Owner;
+  readonly from: string;
+  readonly at: number;
+  readonly body?: string;
+  readonly metadata?: ActivityMetadata;
+  readonly route?: DirectedNotificationRoute;
+  readonly full?: boolean;
+  readonly consumed?: boolean;
+}
+/** Identity and consumption facts only; withdrawal never needs card content. */
+export type SquarePostDisposition = Pick<SquarePost, 'kind' | 'index' | 'recipient' | 'owner' | 'generation' | 'consumed'>;
+export interface ProducerDeparture extends SeatRef { readonly token: string }
+export interface ProducerRead {
+  receiptWatermark(owner: Owner): number;
+  departedSeats(): readonly ProducerDeparture[];
+  pendingPosts(now?: number): readonly SquarePost[];
+  postsAt(identities: readonly SquarePostIdentity[], selection?: 'receipt'): readonly SquarePost[];
+  postDispositionsAt(identities: readonly SquarePostIdentity[]): readonly SquarePostDisposition[];
+  withdrawnClaims(now: number): readonly SquarePostDisposition[];
+  ownsPost(token: string, exportAt?: number): boolean;
+}
+export interface ProducerWrite {
+  advanceReceiptWatermark(owner: Owner, seq: number): void;
+  clearDepartedSeat(seat: ProducerDeparture): void;
+  insertNotice(input: SendInput, at: number): SendResult;
+  ackMatching(seat: SeatRef, input: FutureAck, at: number): number;
+  acquirePost(post: SquarePost, token: string, pid: number, now: number, exportAt?: number): false | 'initial' | 'recovered';
+  settlePost(token: string, full: boolean, disposition: 'posted' | 'uncertain' | 'never-exported'): boolean;
+  foldReceipt(post: SquarePost, at: number): boolean;
+}
 
 export type ActivityIndex = number;
 export interface SquareHeader {

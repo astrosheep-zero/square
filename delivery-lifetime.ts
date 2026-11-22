@@ -1,5 +1,15 @@
-import type { DeliveryLedger, HandoffResult } from './delivery-ledger.js';
+import { DeliveryLedger, type HandoffResult } from './delivery-ledger.js';
 import { redactCurrentDiagnostic } from './diagnostic-redaction.js';
+
+/** A read-only ledger open is an observation, never a new ledger file. */
+export async function openReadOnlyDeliveryLedger(location: string, clock: () => number, signal?: AbortSignal): Promise<DeliveryLedger | undefined> {
+  try {
+    return await DeliveryLedger.open({ location, clock, signal, readOnly: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
 
 /** Report late evidence; DeliveryLedger alone owns connection retirement. */
 export function retainDeliveryLedger(ledger: DeliveryLedger) {

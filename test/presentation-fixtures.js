@@ -5,7 +5,7 @@ import { createArtifactPort } from '../dist/artifact.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { harnessOwner } from '../dist/owner.js';
 import { sameName } from '../dist/model.js';
-import { squarePostKey } from '../dist/square-post.js';
+import { squarePostKey } from '../dist/delivery-key.js';
 
 export async function hasPresentedForOwner(sessionId, squarePath, name, actIndex, env = process.env) {
   const owner = harnessOwner({ channel: 'pi', session: sessionId });

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { renderDeliveryReminder } from '../dist/delivery-frame.js';
+import { renderDeliveryReminder } from '../dist/boundary-presentation.js';
 import { attachDeliverySession, attachDeliverySessionRoutes, detachDeliverySession, markDeliverySessionDeleted } from '../dist/session-lifecycle.js';
 import { HttpWakeTransport } from '../dist/http-delivery.js';
 import { PaseoWakeTransport } from '../dist/paseo-delivery.js';

@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 /** Shared identity, error and paging types used below both Channel and Agora. */
 export type Owner = string;
 
@@ -97,3 +99,37 @@ export function nameKey(name: string): string {
 
 export interface IndexPage { readonly edge: 'oldest' | 'newest'; readonly limit: number }
 export interface FactPage<T> { readonly items: readonly T[]; readonly hasMore: boolean }
+
+/** Request extra facts for rendering, without changing operation semantics. */
+export interface ObservationOptions {
+  readonly observe?: boolean;
+}
+/** A square is addressed by an explicit artifact path or a directory to discover in. */
+export interface SquareLocation {
+  readonly path?: string;
+  readonly cwd?: string;
+}
+
+export function squareLocation(input: SquareLocation): string {
+  const selected = input.path;
+  if (selected === undefined || selected.trim() === '') throw new SquareError('invalid_args', 'Square needs a location');
+  // Windows roots include drive-relative prefixes such as D:.
+  if (path.win32.parse(selected).root === '' && /^[A-Za-z][A-Za-z0-9+.-]*:/.test(selected))
+    throw new SquareError('invalid_args', 'Expected a local square artifact path');
+  return path.resolve(input.cwd ?? process.cwd(), selected);
+}
+
+export function checkControl(control?: OperationControl): void {
+  if (control?.signal?.aborted) throw control.signal.reason ?? new Error('Square operation was cancelled');
+}
+export function failure(error: unknown, detail: OperationFailureDetail): Error {
+  const normalized = error instanceof Error ? error : new Error(String(error), { cause: error });
+  Object.assign(normalized, { operation: detail });
+  return normalized;
+}
+
+export function truncateChars(body: string, maxChars: number): { text: string; remaining: number } {
+  const chars = [...body];
+  if (chars.length <= maxChars) return { text: body, remaining: 0 };
+  return { text: chars.slice(0, maxChars).join('').trimEnd(), remaining: chars.length - maxChars };
+}

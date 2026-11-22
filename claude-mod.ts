@@ -9,7 +9,7 @@ import { encodeDeliveryKey } from './delivery-key.js';
 import { akumaActorFromEnvironment } from './participant-identity.js';
 import { attachDeliverySession, detachDeliverySession } from './session-lifecycle.js';
 import { beginClaudeMcpCall, endClaudeMcpCall } from './claude-mcp-context.js';
-import { renderDeliveryReminder } from './delivery-frame.js';
+import { renderDeliveryReminder } from './boundary-presentation.js';
 
 const routeKind = 'claude-mod';
 const nativeId = z.string().min(1).max(4096).regex(/^[^\x00-\x1f\x7f]+$/u);

@@ -6,7 +6,7 @@ import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/delivery-frame.js';
+import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/boundary-presentation.js';
 import { runCodexHook, runCodexInterrupt } from '../dist/codex-hook.js';
 import { runCodexWatch } from '../dist/codex-watch.js';
 import { harnessOwner } from '../dist/owner.js';

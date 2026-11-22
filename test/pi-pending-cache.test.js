@@ -5,7 +5,7 @@ import path from 'node:path';
 import test, { mock } from 'node:test';
 import squarePiExtension from '../plugins/pi/square-pi.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/delivery-frame.js';
+import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/boundary-presentation.js';
 import { harnessOwner } from '../dist/owner.js';
 import { Square } from '../dist/square-api.js';
 

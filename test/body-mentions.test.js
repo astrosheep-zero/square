@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createArtifactPort } from '../dist/artifact.js';
-import { emptyRuntimeState } from '../dist/square-sqlite.js';
+import { emptyRuntimeState } from '../dist/square-store.js';
 import { decideAct } from '../dist/decisions.js';
 import { scanMentionCandidates } from '../dist/mention-parse.js';
 import { activityRetryCommand } from '../dist/cli/express-presentation.js';

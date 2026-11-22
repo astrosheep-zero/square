@@ -6,8 +6,8 @@ export { postAndDispatch, dispatchEligibleCards } from './notifications.js';
 export { DeliveryLedger, deliveryLedgerLocation, migrateDeliveryLedger } from './delivery-ledger.js';
 export { copyDeliveryKey, encodeDeliveryKey, deliveryKeyEqual, deliveryKeyPrefix } from './delivery-key.js';
 export type * from './delivery-ledger.js';
-export { isCardPresentation } from './card-presentation.js';
-export type { CardPresentation } from './card-presentation.js';
+export { isCardPresentation } from './plugins/paseo/shared/card-presentation.js';
+export type { CardPresentation } from './plugins/paseo/shared/card-presentation.js';
 // Public operation contracts; no alternate runtime surface.
 export type * from './square-facade.js';
 // Participant-name and activity-id syntax shared with adapters.

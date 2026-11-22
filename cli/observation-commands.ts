@@ -4,10 +4,10 @@ import { runClaudeMod } from '../claude-mod.js';
 import { runCodexHook, runCodexInterrupt } from '../codex-hook.js';
 import { runCodexWatch } from '../codex-watch.js';
 import { isSquareError } from '../model.js';
+import { truncateChars } from '../neutral.js';
 import type { ActivityId, OperationError, ArchiveRecord, PerceiveOptions, DiscoveryOptions, HistoryQuery, StreamStart } from '../square-facade.js';
 import {
   commandPrefix,
-  truncateChars,
   withPathOutput,
   quoteShell,
   renderWatchForceTakeover,

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { renderDeliveryReminder } from '../dist/delivery-frame.js';
+import { renderDeliveryReminder } from '../dist/boundary-presentation.js';
 import { harnessOwner } from '../dist/owner.js';
 import { observeOpenCodeContext, receiveOpenCodePending } from '../dist/plugins/opencode-shared/delivery.js';
 import plugin, { createOpenCodeWakeTransport } from '../dist/plugins/opencode/index.js';

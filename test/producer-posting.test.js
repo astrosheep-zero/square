@@ -7,11 +7,11 @@ import path from 'node:path';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
-import { createProducerDriver } from '../dist/square-producer-sqlite.js';
+import { createProducerDriver } from '../dist/square-producer-store.js';
 import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { parseSquarePostKey, squarePostKey } from '../dist/square-post.js';
+import { parseSquarePostKey, squarePostKey } from '../dist/delivery-key.js';
 
 test('in-memory producer keys round-trip, fold exact receipts and withdraw only the current card', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-memory-keys-'));

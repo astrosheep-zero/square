@@ -1,12 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { squareLocation } from './square-location.js';
-import { checkControl } from './operation-control.js';
-import type { OperationControl, SquareLocation } from './square-facade.js';
+import { checkControl, squareLocation, type OperationControl, type SquareLocation } from './neutral.js';
 import { inSqliteTransaction, retrySqliteBusy } from './sqlite-transaction.js';
 import { validateSchema } from './sqlite-framing.js';
-import { abort, APPLICATION_ID, createSqliteDriver, FORMAT12_SQUARE_SQL, FORMAT13_SQUARE_SQL, openExistingSquareDatabase, storageError, validateWatchLease } from './square-sqlite.js';
-import { FORMAT13_ADDITIONS_SQL } from './square-producer-sqlite.js';
+import { abort, APPLICATION_ID, createSqliteDriver, FORMAT12_SQUARE_SQL, FORMAT13_SQUARE_SQL, openExistingSquareDatabase, storageError, validateWatchLease } from './square-store.js';
+import { FORMAT13_ADDITIONS_SQL } from './square-producer-store.js';
 import { validateActivityMetadata, isWakeRouteKind } from './model.js';
 import { validateEndpointGeneration } from './message.js';
 import { validateMetadataMatch } from './delivery-deferral.js';

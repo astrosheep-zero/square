@@ -3,8 +3,7 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { matchesMetadata, validateMetadataMatch } from './delivery-deferral.js';
 import type { MetadataMatch } from './delivery-deferral.js';
 import { SquareError, sameName, validateName, validateActivityMetadata, type ActivityMetadata } from './model.js';
-import type { SeatRef } from './ports.js';
-import type { FutureAck, ProducerRead, ProducerWrite, SendInput, SendResult, SquarePost, SquarePostDisposition } from './square-post.js';
+import type { FutureAck, ProducerRead, ProducerWrite, SeatRef, SendInput, SendResult, SquarePost, SquarePostDisposition } from './ports.js';
 import { decoded, encode, finite, integer, json, key, object, string, type Row } from './sqlite-values.js';
 
 /** Frozen Format12 producer declarations shared with the one supported offline edge. */

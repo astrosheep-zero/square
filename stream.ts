@@ -3,7 +3,18 @@ import { SquareError } from './model.js';
 import { createArtifactPort, observeSquareRevision } from './artifact.js';
 import type { SquareArtifactPort } from './ports.js';
 import { parseRequiredActivityId, streamProjection, streamTailProjection } from './views.js';
-import type { OperationControl, StreamOptions, StreamRecord } from './square-facade.js';
+import type { OperationControl } from './neutral.js';
+import type { Activity, PerceivedActivity } from './views.js';
+import type { ActivityId } from './square-core.js';
+
+export type StreamStart =
+  | { readonly kind: 'tail'; readonly last: number }
+  | { readonly kind: 'after'; readonly after: ActivityId };
+export interface StreamOptions {
+  readonly recipient?: string;
+  readonly start?: StreamStart;
+}
+export type StreamRecord = Activity | PerceivedActivity;
 
 /** Pull-based observation; return interrupts an outstanding pull before awaiting its cleanup. */
 export function streamSquare(squarePath: string, options: StreamOptions = {}, control?: OperationControl, borrowed?: SquareArtifactPort): AsyncIterable<StreamRecord> {

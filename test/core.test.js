@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { expressionContext } from '../dist/activity-feed.js';
-import { emptyRuntimeState } from '../dist/square-sqlite.js';
+import { expressionContext } from '../dist/square-service.js';
+import { emptyRuntimeState } from '../dist/square-store.js';
 import { decidePerceive } from '../dist/perceive-decisions.js';
 import { attentionChange, coreListening, coreParticipants, decideAct, decideJoin } from '../dist/decisions.js';
 import { renderPresenceLines } from '../dist/presentation.js';

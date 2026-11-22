@@ -75,6 +75,9 @@ export function isWakeRouteKind(value: unknown): value is WakeRouteKind {
   return typeof value === 'string' && (WAKE_ROUTE_KINDS as readonly string[]).includes(value);
 }
 export function sameName(a: string, b: string): boolean { return nameKey(a) === nameKey(b); }
+export function participantIdentity(name: string): string {
+  return `@${name}`;
+}
 const TEXT_NAME_GRAPHEME_SOURCE = String.raw`[[\p{L}\p{N}\p{M}_\x2D]--[\p{Variation_Selector}]]`;
 export const NAME_GRAPHEME_SOURCE = String.raw`${TEXT_NAME_GRAPHEME_SOURCE}|\p{RGI_Emoji}`;
 /** One or more non-empty slash-separated segments of Square name graphemes. */

@@ -1,47 +1,197 @@
 import { formatActivityId } from './square-core.js';
 import { assertCurrentSeat } from './square-domain.js';
 import { canonicalPath } from './canonical-path.js';
-import { squareLocation } from './square-location.js';
+
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { DeliveryLedger, deliveryLedgerLocation } from './delivery-ledger.js';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { InternalSquareError, SquareError, isSquareError, nameKey, validateName, type Owner, type Seat, type WatchOptions } from './model.js';
-import { checkControl, failure } from './operation-control.js';
+import { InternalSquareError, SquareError, isSquareError, nameKey, validateName, type ActivityMetadata, type Owner, type Seat, type WakeAddress, type WatchOptions } from './model.js';
+import { checkControl, failure, squareLocation, type ObservationOptions, type OperationControl, type SquareLocation, type UnreadActivitySummary } from './neutral.js';
 import { validateMetadataMatch } from './delivery-deferral.js';
-import { flushSquarePosts, reconcileSquareDelivery, readSquareSessions, ensureInitialDeliverySession } from './square-posting.js';
+import { flushSquarePosts, reconcileSquareDelivery, readSquareSessions, ensureInitialDeliverySession, type DispatchPostedCard } from './square-posting.js';
 import { attentionChange, coreDone, coreListening, decideAct, decideJoin, resolveKnownName, validateDoneBody } from './decisions.js';
-import { WATCH_HEARTBEAT_MS, inSquareCount, presenceAnchor } from './runtime.js';
+import { WATCH_HEARTBEAT_MS, asSeatRef, inSquareCount, participantAuthority, presenceAnchor, requireJoinName, requireOwner } from './runtime.js';
 import { perceiveLimit, decidePerceive, observePerceiveSelection, selectPerceivePage, type PerceiveSelection } from './perceive-decisions.js';
-import { expressionContext } from './activity-feed.js';
 import { expressHint } from './hints.js';
-import { asSeatRef, participantAuthority, requireJoinName, requireOwner } from './seats.js';
 import { recoveryObservation, entryPresentation, queryStatus, queryParticipants, perceivePresence,
   parseRequiredActivityId, toPublicActivity, toPerceivedActivity, publicActivities, selectHistory, NON_READ, HISTORY_MAX_LIMIT, HISTORY_DEFAULT_LIMIT } from './views.js';
-import { sessionInboxCounts } from './inbox.js';
-import { participantIdentity } from './participant-identity.js';
+import { sessionInboxCounts, type InboxOptions, type InboxResult } from './inbox.js';
+import { participantIdentity } from './square-values.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease } from './wakes.js';
 import { createArtifactPort, createSquare, diagnoseSquareFile, prepareSquareBuild } from './artifact.js';
-import type { SquareArtifactPort, SquareRead } from './ports.js';
-import { activityQueryFilter } from './activity-query.js';
-import { discoverSquares } from './list.js';
+import type { FutureAck, SendInput, SendResult, SquareArtifactPort, SquareRead } from './ports.js';
+import { activityQueryFilter, type ActivityQuery } from './activity-query.js';
+import { discoverSquares, type DiscoveryOptions } from './list.js';
 import { readSquareHostObservations, seatMuteId, seatMuteKey, seatMutePrefix } from './square-notification-mute.js';
 import { muteDeadline } from './time.js';
-import { streamSquare } from './stream.js';
+import { streamSquare, type StreamOptions, type StreamRecord } from './stream.js';
 import type {
-  PerceiveOptions, PerceiveResult, PerceiveReason,
-  ExpressOptions, ExpressResult, HistoryQuery, HistoryResult, JoinOptions, JoinResult, ListenerChangeResult,
-  ListeningResult, LifecycleResult, ObservationOptions, OperationControl, Participant, SquareAtInput,
-  SquareBuildInput, SquareObservation, SquareLocation, StatusOptions, StatusResult, ParticipantsResult,
-  RecoveryResult, DiscoveryOptions, InboxOptions, InboxResult, StreamOptions, StreamRecord, Activity, PerceivedActivity, ExpressInput,
-  SendInput, SendResult, FutureAck, PendingOptions, PendingResult, AckResult, ActivityId, MuteResult,
-} from './square-facade.js';
+  Activity, PerceivedActivity, SquareObservation, StatusOptions, StatusResult, ParticipantsResult,
+  HistoryQuery, HistoryObservation, EntryPresentation, PerceivePresence,
+} from './views.js';
+import type { PerceiveOptions, PerceiveReason } from './perceive-decisions.js';
+import type { ActivityId } from './square-core.js';
 
-export type * from './square-facade.js';
-export { formatActivityId, parseActivityId, MAX_IDENTITY_SET_SIZE } from './square-core.js';
-export { PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT } from './perceive-decisions.js';
-export { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from './views.js';
-export { DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from './list.js';
+export interface AckResult { readonly consumed: number }
+export interface HeldSeat { readonly name: string; readonly generation: string }
+export interface ExpressOptions extends ObservationOptions {
+  readonly metadata?: ActivityMetadata;
+  readonly force?: boolean;
+  readonly mentions?: readonly string[];
+  readonly reply?: ActivityId;
+  readonly noMention?: boolean;
+  readonly noWait?: boolean;
+}
+export interface ExpressInput extends ExpressOptions {
+  readonly body?: string;
+}
+export interface ExpressResult {
+  readonly activity: Activity;
+  /** The replied-to author was not standing when the reply landed. */
+  readonly replyAuthorNotHere?: string;
+  /** Explicit mentions and body @name tokens with no standing match at landing; never stored on the activity. */
+  readonly unmatchedMentions?: readonly string[];
+  /** Directed joined targets observed detached before landing, fenced to the same owner/join generation; not delivery or unread evidence. */
+  readonly awayRecipients?: readonly string[];
+  /** Occasional participant-facing nudge; not part of the activity. */
+  readonly hint?: string;
+  readonly observation?: ExpressObservation;
+}
+export interface ListenerChangeResult {
+  readonly activity: Activity | null;
+  readonly observation?: ListenerObservation;
+}
+export interface ListeningResult {
+  readonly listening: readonly string[];
+  readonly observation?: SquareObservation;
+}
+export interface MuteResult {
+  readonly mutedUntil: number | null;
+  readonly observation?: SquareObservation;
+}
+export interface LifecycleResult {
+  readonly activity: Activity;
+  readonly observation?: SquareObservation;
+}
+export interface PendingOptions extends ActivityQuery {
+  /** Oldest first; defaults to 100, maximum 100. */
+  readonly limit?: number;
+}
+export interface PendingResult {
+  readonly activities: readonly PerceivedActivity[];
+  /** Matching unconsumed activities outside this page. */
+  readonly remaining: number;
+}
+export interface PerceiveResult {
+  readonly activities: readonly PerceivedActivity[];
+  readonly remaining: number;
+  readonly reason: PerceiveReason;
+  /** Occasional participant-facing nudge; not part of any activity. */
+  readonly hint?: string;
+  readonly observation?: PerceiveObservation;
+}
+export interface OpenOptions {
+  readonly clock?: () => number;
+  readonly ledgerLocation?: string;
+}
+export interface SquareAtInput extends SquareLocation, OpenOptions {}
+export interface SquareBuildInput extends SquareAtInput {
+  readonly markdown: string;
+  readonly hardCap?: number | null;
+  readonly throttlePerMinute?: number;
+  readonly template?: string;
+  readonly force?: boolean;
+}
+export interface JoinOptions extends ObservationOptions {
+  readonly owner: Owner;
+  readonly wakeAddress?: WakeAddress;
+  readonly takeover?: boolean;
+  readonly last?: number;
+}
+export interface JoinResult {
+  readonly participant: Participant;
+  readonly activity: Activity | null;
+  readonly kind: 'joined' | 'reconnected' | 'taken-over';
+  readonly observation?: JoinObservation;
+}
+export interface Participant {
+  readonly name: string;
+  readonly generation: string;
+  express(body: string | undefined, options?: ExpressOptions, control?: OperationControl): Promise<ExpressResult>;
+  express(input: ExpressInput, control?: OperationControl): Promise<ExpressResult>;
+  listen(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
+  ignore(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
+  unlisten(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
+  listening(options?: ObservationOptions, control?: OperationControl): Promise<ListeningResult>;
+  mute(input: { readonly durationMs: number }, options?: ObservationOptions, control?: OperationControl): Promise<MuteResult>;
+  unmute(options?: ObservationOptions, control?: OperationControl): Promise<MuteResult>;
+  perceive(options?: PerceiveOptions, control?: OperationControl): Promise<PerceiveResult>;
+  pending(options?: PendingOptions, control?: OperationControl): Promise<PendingResult>;
+  /** Local custody only: ledger-only detach/delete is observed on privileged reconciliation. */
+  ack(ids: readonly ActivityId[], control?: OperationControl): Promise<AckResult>;
+  ack(input: FutureAck, control?: OperationControl): Promise<AckResult>;
+  /** Leave without a message. Only an omitted or empty body is accepted. */
+  done(body?: string, options?: ObservationOptions, control?: OperationControl): Promise<LifecycleResult>;
+}
+export interface RecoveryResult {
+  readonly participant?: string;
+  readonly standingCount?: number;
+  readonly ownActivityCount?: number;
+  readonly hardCap?: number | null;
+  readonly activitySummaries?: readonly UnreadActivitySummary[];
+}
+export interface HistoryResult {
+  readonly activities: readonly Activity[];
+  readonly observation?: HistoryObservation;
+}
+export interface JoinObservation extends SquareObservation {
+  readonly deliveryAvailable: boolean;
+  readonly entry?: EntryPresentation;
+  /** The receipt succeeded, but optional recent-history/context enrichment was unavailable. */
+  readonly enrichmentUnavailable?: true;
+}
+export interface ExpressionObservation extends Pick<SquareObservation, 'standingCount' | 'now'> {
+  readonly ownActivityCount: number;
+  readonly hardCap: number | null;
+}
+export interface ExpressContext {
+  readonly activities: readonly { readonly id: ActivityId; readonly actor: string; readonly preview: string; readonly truncated: boolean }[];
+  /** Unread activities outside this preview, not a consumption cursor. */
+  readonly remaining: number;
+}
+export interface ExpressObservation extends SquareObservation, ExpressionObservation {
+  readonly participant: string;
+  readonly context: ExpressContext;
+}
+export interface PerceiveObservation extends SquareObservation, ExpressionObservation {
+  readonly deliveryAvailable: boolean;
+  readonly participant: string;
+  readonly presence?: PerceivePresence;
+  readonly enrichmentUnavailable?: true;
+}
+export interface ListenerObservation extends SquareObservation {
+  readonly participant: string;
+  readonly target: string;
+}
+
+const CONTEXT_LIMIT = 5;
+const PREVIEW_CHARS = 400;
+
+/** A bounded, nonconsuming glimpse; seen rows beyond a cursor hole must not reappear. */
+export function expressionContext(facts: SquareRead, name: string): ExpressContext {
+  const filter = { kinds: ['say'] as const, afterIndex: facts.participant(name)?.lastJoinIndex ?? -1, unseenOnly: true as const };
+  const page = facts.directed(name, filter, { edge: 'newest', limit: CONTEXT_LIMIT });
+  const activities = facts.activities(page.items.map(head => head.index)).filter(act => act.kind === 'say')
+    .sort((a, b) => a.index - b.index).map(act => {
+      const body = act.body ?? '(structured activity)';
+      // Keep the boundary between Unicode code points, including non-BMP characters.
+      const chars = Array.from(body.slice(0, PREVIEW_CHARS * 2));
+      const preview = chars.slice(0, PREVIEW_CHARS).join('');
+      return { id: formatActivityId(act.index), actor: act.actor, preview, truncated: preview.length < body.length };
+    });
+  return { activities, remaining: Math.max(0, facts.directedCount(name, filter) - activities.length) };
+}
 
 function rejectUnsentActivity<T>(operation: () => T): T {
   try { return operation(); }
@@ -63,21 +213,22 @@ export class SqliteSquare {
     private readonly clock: () => number,
     private readonly canonicalLocation: string,
     private readonly ledgerLocation: string,
+    private readonly dispatch: DispatchPostedCard,
   ) {
     if (typeof ledgerLocation !== 'string' || !path.isAbsolute(ledgerLocation)) throw new TypeError('Expected a resolved absolute delivery ledger location');
   }
   private reconcile(signal?: AbortSignal): Promise<readonly Seat[]> { return reconcileSquareDelivery(this.artifact, this.canonicalLocation, this.clock, signal, this.ledgerLocation); }
   // Posting is retryable after commit; a delivery failure cannot make a landed write unsent.
-  private async flush(signal?: AbortSignal): Promise<void> { await flushSquarePosts(this.artifact, this.canonicalLocation, this.clock, signal, this.ledgerLocation).catch(() => undefined); }
+  private async flush(signal?: AbortSignal): Promise<void> { await flushSquarePosts(this.artifact, this.canonicalLocation, this.clock, signal, this.ledgerLocation, this.dispatch).catch(() => undefined); }
 
-  static async at(input: SquareAtInput, control?: OperationControl): Promise<SqliteSquare> {
+  static async at(input: SquareAtInput, dispatch: DispatchPostedCard, control?: OperationControl): Promise<SqliteSquare> {
     const ledgerLocation = resolveLedgerLocation(input);
     const location = squareLocation(input);
     const clock = input.clock ?? Date.now;
     const artifact = createArtifactPort(location, undefined, control?.signal);
     try {
       await artifact.read(facts => facts.header(), control?.signal);
-      return new SqliteSquare(location, artifact, clock, await canonicalPath(location), ledgerLocation);
+      return new SqliteSquare(location, artifact, clock, await canonicalPath(location), ledgerLocation, dispatch);
     } catch (error) {
       await artifact.close();
       if (error instanceof InternalSquareError && error.code === 'not_found')
@@ -85,23 +236,23 @@ export class SqliteSquare {
       throw error;
     }
   }
-  static async build(input: SquareBuildInput, control?: OperationControl): Promise<SqliteSquare> {
+  static async build(input: SquareBuildInput, dispatch: DispatchPostedCard, control?: OperationControl): Promise<SqliteSquare> {
     checkControl(control);
     const ledgerLocation = resolveLedgerLocation(input);
     const location = squareLocation(input);
     await createSquare(location, { hardCap: input.hardCap, throttlePerMinute: input.throttlePerMinute,
       template: input.template, force: input.force ?? false }, input.markdown, control?.signal);
     // Publication already committed; cancellation cannot erase the completed build.
-    return SqliteSquare.at({ ...input, path: location, ledgerLocation });
+    return SqliteSquare.at({ ...input, path: location, ledgerLocation }, dispatch);
   }
-  static inMemory(input: Omit<SquareBuildInput, 'path'>): SqliteSquare {
+  static inMemory(input: Omit<SquareBuildInput, 'path'>, dispatch: DispatchPostedCard): SqliteSquare {
     const clock = input.clock ?? Date.now;
     const location = `memory://${crypto.randomUUID()}`;
     const ledgerLocation = resolveLedgerLocation(input);
-    return new SqliteSquare(location, createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)), clock, location, ledgerLocation);
+    return new SqliteSquare(location, createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)), clock, location, ledgerLocation, dispatch);
   }
   /** Join establishes membership and local producer custody in one transaction. */
-  private async joinSeat(name: string, options: JoinOptions, control?: OperationControl): Promise<{ readonly seat: Seat; readonly kind: JoinResult['kind']; readonly activity: Activity | null; readonly observation?: import('./square-facade.js').JoinObservation }> {
+  private async joinSeat(name: string, options: JoinOptions, control?: OperationControl): Promise<{ readonly seat: Seat; readonly kind: JoinResult['kind']; readonly activity: Activity | null; readonly observation?: JoinObservation }> {
     checkControl(control);
     const owner = requireOwner(options?.owner), now = this.clock();
     const initial = !options.takeover ? undefined : (await this.artifact.read(facts => facts.participant(name)?.joined ? facts.seat(name) : undefined, control?.signal)).value;
@@ -626,7 +777,7 @@ export class SqliteSquare {
     // and lifetime. Only explicit artifact readers borrow an existing port.
     return streamSquare(this.location, options, control);
   }
-  async seatsOf(owner: Owner): Promise<readonly import('./square-facade.js').HeldSeat[]> {
+  async seatsOf(owner: Owner): Promise<readonly HeldSeat[]> {
     requireOwner(owner);
     return (await this.artifact.read(facts => facts.seatsForOwner(owner)
       .filter(seat => facts.participant(seat.participant)?.joined && seat.attachment === 'attached')

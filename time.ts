@@ -1,4 +1,4 @@
-import { SquareError } from './model.js';
+import { SquareError } from './neutral.js';
 
 /** Validate one finite named mute deadline from an operation-entry clock. */
 export function muteDeadline(now: number, durationMs: number): number {

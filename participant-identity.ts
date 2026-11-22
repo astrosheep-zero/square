@@ -38,10 +38,6 @@ export function requestPiAkumaActor(bus: ActorRequestBus | undefined): AkumaActo
   return pair;
 }
 
-export function participantIdentity(name: string): string {
-  return `@${name}`;
-}
-
 export type AutomaticProvider = 'codex' | 'claude' | 'opencode' | 'pi';
 
 /** Channels a harness coordinate can map to. `unknown` stays a process-level fallback, not a coordinate. */

@@ -1,18 +1,19 @@
 // Human-facing scenes for settled operations, with surface-specific next actions.
 import { sameName } from './model.js';
-import { parseActivityId } from './square-core.js';
-import { isNarratedActivity } from './square-api.js';
+import { truncateChars } from './neutral.js';
+import { isNarratedActivity, parseActivityId } from './square-core.js';
+import { participantIdentity } from './square-values.js';
 import type {
   Activity, PerceiveOptions, PerceiveResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
   JoinResult, LifecycleResult, ListenerChangeResult, OperationFailureDetail, SquareErrorFacts,
   StatusResult, DiscoveryResult, MuteResult,
 } from './square-facade.js';
 import {
-  type PresentationSurface, displayPath, formatToolAction, commandPrefix, joinRecoveryCommand, participantCommandPrefix, participantIdentity,
+  type PresentationSurface, displayPath, formatToolAction, commandPrefix, joinRecoveryCommand, participantCommandPrefix,
   quoteShell, renderAmbientEventFacts,
   renderEventCli, renderGrepActivitiesView, renderPresenceAnchor,
   renderWatchAlreadyActive, renderWatchReplaced, renderWatchStatus,
-  renderUnreadSummary, takeoverRecoveryLines, withPathOutput, truncateChars,
+  renderUnreadSummary, takeoverRecoveryLines, withPathOutput,
 } from './presentation.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import { style } from './tty-style.js';

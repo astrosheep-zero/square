@@ -10,7 +10,8 @@ import { migrateSquare as apiMigrate } from '../dist/square-api.js';
 import { createArtifactPort, createSquareFile } from '../dist/artifact.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { flushSquarePosts, reconcileSquareDelivery } from '../dist/square-posting.js';
-import { squarePostKey } from '../dist/square-post.js';
+import { dispatchPostedCard } from '../dist/notifications.js';
+import { squarePostKey } from '../dist/delivery-key.js';
 import { seedFormat12 } from './fixtures/format12.js';
 
 function setup(t) {
@@ -90,7 +91,7 @@ test('existing13 producer reconciliation suppresses migrated old work, recovers 
   assert.ok((await artifact.read(f => f.receipt('Bob', 7))).value, 'compatible full-card receipt is replayed');
   assert.ok((await artifact.read(f => f.receiptWatermark(current.owner))).value > 0);
   assert.deepEqual((await artifact.read(f => f.departedSeats())).value, []);
-  await flushSquarePosts(artifact, file, () => 3001, undefined, ledgerLocation);
+  await flushSquarePosts(artifact, file, () => 3001, undefined, ledgerLocation, dispatchPostedCard);
   const recovered = posts.find(p => p.index === 11);
   const pending = await ledger.pending(recovered.owner, { generation: session.generation });
   assert.ok(pending.some(c => deliveryKeyEqual(c.key, squarePostKey(file, recovered))), 'preserved stale claim recovers under normal13 semantics');

@@ -12,6 +12,7 @@ import { Square } from '../dist/square-api.js';
 import { createArtifactPort } from '../dist/artifact.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
 import { flushSquarePosts } from '../dist/square-posting.js';
+import { dispatchPostedCard } from '../dist/notifications.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 async function setup(t, route) {
@@ -178,7 +179,7 @@ test('an unsent recovery cannot erase an earlier uncertain insertion or resurrec
     const current = await originalSession.call(this, owner);
     return ++checks === 2 ? { ...current, state: 'detached' } : current;
   });
-  await flushSquarePosts(c.artifact, await fs.realpath(c.square.location), () => 1000, undefined, c.ledgerLocation);
+  await flushSquarePosts(c.artifact, await fs.realpath(c.square.location), () => 1000, undefined, c.ledgerLocation, dispatchPostedCard);
   assert.ok(checks >= 2);
   assert.equal(calls, 1, 'recovered attempt aborted before invoking post');
   finalCheck.mock.restore();

@@ -1,14 +1,28 @@
 import {
   SquareError, isSquareError, type SquareErrorCode, type SquareErrorFacts, type ActDraft, type StoredAct, type ActivityMetadata, sameName, nameKey, validateName, validateActivityMetadata, activityMetadataHasContent,
 } from './model.js';
+import type { UnreadActivitySummary } from './neutral.js';
 import type { ParticipantFact, SquareRead } from './ports.js';
-import { participantIdentity } from './participant-identity.js';
+import { participantIdentity } from './square-values.js';
 import { UNREAD_BLOCK_GRACE_MS, freshWatchLease, readCursor, FACT_PAGE_SIZE, THROTTLE_WINDOW_MS } from './runtime.js';
 import { formatActivityId, MAX_IDENTITY_SET_SIZE } from './square-core.js';
 import { scanMentionCandidates, resolveMention } from './mention-parse.js';
 
 type TimedAct<K extends ActDraft['kind'] = ActDraft['kind']> = Extract<ActDraft, { kind: K }>;
-import type { ExpressResult, ParticipantSummary, UnreadActivitySummary } from './square-facade.js';
+
+export type ParticipantPresence = 'never-joined' | 'active' | 'watching' | 'away' | 'done';
+export interface ParticipantSummary {
+  readonly name: string;
+  readonly deliveryAvailable: boolean;
+  readonly listening: readonly string[];
+  readonly activityCount: number;
+  readonly lastActiveAt?: number;
+  readonly presence: ParticipantPresence;
+  readonly unreadActivityCount: number;
+  readonly pendingMentionCount: number;
+  /** Active automatic-notification hold for this current owner/join seat. */
+  readonly mutedUntil?: number;
+}
 
 export function resolveKnownName(facts: SquareRead, name: string): string {
   validateName(name);
@@ -45,7 +59,7 @@ function requireStanding(current: ParticipantFact): void {
   if (!current.joined) throw new SquareError('not_joined', `${participantIdentity(current.name)} has not joined this square`);
 }
 export type ActDecision =
-  | ({ type: 'sent'; act: TimedAct<'say'> } & Pick<ExpressResult, 'replyAuthorNotHere' | 'unmatchedMentions'>)
+  | ({ type: 'sent'; act: TimedAct<'say'> } & { replyAuthorNotHere?: string; unmatchedMentions?: readonly string[] })
   | { type: 'blocked'; activitySummaries: UnreadActivitySummary[] }
   | { type: 'capped' }
   | { type: 'throttled'; delayMs: number };

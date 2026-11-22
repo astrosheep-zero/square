@@ -1,5 +1,5 @@
-import type { WatchLease } from './model.js';
-import type { ParticipantCounts, ParticipantFact, SquareRead } from './ports.js';
+import { SquareError, validateName, validateOwner, type Owner, type Seat, type WatchLease } from './model.js';
+import type { ArtifactWriteAuthority, ParticipantCounts, ParticipantFact, SeatRef, SquareRead } from './ports.js';
 
 export const WATCH_HEARTBEAT_MS = 60000;
 export const WATCH_STALE_MS = 180000;
@@ -43,4 +43,24 @@ export function presenceAnchor(facts: SquareRead, name: string): number {
 export function freshWatchLease(facts: SquareRead, name: string, at: number): WatchLease | undefined {
   const lease = facts.lease(name);
   return lease === undefined || lease.expiresAt <= at || at - lease.heartbeatAt > WATCH_STALE_MS ? undefined : lease;
+}
+
+export function requireOwner(owner: Owner | undefined): Owner {
+  if (owner === undefined) throw new SquareError('invalid_args', 'Participant writes require an explicit owner.');
+  validateOwner(owner);
+  return owner;
+}
+
+export function requireJoinName(name: string | undefined): string {
+  if (name === undefined) throw new SquareError('invalid_args', 'Square.join requires an explicit participant name.');
+  validateName(name);
+  return name;
+}
+
+export function asSeatRef(seat: Seat): SeatRef {
+  return { participant: seat.participant, owner: seat.owner, generation: seat.generation };
+}
+
+export function participantAuthority(seat: Seat): ArtifactWriteAuthority {
+  return { kind: 'participant', seat: asSeatRef(seat) };
 }

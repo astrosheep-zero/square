@@ -57,7 +57,7 @@ test('ordinary storage/resource imports do not read guides; builds load and cach
       if (String(file).includes('/guides/')) guides.push({ file: String(file), mode: 'async' });
       return readAsync.call(this, file, ...args);
     };
-    await import('./dist/square-sqlite.js');
+    await import('./dist/square-store.js');
     const { prepareSquareBuild } = await import('./dist/artifact.js');
     const { Square } = await import('./dist/square-api.js');
     assert.deepEqual(guides, []);

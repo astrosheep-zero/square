@@ -200,8 +200,9 @@ One artifact port owns connection, publication and transaction lifetime. `artifa
 path lazily (read-only probe and validation, then a non-creating writable open), publishes new files through
 a same-directory temporary file and hard link, and exposes only guarded `SquareRead`/`LandingWriter`
 capabilities inside a synchronous transaction callback. The capability expires when the callback returns;
-SQLite framing and row handles stay private to `square-sqlite.ts`, and no public package entry exports a
-database handle or a second runtime data path.
+SQLite framing and row handles stay inside the artifact boundary (`artifact.ts`, `square-store.ts` and
+`square-producer-store.ts`). The application service (`square-service.ts`) works through the typed
+port; no public package entry exports a database handle or a second runtime data path.
 
 Format 13 owns activities, audience, participants, read state, posting/full-card bookkeeping,
 receipt watermarks and outstanding departure intents in the `.square` SQLite artifact. The per-user

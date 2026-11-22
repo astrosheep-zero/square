@@ -6,7 +6,7 @@ import crossSpawn from 'cross-spawn';
 import { applyEdits, createScanner, findNodeAtLocation, modify, parse, parseTree, SyntaxKind, type ParseError } from 'jsonc-parser';
 
 import { SQUARE_IDENTITY } from './identity.js';
-import { truncateExternalDiagnostic } from './presentation.js';
+import { truncateExternalDiagnostic } from './boundary-presentation.js';
 
 export type OpenCodeCommandRunner = (homeDir: string, args: string[]) => { status: number; stdout: string; stderr: string };
 

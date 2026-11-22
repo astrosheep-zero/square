@@ -1,13 +1,13 @@
 import { Box, Markdown, stripTerminalSequences, truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
-import { activityLabel, isDirectCardReach, shortOrigin, timeLabel } from '../../dist/card-format.js';
+import { activityLabel, isDirectCardReach, shortOrigin, timeLabel } from '../../dist/plugins/paseo/shared/card-format.js';
 import { z } from 'zod/v4';
 
 import { deliveryLedgerLocation } from '../../dist/square-api.js';
 import { harnessOwner } from '../../dist/owner.js';
 import { requestPiAkumaActor, resolveParticipantIdentity } from '../../dist/participant-identity.js';
 import { DeliveryLedger } from '../../dist/delivery-ledger.js';
-import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/delivery-frame.js';
-import { isCardPresentation } from '../../dist/card-presentation.js';
+import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/boundary-presentation.js';
+import { isCardPresentation } from '../../dist/plugins/paseo/shared/card-presentation.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, runSquareTool, squareToolsEnabled } from '../../dist/square-tools.js';
 import { attachDeliverySessionRoutes, detachDeliverySession } from '../../dist/session-lifecycle.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';

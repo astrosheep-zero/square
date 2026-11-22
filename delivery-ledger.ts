@@ -1,75 +1,18 @@
-export { migrateDeliveryLedger, type MigrateDeliveryLedgerInput, type MigrateDeliveryLedgerResult } from './migrate-delivery-ledger.js';
 import os from 'node:os';
 import path from 'node:path';
 import { validateOwner, type Owner } from './neutral.js';
 import { observeFileMetadata, type VersionObserver } from './file-changes.js';
 import { LedgerStore } from './delivery-ledger-sqlite.js';
+import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, SuppressionResult, DeliverySuppression } from './delivery-ledger-sqlite.js';
+export { migrateDeliveryLedger } from './delivery-ledger-sqlite.js';
+export type { DeliveryRoute, DeliverySession, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryOutcome, DeliveryAttempt, DeliveryReceipt,
+  PostResult, SuppressionResult, DeliverySuppression, DeliveryHealth, MigrateDeliveryLedgerInput, MigrateDeliveryLedgerResult } from './delivery-ledger-sqlite.js';
 import { copyDeliveryKey, type DeliveryKey } from './delivery-key.js';
 export { copyDeliveryKey, encodeDeliveryKey, deliveryKeyEqual, deliveryKeyPrefix, type DeliveryKey } from './delivery-key.js';
 import { redactCurrentDiagnostic } from './diagnostic-redaction.js';
 import { muteDeadline } from './time.js';
 
-export interface DeliveryRoute {
-  readonly kind: string;
-  readonly address: Readonly<Record<string, string>>;
-}
-export interface DeliverySession {
-  readonly owner: Owner;
-  readonly generation: string;
-  readonly state: 'attached' | 'detached' | 'deleted';
-  readonly routes: readonly DeliveryRoute[];
-  readonly at: number;
-}
-export interface DeliveryCard {
-  readonly seq: number;
-  readonly owner: Owner;
-  readonly key: DeliveryKey;
-  readonly text: string;
-  readonly details?: Readonly<Record<string, unknown>>;
-  readonly postedAt: number;
-}
-export interface DeliveryCorrelation {
-  readonly token?: string;
-  readonly messageId?: string;
-  readonly payloadHash?: string;
-}
-export interface DeliveryHandoffRef {
-  readonly token: string;
-  readonly owner: Owner;
-  readonly generation: string;
-  readonly payloadHash: string;
-  readonly routeKind: string;
-}
-export type DeliveryOutcome = 'dispatching' | 'accepted' | 'presented' | 'failed' | 'unknown' | 'released';
 export type PresentationOutcome = 'presented' | 'failed' | 'unknown' | 'released';
-export interface DeliveryAttempt {
-  readonly token: string;
-  readonly seq: number;
-  readonly generation: string;
-  readonly track: 'handoff' | 'presentation';
-  readonly routeKind: string | null;
-  readonly outcome: DeliveryOutcome;
-  readonly correlation: DeliveryCorrelation;
-  readonly startedAt: number;
-  readonly expiresAt: number;
-  readonly settledAt?: number;
-}
-export interface DeliveryReceipt { readonly seq: number; readonly owner: Owner; readonly key: DeliveryKey; readonly at: number }
-export type PostResult = { readonly status: 'posted' | 'duplicate' | 'conflict' | 'unknown-session' | 'deleted-session' | 'suppressed' };
-export type SuppressionResult = { readonly id: string; readonly status: 'suppressed' | 'in-custody' };
-export interface DeliverySuppression {
-  readonly id: string;
-  readonly owner: Owner | null;
-  readonly key: DeliveryKey;
-  readonly scope: 'exact' | 'prefix';
-  readonly createdAt: number;
-  readonly expiresAt?: number;
-}
-export interface DeliveryHealth {
-  readonly unknownAttempts: readonly DeliveryAttempt[];
-  readonly repeatedFailures: readonly { readonly owner: Owner; readonly key: DeliveryKey; readonly count: number }[];
-  readonly sessionsWithoutRoute: readonly Owner[];
-}
 export interface PresentationClaim {
   readonly cards: readonly DeliveryCard[];
   readonly attempts: readonly DeliveryAttempt[];

@@ -1,15 +1,98 @@
-import { formatActivityId, isNarratedActivity, NARRATED_ACTIVITY_KINDS, parseActivityId, type ActivityId } from './square-core.js';
-import { compareParticipantActivity, coreParticipants, resolveKnownName, unreadActivitySummaries } from './decisions.js';
-import { SquareError, nameKey, type HydratedAct } from './model.js';
+import { formatActivityId, isNarratedActivity, NARRATED_ACTIVITY_KINDS, parseActivityId, type ActivityId, type Perception, type Reach } from './square-core.js';
+import { compareParticipantActivity, coreParticipants, resolveKnownName, unreadActivitySummaries, type ParticipantSummary } from './decisions.js';
+import { SquareError, nameKey, sameName, type ActivityMetadata, type DirectedNotificationRoute, type HydratedAct, type Owner, type StoredAct } from './model.js';
+import type { ObservationOptions } from './neutral.js';
 import type { ActivityFilter, ActivityHead, SquareRead } from './ports.js';
 import { inSquareCount } from './runtime.js';
-import { perceiveActivity } from './perception-projection.js';
-import { activityQueryFilter } from './activity-query.js';
-import type {
-  Activity, ArchiveRecord, PerceivedActivity, HistoryQuery, HistoryContinuation,
-  ParticipantSummary, PresenceClassification, ParticipantsResult,
-  EntryPresentation, StatusResult, SquareObservation, PerceivePresence, Owner,
-} from './square-facade.js';
+import { activityQueryFilter, type ActivityQuery } from './activity-query.js';
+
+/** Indexed archive event, including read bookkeeping and a say's linked content. */
+export type ArchiveRecord = Readonly<HydratedAct>;
+export interface Activity {
+  readonly id: ActivityId;
+  readonly at: number;
+  readonly kind: 'join' | 'say' | 'done' | 'listen' | 'ignore' | 'unlisten';
+  readonly actor: string;
+  readonly body?: string;
+  readonly metadata?: ActivityMetadata;
+  readonly mentions: readonly string[];
+  readonly reach?: Reach;
+  readonly target?: string;
+  readonly reply?: ActivityId;
+}
+export interface PerceivedActivity extends Activity {
+  readonly perception: Perception;
+  readonly via?: DirectedNotificationRoute;
+}
+export interface SquareObservation {
+  readonly location: string;
+  readonly standingCount: number;
+  readonly now: number;
+  readonly participant?: string;
+}
+export interface EntryPresentation {
+  readonly joinedBefore: boolean;
+  readonly scene: string;
+  readonly joinContext: string;
+  readonly recentActivities: readonly PerceivedActivity[];
+}
+export interface PresenceClassification {
+  readonly orderedHereNames: readonly string[];
+  readonly lingeringCount: number;
+  readonly classificationByName: Readonly<Record<string, 'here' | 'lingering' | 'away' | 'done' | 'not-joined'>>;
+}
+export interface PerceivePresence {
+  readonly participants: readonly ParticipantSummary[];
+  readonly now: number;
+}
+export interface StatusOptions extends ObservationOptions {
+  readonly viewer?: string;
+}
+export interface StatusResult {
+  /** Present when a viewer resolves; an empty list means they listen to nobody. */
+  readonly listening?: readonly string[];
+  readonly hardCap: number | null;
+  readonly participants: readonly ParticipantSummary[];
+  readonly now: number;
+  readonly throttlePerMinute?: number;
+  readonly latestActivity?: Activity;
+  /** Active all-owner delivery hold; seats may still have independent holds. */
+  readonly ledgerMutedUntil?: number;
+  readonly observation?: StatusObservation;
+}
+export interface ParticipantsResult {
+  readonly participants: readonly ParticipantSummary[];
+  readonly observation?: ParticipantsObservation;
+}
+export interface HistoryQuery extends ActivityQuery, ObservationOptions {
+  /** Ten by default; null explicitly reads the full archive. */
+  readonly limit?: number | null;
+  readonly order?: 'asc' | 'desc';
+  readonly mention?: string;
+  readonly since?: number;
+  readonly context?: number;
+}
+export interface HistoryContinuation {
+  readonly direction: 'before' | 'after';
+  readonly cursor: ActivityId;
+  readonly limit: number;
+}
+export interface HistoryObservation extends SquareObservation {
+  readonly activities: readonly ArchiveRecord[];
+  readonly sayNumbers: Readonly<Record<number, number>>;
+  readonly presenceAnchors: Readonly<Record<number, readonly string[]>>;
+  readonly totalMatches: number;
+  readonly continuation?: HistoryContinuation;
+}
+export interface StatusObservation extends Omit<SquareObservation, 'now'>, PresenceClassification {
+  readonly knownParticipantCount: number;
+  readonly latestPerception?: Perception;
+  readonly joins: readonly { readonly activity: Activity; readonly rejoined: boolean }[];
+  readonly joinCount: number;
+  readonly attentionNames: readonly string[];
+  readonly viewer: string;
+}
+export interface ParticipantsObservation extends SquareObservation, PresenceClassification {}
 
 const PAGE_SIZE = 100;
 export const HISTORY_DEFAULT_LIMIT = 10;
@@ -17,6 +100,15 @@ export const HISTORY_MAX_LIMIT = 100;
 const STATUS_HERE_WINDOW_MS = 30 * 60_000;
 const PRESENCE_WINDOW_MS = 8 * 60 * 60_000;
 export const NON_READ = ['join', 'done', 'say', 'listen', 'ignore', 'unlisten'] as const;
+
+export function directedTo(facts: SquareRead, activity: StoredAct, name: string): boolean {
+  return activity.kind === 'say' && facts.directedAt(name, activity.index) !== undefined;
+}
+
+/** Audience is settled at landing, never reconstructed from a partial history. */
+export function perceiveActivity(facts: SquareRead, activity: StoredAct, name: string): Perception {
+  return activity.kind !== 'say' || sameName(activity.actor, name) || directedTo(facts, activity, name) ? 'full' : 'presence';
+}
 
 /** The one stored-to-public Activity field mapping. Rejects read bookkeeping. */
 export function toPublicActivity(stored: HydratedAct): Activity {

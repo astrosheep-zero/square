@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import { createArtifactPort } from '../dist/artifact.js';
-import { createSqliteDriver, initializeSqlite } from '../dist/square-sqlite.js';
+import { createSqliteDriver, initializeSqlite } from '../dist/square-store.js';
 
 function state() {
   return {

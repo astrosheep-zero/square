@@ -8,7 +8,7 @@ import { deriveLanding, landingFacts, type LandingWriter } from './square-domain
 import { formatActivityId, parseActivityId } from './square-core.js';
 import { compileSearchPattern } from './search.js';
 import { validateEndpointGeneration as endpointGeneration } from './message.js';
-import { createProducerDriver, FORMAT12_PRODUCER_SQL, FORMAT13_ADDITIONS_SQL, resetProducerSqlite } from './square-producer-sqlite.js';
+import { createProducerDriver, FORMAT12_PRODUCER_SQL, FORMAT13_ADDITIONS_SQL, resetProducerSqlite } from './square-producer-store.js';
 import { readStorageRevision, initializeStorageMeta, resetStorageMeta, STORAGE_META_SQL, validateSchema } from './sqlite-framing.js';
 import { type Row, encode, key, invalidArtifact, requireFact, integer, finite, string, json, object, shape, strings, decoded, immutable, pageRows, pageLimit } from './sqlite-values.js';
 export const APPLICATION_ID = 0x53515245;

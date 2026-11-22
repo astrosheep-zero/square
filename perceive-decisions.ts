@@ -1,13 +1,22 @@
-import { formatActivityId, parseActivityId } from './square-core.js';
+import { formatActivityId, parseActivityId, type ActivityId } from './square-core.js';
 import { terminalStatusFor } from './runtime.js';
-import { SquareError, type HydratedAct } from './model.js';
+import { SquareError, type DirectedNotificationRoute, type HydratedAct } from './model.js';
+import type { ObservationOptions } from './neutral.js';
 import { resolveKnownName } from './decisions.js';
 import type { ActivityIndex, DirectedFilter, SquareRead, SquareWrite } from './ports.js';
-import type { PerceiveOptions, PerceiveReason, PerceivedActivity } from './square-facade.js';
-import { toPerceivedActivity } from './views.js';
+import { toPerceivedActivity, type PerceivedActivity } from './views.js';
 import { perceiveHint } from './hints.js';
-import { consumeReceived, ReceiveError, selectReceivedHeads, type Selection } from './receive.js';
-import { squareReceiveRead } from './square-receive.js';
+import { consumeReceived, ReceiveError, selectReceivedHeads, type ReceiveRead, type Selection } from './receive.js';
+
+export interface PerceiveOptions extends ObservationOptions {
+  readonly id?: ActivityId;
+  readonly idle?: number;
+  readonly from?: readonly string[];
+  readonly mention?: boolean;
+  readonly limit?: number;
+  readonly takeover?: boolean;
+}
+export type PerceiveReason = 'drained' | 'idle' | 'capped' | 'quorum' | 'replaced' | 'already-active';
 
 export interface PerceiveSelection {
   readonly participant: string;
@@ -20,6 +29,25 @@ export interface PerceiveSelection {
   readonly hardCap: number | null;
   readonly terminalStatus: Extract<PerceiveReason, 'capped' | 'quorum'> | undefined;
   readonly hint?: string;
+}
+
+/** Transaction-local projections only; the artifact still owns indexed selection and bodies. */
+export function squareReceiveRead(facts: SquareRead): ReceiveRead<number, HydratedAct, DirectedNotificationRoute, DirectedFilter> {
+  const filter = (query: DirectedFilter, unconsumed: boolean): DirectedFilter => {
+    const { unseenOnly: _, ...rest } = query;
+    return unconsumed ? { ...rest, unseenOnly: true } : rest;
+  };
+  return {
+    heads: (recipient, query, options) => facts.directed(recipient, filter(query, options.unconsumed), { edge: 'oldest', limit: options.limit })
+      .items.map(item => ({ key: item.index, via: item.route })),
+    addressed(recipient, index) {
+      const head = facts.directedAt(recipient, index);
+      return head === undefined ? undefined : { key: head.index, via: head.route };
+    },
+    load: keys => new Map(facts.activities(keys).map(item => [item.index, item])),
+    count: (recipient, query, unconsumed) => facts.directedCount(recipient, filter(query, unconsumed)),
+    receipt: ref => facts.receipt(ref.recipient, ref.item),
+  };
 }
 
 /** Capture a selected page (or an empty completion) without opening another resource. */

@@ -1,5 +1,5 @@
 import { DeliveryLedger, deliveryLedgerLocation } from './delivery-ledger.js';
-import { truncateExternalDiagnostic } from './presentation.js';
+import { truncateExternalDiagnostic } from './boundary-presentation.js';
 
 import {
   doctorClaudePlugin,

@@ -1,9 +1,8 @@
 import fs from 'node:fs/promises';
-import { encodeDeliveryKey, deliveryKeyPrefix, type DeliveryKey } from './delivery-key.js';
+import { encodeDeliveryKey, deliveryKeyPrefix, parseSquarePostKey, squarePostKey, type DeliveryKey } from './delivery-key.js';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { validateOwner } from './neutral.js';
-import type { MigrateDeliveryLedgerResult } from './migrate-delivery-ledger.js';
+import { validateOwner, type Owner } from './neutral.js';
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync as NodeDatabaseSync, DatabaseSyncOptions, SQLInputValue } from 'node:sqlite';
 
@@ -31,9 +30,80 @@ const { DatabaseSync } = await (process.versions.bun
 type DatabaseSync = NodeDatabaseSync;
 import { inSqliteTransaction, retrySqliteBusy, awaitSqliteQueue } from './sqlite-transaction.js';
 import { validateSchema } from './sqlite-framing.js';
-import type { DeliveryAttempt, DeliveryCard, DeliveryCorrelation, DeliveryHandoffRef, DeliveryHealth, DeliveryOutcome, DeliveryReceipt, DeliveryRoute, DeliverySession, PostResult, SuppressionResult, DeliverySuppression } from './delivery-ledger.js';
 
 type Row = Record<string, SQLInputValue>;
+
+export interface DeliveryRoute {
+  readonly kind: string;
+  readonly address: Readonly<Record<string, string>>;
+}
+export interface DeliverySession {
+  readonly owner: Owner;
+  readonly generation: string;
+  readonly state: 'attached' | 'detached' | 'deleted';
+  readonly routes: readonly DeliveryRoute[];
+  readonly at: number;
+}
+export interface DeliveryCard {
+  readonly seq: number;
+  readonly owner: Owner;
+  readonly key: DeliveryKey;
+  readonly text: string;
+  readonly details?: Readonly<Record<string, unknown>>;
+  readonly postedAt: number;
+}
+export interface DeliveryCorrelation {
+  readonly token?: string;
+  readonly messageId?: string;
+  readonly payloadHash?: string;
+}
+export interface DeliveryHandoffRef {
+  readonly token: string;
+  readonly owner: Owner;
+  readonly generation: string;
+  readonly payloadHash: string;
+  readonly routeKind: string;
+}
+export type DeliveryOutcome = 'dispatching' | 'accepted' | 'presented' | 'failed' | 'unknown' | 'released';
+export interface DeliveryAttempt {
+  readonly token: string;
+  readonly seq: number;
+  readonly generation: string;
+  readonly track: 'handoff' | 'presentation';
+  readonly routeKind: string | null;
+  readonly outcome: DeliveryOutcome;
+  readonly correlation: DeliveryCorrelation;
+  readonly startedAt: number;
+  readonly expiresAt: number;
+  readonly settledAt?: number;
+}
+export interface DeliveryReceipt { readonly seq: number; readonly owner: Owner; readonly key: DeliveryKey; readonly at: number }
+export type PostResult = { readonly status: 'posted' | 'duplicate' | 'conflict' | 'unknown-session' | 'deleted-session' | 'suppressed' };
+export type SuppressionResult = { readonly id: string; readonly status: 'suppressed' | 'in-custody' };
+export interface DeliverySuppression {
+  readonly id: string;
+  readonly owner: Owner | null;
+  readonly key: DeliveryKey;
+  readonly scope: 'exact' | 'prefix';
+  readonly createdAt: number;
+  readonly expiresAt?: number;
+}
+export interface DeliveryHealth {
+  readonly unknownAttempts: readonly DeliveryAttempt[];
+  readonly repeatedFailures: readonly { readonly owner: Owner; readonly key: DeliveryKey; readonly count: number }[];
+  readonly sessionsWithoutRoute: readonly Owner[];
+}
+export interface MigrateDeliveryLedgerInput {
+  readonly location: string;
+  readonly convertOpaqueKey?: (key: string) => DeliveryKey | undefined;
+  readonly convertOpaquePrefix?: (prefix: string) => DeliveryKey | undefined;
+}
+export interface MigrateDeliveryLedgerResult {
+  readonly location: string;
+  readonly fromVersion: 4 | 5;
+  readonly toVersion: 5;
+  readonly changed: boolean;
+}
 const FORMAT = 5;
 const APPLICATION_ID = 0x444c4752;
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -643,7 +713,7 @@ function migrationSnapshot(db: DatabaseSync, location: string, signal?: AbortSig
 }
 
 /** The only SQLite boundary for explicit offline preservation migration. */
-export async function migrateLedgerStore(location: string, convertKey: (legacy: string) => string, convertPrefix: (legacy: string) => string, signal?: AbortSignal): Promise<MigrateDeliveryLedgerResult> {
+async function migrateLedgerStore(location: string, convertKey: (legacy: string) => string, convertPrefix: (legacy: string) => string, signal?: AbortSignal): Promise<MigrateDeliveryLedgerResult> {
   const open = (readOnly: boolean) => {
     const uri = pathToFileURL(location); uri.searchParams.set('mode', readOnly ? 'ro' : 'rw');
     return new DatabaseSync(uri.href, { readOnly });
@@ -705,5 +775,47 @@ export async function migrateLedgerStore(location: string, convertKey: (legacy: 
     if (begun) { try { db.exec('ROLLBACK'); } catch { /* retain original failure */ } }
     throw error;
   } finally { db.close(); }
+}
+
+/** Strict historical producer grammar. Unknown/malformed identities require a converter. */
+function legacySquareKey(key: string): DeliveryKey | undefined {
+  const match = /^square:(.*)#(act|notice)\/(0|[1-9]\d*)\/recipient\/([^/]*)\/join\/([^/]*)$/s.exec(key);
+  if (!match) return undefined;
+  try {
+    const [, location, tag, digits, escapedRecipient, escapedGeneration] = match;
+    if (!path.isAbsolute(location!) || path.resolve(location!) !== location) return undefined;
+    const index = Number(digits), recipient = decodeURIComponent(escapedRecipient!), generation = decodeURIComponent(escapedGeneration!);
+    const result = squarePostKey(location!, { kind: tag === 'act' ? 'activity' : 'notice', index, recipient, generation });
+    if (`square:${location}#${tag}/${index}/recipient/${encodeURIComponent(result[3]!)}/join/${encodeURIComponent(generation)}` !== key
+      || !parseSquarePostKey(location!, result)) return undefined;
+    return result;
+  } catch { return undefined; }
+}
+function legacySquarePrefix(prefix: string): DeliveryKey | undefined {
+  if (!prefix.startsWith('square:') || !prefix.endsWith('#')) return undefined;
+  const location = prefix.slice(7, -1);
+  return path.isAbsolute(location) && path.resolve(location) === location ? ['square', location] : undefined;
+}
+
+/** Explicit offline edge; ordinary opens never call this. Stop all ledger writers first. */
+export function migrateDeliveryLedger(input: MigrateDeliveryLedgerInput, control?: { readonly signal?: AbortSignal }): Promise<MigrateDeliveryLedgerResult> {
+  if (!input || typeof input.location !== 'string' || !path.isAbsolute(input.location)) throw new TypeError('Delivery location must be absolute');
+  for (const converter of [input.convertOpaqueKey, input.convertOpaquePrefix])
+    if (converter !== undefined && typeof converter !== 'function') throw new TypeError('Expected a synchronous delivery key converter');
+  const converter = (prefix: boolean) => {
+    const cache = new Map<string, string>();
+    return (legacy: string): string => {
+      let encoded = cache.get(legacy);
+      if (encoded === undefined) {
+        const key = (prefix ? legacySquarePrefix(legacy) : legacySquareKey(legacy))
+          ?? (prefix ? input.convertOpaquePrefix : input.convertOpaqueKey)?.(legacy);
+        if (key === undefined) throw new Error(`No conversion for opaque delivery ${prefix ? 'prefix' : 'key'}: ${JSON.stringify(legacy)}`);
+        encoded = encodeDeliveryKey(key, prefix);
+        cache.set(legacy, encoded);
+      }
+      return encoded;
+    };
+  };
+  return migrateLedgerStore(input.location, converter(false), converter(true), control?.signal);
 }
 

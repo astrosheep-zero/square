@@ -1,6 +1,13 @@
 import { DeliveryLedger, deliveryLedgerLocation, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
 import type { Owner } from './owner.js';
 
+const NATIVE_RECEIVER_ROUTES = new Set(['codex-queue', 'claude-mod', 'pi-native']);
+
+/** Native receiver custody is never acquired by producer dispatch. */
+export function isProducerDispatchRoute(route: DeliveryRoute): boolean {
+  return !NATIVE_RECEIVER_ROUTES.has(route.kind);
+}
+
 function openLedger(env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<DeliveryLedger> {
   return DeliveryLedger.open({ location: deliveryLedgerLocation(env), signal });
 }

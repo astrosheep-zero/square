@@ -1,4 +1,4 @@
-import { renderDeliveryReminder } from './delivery-frame.js';
+import { renderDeliveryReminder } from './boundary-presentation.js';
 import type { DeliveryCard, DeliveryTransport, DeliveryTransportContext, TransportOutcome } from './delivery-ledger.js';
 import { DeliveryError } from './packages/agent-delivery/src/index.js';
 import { discoverPaseoAgents, waitForPaseoWakeBoundary } from './paseo-state.js';

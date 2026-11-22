@@ -1,8 +1,9 @@
 import { sameName } from './model.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { participantIdentity } from './participant-identity.js';
-export { participantIdentity } from './participant-identity.js';
+import { truncateExternalDiagnostic } from './boundary-presentation.js';
+import { truncateChars } from './neutral.js';
+import { participantIdentity } from './square-values.js';
 import { MAX_IDENTITY_SET_SIZE, type Perception } from './square-core.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from './time.js';
 import type { Activity, UnreadActivitySummary, ParticipantSummary } from './square-facade.js';
@@ -135,19 +136,6 @@ export function renderPresenceLines(recent: readonly ParticipantSummary[], now: 
 }
 
 const BODY_PREVIEW_LENGTH = 200;
-
-export function truncateChars(body: string, maxChars: number): { text: string; remaining: number } {
-  const chars = [...body];
-  if (chars.length <= maxChars) return { text: body, remaining: 0 };
-  return { text: chars.slice(0, maxChars).join('').trimEnd(), remaining: chars.length - maxChars };
-}
-
-const EXTERNAL_DIAGNOSTIC_MAX_CHARS = 160;
-
-export function truncateExternalDiagnostic(diagnostic: string): string {
-  if (truncateChars(diagnostic, EXTERNAL_DIAGNOSTIC_MAX_CHARS).remaining === 0) return diagnostic;
-  return `${truncateChars(diagnostic, EXTERNAL_DIAGNOSTIC_MAX_CHARS - 1).text}…`;
-}
 
 function previewBodyFacts(body: string, maxLen = BODY_PREVIEW_LENGTH): { text: string; clipped: boolean } {
   const preview = truncateChars(body, maxLen);

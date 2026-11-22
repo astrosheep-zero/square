@@ -7,10 +7,11 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Square } from '../dist/square-api.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { squarePostKey, parseSquarePostKey } from '../dist/square-post.js';
+import { squarePostKey, parseSquarePostKey } from '../dist/delivery-key.js';
 import { nameKey } from '../dist/model.js';
 import { flushSquarePosts, reconcileSquareDelivery, readSquareSessions, ensureInitialDeliverySession } from '../dist/square-posting.js';
-import { SqliteSquare } from '../dist/sqlite-square.js';
+import { SqliteSquare } from '../dist/square-service.js';
+import { dispatchPostedCard } from '../dist/notifications.js';
 
 test('receipt folds and owner watermarks commit atomically, replay safely and skip retained history', async t => {
   const c = await fixture(t);
@@ -147,8 +148,8 @@ test('internal delivery entry points refuse omitted locations before accessing s
   await assert.rejects(readSquareSessions([]), /resolved absolute/);
   await assert.rejects(ensureInitialDeliverySession('owner'), /resolved absolute/);
   await assert.rejects(reconcileSquareDelivery(undefined, c.location, Date.now), /resolved absolute/);
-  await assert.rejects(flushSquarePosts(undefined, c.location, Date.now), /resolved absolute/);
-  assert.throws(() => new SqliteSquare(c.location, c.artifact, Date.now, c.location), /resolved absolute/);
+  await assert.rejects(flushSquarePosts(undefined, c.location, Date.now, undefined, undefined, dispatchPostedCard), /resolved absolute/);
+  assert.throws(() => new SqliteSquare(c.location, c.artifact, Date.now, c.location, undefined, dispatchPostedCard), /resolved absolute/);
   assert.equal(open.mock.callCount(), 0);
   open.mock.restore();
   const previous = process.env.SQUARE_DELIVERY;
@@ -187,7 +188,7 @@ async function fixture(t) {
     cards: async () => (await Promise.all([alice.seat.owner, bob.seat.owner].map(owner => ledger.cards({ owner, keyPrefix: ['square', location] })))).flat(),
     insert: input => artifact.transactAs({ kind: 'send', actor: 'notice' }, facts => facts.insertNotice({ from: 'notice', to: 'Bob', ...input }, Date.now())),
     reconcile: () => reconcileSquareDelivery(artifact, location, Date.now, undefined, ledgerLocation),
-    flush: () => flushSquarePosts(artifact, location, Date.now, undefined, ledgerLocation),
+    flush: () => flushSquarePosts(artifact, location, Date.now, undefined, ledgerLocation, dispatchPostedCard),
   };
 }
 
@@ -338,7 +339,7 @@ test('flush omits expired and future-clock claims but retries live identities an
       return target[key];
     },
   })), signal));
-  await flushSquarePosts(c.artifact, c.location, () => 0, undefined, c.ledgerLocation);
+  await flushSquarePosts(c.artifact, c.location, () => 0, undefined, c.ledgerLocation, dispatchPostedCard);
   assert.deepEqual(acquires, ['live-retry', 'never-exported'], 'selection uses host time, not the deliberately ancient social clock');
   assert.equal((await c.cards()).length, 2);
   const retained = (await c.artifact.read(facts => facts.postsAt(posts.map(post => parseSquarePostKey(c.location, c.key(post)))))).value;

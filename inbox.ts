@@ -3,7 +3,19 @@ import { createArtifactPort } from './artifact.js';
 import { discoverSquares, MAX_LIST_LIMIT } from './list.js';
 import { canonicalPath } from './canonical-path.js';
 import type { Owner } from './model.js';
-import type { InboxMembershipSummary } from './square-facade.js';
+
+export interface InboxOptions {
+  readonly limit?: number;
+}
+export interface InboxMembershipSummary {
+  readonly name: string;
+  readonly squarePath: string;
+  readonly pending: number;
+}
+export interface InboxResult {
+  readonly rows: readonly InboxMembershipSummary[];
+  readonly total: number;
+}
 
 /** Filesystem-scoped membership counts. This is a World read, not a delivery scan. */
 export async function sessionInboxCounts(input: { readonly owner: Owner; readonly cwd?: string }, signal?: AbortSignal): Promise<InboxMembershipSummary[]> {

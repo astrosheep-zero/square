@@ -13,7 +13,7 @@ import {
     createSqliteDriver, initializeSqlite, exportSqliteState, inspectSqlite, emptyRuntimeState,
     validateSquareFraming, resetSquareSqlite, APPLICATION_ID, CURRENT_USER_VERSION,
     abort, openExistingSquareDatabase, requireSquareExtension, storageError, type SquareState,
-} from './square-sqlite.js';
+} from './square-store.js';
 import { readStorageRevision } from './sqlite-framing.js';
 import { invalidArtifact } from './sqlite-values.js';
 

@@ -3,15 +3,41 @@ import path from 'node:path';
 
 import { createArtifactPort } from './artifact.js';
 import { canonicalPath } from './canonical-path.js';
-import { nameKey, SquareError, type Seat } from './model.js';
+import { nameKey, SquareError, type Owner, type Seat } from './model.js';
 import { readLedgerMutedUntil, readSquareSeatMutes, seatMuteKey } from './square-notification-mute.js';
 import { listPresentation } from './views.js';
-import type { DiscoveryResult, DiscoveryOptions, OperationControl, SquareListItem } from './square-facade.js';
+import type { OperationControl } from './neutral.js';
 
 export const DEFAULT_LIST_DEPTH = 4;
 export const MAX_LIST_DEPTH = 16;
 export const DEFAULT_LIST_LIMIT = 20;
 export const MAX_LIST_LIMIT = 100;
+export interface DiscoveryOptions {
+  readonly owner?: Owner;
+  readonly depth?: number;
+  readonly limit?: number;
+  readonly after?: string;
+  /** Explicit host ledger for mute enrichment; adapters resolve their own configured location. */
+  readonly ledgerLocation?: string;
+  readonly clock?: () => number;
+}
+export interface SquareListItem {
+  readonly joined?: readonly { readonly name: string; readonly pending: number; readonly mutedUntil?: number }[];
+  readonly path: string;
+  readonly lastActiveAt: number;
+  readonly context: readonly string[];
+  readonly participants: readonly string[];
+  readonly activities: number;
+}
+export interface DiscoveryResult {
+  readonly items: readonly SquareListItem[];
+  readonly stopped: boolean;
+  readonly total: number;
+  readonly remaining: number;
+  readonly next?: string;
+  /** Active all-owner delivery hold, when an explicit ledger was read. */
+  readonly ledgerMutedUntil?: number;
+}
 const LIST_DISCOVERY_BUDGET = 10_000;
 const LIST_SKIP_DIRS = new Set(['.git', 'node_modules', 'dist']);
 

@@ -2,7 +2,7 @@ import { SquareError, nameKey, sameName, validateOwner, validateName, type ActDr
 import { newEndpointGeneration, validateEndpointGeneration } from './message.js';
 import { resolveAudience } from './attention.js';
 import type { ArtifactWriteAuthority, AttentionFact, DirectedHead, LandedRecipient, ParticipantFact, SeatRef, SquareRead, SquareWrite } from './ports.js';
-import type { ProducerWrite } from './square-post.js';
+import type { ProducerWrite } from './ports.js';
 import { freshWatchLease } from './runtime.js';
 
 /** A live perceive owns only landed arrivals its sender and attention filters both satisfy. */

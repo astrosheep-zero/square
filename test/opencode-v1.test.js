@@ -9,7 +9,7 @@ import plugin from '../dist/plugins/opencode-v1/index.js';
 import { legacyTransport } from '../dist/plugins/opencode-v1/transport.js';
 import { startReceiver } from '../dist/plugins/opencode-v1/runtime.js';
 import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { renderDeliveryReminder } from '../dist/delivery-frame.js';
+import { renderDeliveryReminder } from '../dist/boundary-presentation.js';
 import { harnessOwner } from '../dist/owner.js';
 import { installOpenCodePlugin, uninstallOpenCodePlugin, verifyOpenCodeRuntime } from '../dist/harness-links.js';
 

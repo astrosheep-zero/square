@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import type { DeliveryCard, DeliveryTransport, DeliveryTransportContext, TransportOutcome } from './delivery-ledger.js';
 import { akumaDeliveryOwner, requireAkumaActor } from './owner.js';
 import { formatActivityId } from './square-core.js';
-import { parseSquarePostKey } from './square-post.js';
+import { parseSquarePostKey } from './delivery-key.js';
 
 interface AkumaTarget {
   readonly id: string;
