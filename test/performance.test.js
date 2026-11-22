@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { renderPerceiveOutcome } from '../dist/surfaces/operation-presentation.js';
+import { renderPerceiveOutcome } from '../dist/surfaces/perceive-presentation.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
 import { createArtifactPort } from '../dist/artifact/artifact.js';
-import { perceivePresence } from '../dist/core/views.js';
+import { perceivePresence } from '../dist/core/observations.js';
 
 /** Counts artifact callbacks and the activity rows/selectors each read actually asks for. */
 function instrumentCell(cell) {

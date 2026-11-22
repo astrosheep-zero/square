@@ -13,7 +13,7 @@ import { formatActivityId, type ActivityId } from '../core/square-core.js';
 import { assertCurrentSeat } from '../core/square-domain.js';
 import { participantIdentity } from '../core/square-values.js';
 import { parseRequiredActivityId, perceivePresence, toPerceivedActivity, toPublicActivity,
-  type Activity, type PerceivePresence, type PerceivedActivity, type SquareObservation } from '../core/views.js';
+  type Activity, type PerceivePresence, type PerceivedActivity, type SquareObservation } from '../core/observations.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease } from '../core/wakes.js';
 
 export interface AckResult { readonly consumed: number }

@@ -20,7 +20,7 @@ import {
   installOpenCodePlugin,
   uninstallOpenCodePlugin,
   verifyOpenCodeRuntime,
-} from './harness-links.js';
+} from './harness-opencode.js';
 
 export type HarnessTargetName = 'claude' | 'codex' | 'opencode' | 'pi' | 'delivery';
 export type HarnessAction = 'install' | 'uninstall' | 'doctor';

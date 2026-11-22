@@ -1,13 +1,11 @@
 import { sameName } from '../core/model.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { truncateExternalDiagnostic } from '../hosts/boundary-presentation.js';
 import { truncateChars } from '../core/neutral.js';
 import { participantIdentity } from '../core/square-values.js';
 import { MAX_IDENTITY_SET_SIZE, type Perception } from '../core/square-core.js';
-import { formatDuration, formatRelativeTime, formatTimestamp } from '../core/time.js';
+import { formatRelativeTime } from '../core/time.js';
 import type { Activity, UnreadActivitySummary, ParticipantSummary } from '../api/types.js';
-import { grepSnippet } from '../core/search.js';
 import { style } from './tty-style.js';
 
 export type PresentationSurface = 'cli' | 'tool';
@@ -17,37 +15,10 @@ export function formatToolAction(tool: string, args: Readonly<Record<string, unk
   return Object.keys(clean).length === 0 ? tool : `${tool} ${JSON.stringify(clean)}`;
 }
 
-export type WatchStatus = 'idle' | 'drained' | 'quorum' | 'capped';
-
 interface HeaderOptions {
   participantCount?: number;
   /** Refusal bodies go to stderr, which stays literal even when it is a TTY. */
   plain?: boolean;
-}
-
-interface ParticipantOutputOptions {
-  surface?: PresentationSurface;
-  owner?: string;
-  squarePath: string;
-  name: string;
-  participantCount?: number;
-}
-
-
-
-interface ExpressWaitingOptions {
-  reason: 'throttled';
-  delayMs?: number;
-}
-
-
-interface WatchStatusOptions extends ParticipantOutputOptions {
-  status: WatchStatus;
-  idleMs?: number;
-  presence?: { participants: readonly ParticipantSummary[]; now: number };
-  showPerceiveHint?: boolean;
-  ownActivityCount?: number;
-  hardCap?: number | null;
 }
 
 export function displayPath(squarePath: string, cwd = process.cwd()): string {
@@ -95,17 +66,10 @@ export function participantCommandPrefix(squarePath: string, name: string, owner
   return `square --location ${quoteShell(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath) ? squarePath : path.resolve(squarePath))} --as ${quoteShell(name)}${owner === undefined ? '' : ` --owner ${quoteShell(owner)}`}`;
 }
 
-/** Blocked actions end with a full copy-pasteable recovery command. */
-export function joinRecoveryCommand(squarePath: string, name: string, owner?: string): string {
-  return `${participantCommandPrefix(squarePath, name, owner)} join`;
-}
-
-/** Taking a name is an explicit recovery choice, never an automatic retry. */
-export function takeoverRecoveryLines(squarePath: string, name: string, owner?: string): string[] {
-  return [
-    'If this is your name to reclaim, --takeover banishes the one standing here so you can step in:',
-    `${participantCommandPrefix(squarePath, name, owner)} join --takeover`,
-  ];
+export function participantAction(surface: PresentationSurface | undefined, squarePath: string, name: string, owner: string | undefined, verb: 'perceive' | 'done' | 'join', options: { idle?: '30m'; takeover?: true } = {}): string {
+  return surface === 'tool'
+    ? formatToolAction(verb, { location: displayPath(squarePath), as: name, ...options })
+    : `${participantCommandPrefix(squarePath, name, owner)} ${verb}${options.idle === undefined ? '' : ` --idle ${options.idle}`}${options.takeover ? ' --takeover' : ''}`;
 }
 
 function formatAge(ms: number | undefined): string {
@@ -137,7 +101,7 @@ export function renderPresenceLines(recent: readonly ParticipantSummary[], now: 
 
 const BODY_PREVIEW_LENGTH = 200;
 
-function previewBodyFacts(body: string, maxLen = BODY_PREVIEW_LENGTH): { text: string; clipped: boolean } {
+export function previewBodyFacts(body: string, maxLen = BODY_PREVIEW_LENGTH): { text: string; clipped: boolean } {
   const preview = truncateChars(body, maxLen);
   return {
     text: preview.remaining === 0 ? preview.text : `${preview.text}\n${style('dim', `… ${preview.remaining} more chars`)}`,
@@ -146,25 +110,6 @@ function previewBodyFacts(body: string, maxLen = BODY_PREVIEW_LENGTH): { text: s
 }
 
 const UNREAD_PREVIEW_CHARS = 120;
-
-function renderRoomChangeText(event: Activity): string {
-  const actor = event.actor ?? 'someone';
-  const identity = actor === 'someone' ? actor : participantIdentity(actor);
-  switch (event.kind) {
-    case 'join':
-      return `${identity} stepped into the square`;
-    case 'done':
-      return `${identity} stepped out of the square`;
-    case 'listen':
-      return `${identity} turned an ear toward ${participantIdentity(event.target ?? 'someone')}`;
-    case 'ignore':
-      return `${identity} turned away from ${participantIdentity(event.target ?? 'someone')}`;
-    case 'unlisten':
-      return `${identity} stopped listening to ${participantIdentity(event.target ?? 'someone')}`;
-    default:
-      throw new Error('Expected a lifecycle activity');
-  }
-}
 
 function renderedBody(body: string | undefined, maxChars: number | undefined): { text: string; clipped: boolean } {
   if (!body) return { text: '', clipped: false };
@@ -192,8 +137,15 @@ function renderEventCliFacts(
     case 'join':
     case 'listen':
     case 'ignore':
-    case 'unlisten':
-      return { text: `· ${renderRoomChangeText(event)}`, bodyClipped: false };
+    case 'unlisten': {
+      const actor = event.actor ?? 'someone';
+      const identity = actor === 'someone' ? actor : participantIdentity(actor);
+      const action = event.kind === 'join' ? 'stepped into the square'
+        : event.kind === 'listen' ? `turned an ear toward ${participantIdentity(event.target ?? 'someone')}`
+          : event.kind === 'ignore' ? `turned away from ${participantIdentity(event.target ?? 'someone')}`
+            : `stopped listening to ${participantIdentity(event.target ?? 'someone')}`;
+      return { text: `· ${identity} ${action}`, bodyClipped: false };
+    }
     case 'say': {
       const body = renderedBody(event.body, maxBody);
       const visibleBody = body.text === '' && event.metadata !== undefined
@@ -253,10 +205,6 @@ export function renderAmbientEventFacts(
   return renderEventCliFacts(event, opts);
 }
 
-function draftSavedLines(draftPath: string | undefined): string[] {
-  return draftPath === undefined ? [] : [style('dim', `· draft kept: ${draftPath}`)];
-}
-
 export function renderUnreadSummary(activitySummaries: readonly UnreadActivitySummary[]): string[] {
   const visibleSummaries = activitySummaries.slice(0, MAX_IDENTITY_SET_SIZE);
   const remainingSummaries = activitySummaries.length - visibleSummaries.length;
@@ -274,153 +222,10 @@ export function renderUnreadSummary(activitySummaries: readonly UnreadActivitySu
 }
 
 
-/** An indeterminate or already-committed send only points to inspection, never resend. */
-export function renderActivityUncertain(opts: ParticipantOutputOptions & { draftPath: string; landedId?: string; detail?: string }): string {
-  return formatRefusal(opts.squarePath, [
-    opts.landedId === undefined
-      ? '✕ your activity may have landed — check history before sending again'
-      : `✕ your activity landed · ${opts.landedId} — the confirmation could not finish`,
-    ...(opts.detail === undefined ? [] : [`  · ${truncateExternalDiagnostic(opts.detail)}`]),
-    ...draftSavedLines(opts.draftPath),
-    '  · the draft is a saved copy; sending it again could repeat your activity',
-    `${commandPrefix(opts.squarePath)} history${opts.landedId === undefined ? ' --limit 10' : ` --at ${opts.landedId}`} --full`,
-  ], opts);
-}
-
-export function renderExpressWaiting(opts: ExpressWaitingOptions): string {
-  return [
-    '· the square is packed — your activity is waiting',
-    `  · a lull opens in ${formatDuration(opts.delayMs)}`,
-    '  · --no-wait saves a draft and returns now',
-  ].join('\n');
-}
-
-
 export function renderPresenceAnchor(names: readonly string[]): string {
   const visibleNames = names.slice(0, MAX_IDENTITY_SET_SIZE);
   const participants = visibleNames.map((name) => participantIdentity(name)).join(', ');
   const remaining = names.length - visibleNames.length;
   const suffix = remaining === 0 ? '' : ` and ${remaining} more`;
   return style('dim', names.length === 1 ? `→ ${participants} was here` : `→ ${participants}${suffix} were here`);
-}
-
-const GREP_PREVIEW_CHARS = 160;
-
-export function renderGrepActivitiesView(
-  visible: readonly Activity[],
-  totalMatches: number,
-  full: boolean | undefined,
-  squarePath: string,
-  pattern: string,
-  fixed = false,
-  surface: PresentationSurface = 'cli',
-): string {
-  const publicVisible = visible.filter((act) => act.kind === 'say' || act.kind === 'done');
-  if (totalMatches === 0) return `○ no activity matched ${quoteShell(pattern)}`;
-  const matchLabel = totalMatches === 1 ? 'match' : 'matches';
-  const chunks = [publicVisible.length === totalMatches ? `${totalMatches} ${matchLabel}` : `${publicVisible.length} of ${totalMatches} ${matchLabel}`];
-  let truncated = false;
-
-  for (const act of publicVisible) {
-    const rawBody = act.body ?? '';
-    const header = `${style('dim', act.id)} · ${participantIdentity(act.actor)} · ${style('dim', formatTimestamp(act.at))}`;
-    if (full === true) {
-      const body = rawBody.split('\n').map((line) => `  ${line}`).join('\n');
-      chunks.push(`${header}\n${body}`);
-      continue;
-    }
-
-    const snippet = grepSnippet(rawBody, pattern, GREP_PREVIEW_CHARS, fixed);
-    if (snippet === undefined) {
-      const preview = previewBodyFacts(rawBody, GREP_PREVIEW_CHARS).text;
-      chunks.push(`${header}${preview === '' ? '' : `\n  ${preview}`}`);
-      continue;
-    }
-    const clippedBefore = snippet.beforeOmitted > 0;
-    const clippedAfter = snippet.afterOmitted > 0;
-    truncated ||= clippedBefore || clippedAfter;
-    const text = `${clippedBefore ? '… ' : ''}${snippet.before}${style('match', snippet.match)}${snippet.after}${clippedAfter ? ' …' : ''}`;
-    const omitted = clippedBefore || clippedAfter
-      ? `\n${style('dim', `  · ${snippet.beforeOmitted} chars before · ${snippet.afterOmitted} chars after`)}`
-      : '';
-    chunks.push(`${header}\n  ${text.trim()}${omitted}`);
-  }
-
-  if (publicVisible.length === 1 || truncated) {
-    chunks.push(surface === 'tool'
-      ? formatToolAction('history', { location: displayPath(squarePath), at: [publicVisible[0].id], context: 2, ...(truncated ? { full: true } : {}) })
-      : `${commandPrefix(squarePath)} history --at ${publicVisible[0].id} -C 2${truncated ? ' --full' : ''}`);
-  }
-  return chunks.join('\n\n');
-}
-
-
-export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string {
-  return [
-    `${style('blocked', '✕')} you are already perceiving`,
-    `  · an active perceive is already running for ${participantIdentity(opts.name)}`,
-    `  · ${opts.surface === 'tool' ? 'takeover' : '--takeover'} lets a new perceive take over`,
-    opts.surface === 'tool'
-      ? formatToolAction('perceive', { location: displayPath(opts.squarePath), as: opts.name, idle: '30m', takeover: true })
-      : `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} perceive --idle 30m --takeover`,
-  ].join('\n');
-}
-
-export function renderWatchForceTakeover(_opts: ParticipantOutputOptions): string {
-  return '✓ your new perceive takes over';
-}
-
-export function renderWatchReplaceMissing(_opts: ParticipantOutputOptions): string {
-  return '· no perceive stood here — yours takes the spot';
-}
-
-export function renderWatchReplaced(_opts: ParticipantOutputOptions): string {
-  return '✕ a newer perceive took over';
-}
-
-export function renderWatchStatus(opts: WatchStatusOptions): string {
-  const others =
-    opts.presence === undefined
-      ? undefined
-      : opts.presence.participants.filter((participant) => !sameName(participant.name, opts.name));
-  const presenceLines =
-    opts.presence !== undefined && others !== undefined
-      ? ['', 'around the square', ...renderPresenceLines(others, opts.presence.now)]
-      : [];
-  switch (opts.status) {
-    case 'idle':
-    case 'drained': {
-      const prefix = participantCommandPrefix(opts.squarePath, opts.name, opts.owner);
-      // Quiet graduates with the idle length; an empty perceive has no idle budget to report.
-      const idleMs = opts.idleMs;
-      const quiet = idleMs !== undefined && idleMs >= 60 * 60 * 1000
-        ? style('dim', `○ dust lies thick — ${formatDuration(idleMs)} of quiet`)
-        : idleMs !== undefined && idleMs >= 60 * 1000
-          ? style('dim', `○ dust settles on the flagstones — ${formatDuration(idleMs)} of quiet`)
-          : style('dim', '○ only footsteps in the square — nothing new for you');
-      // The quiet report never repeats the perceive just run.
-      const hints = [opts.surface === 'tool' ? formatToolAction('perceive', { location: displayPath(opts.squarePath), as: opts.name, idle: '30m' }) : `${prefix} perceive --idle 30m`];
-      return [
-        quiet,
-        ...(opts.showPerceiveHint === false ? [] : hints),
-        ...presenceLines,
-      ].join('\n');
-    }
-    case 'quorum':
-      return [`${style('release', '✓')} everyone else has left — the square is yours alone`, opts.surface === 'tool' ? formatToolAction('done', { location: displayPath(opts.squarePath), as: opts.name }) : `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} done`].join('\n');
-    case 'capped': {
-      const spoken = opts.hardCap === undefined || opts.hardCap === null
-        ? ''
-        : ` — ${opts.ownActivityCount ?? 0}/${opts.hardCap} spoken`;
-      return [`${style('blocked', '✕')} you’ve reached your speaking cap${spoken}`, opts.surface === 'tool' ? formatToolAction('done', { location: displayPath(opts.squarePath), as: opts.name }) : `${participantCommandPrefix(opts.squarePath, opts.name, opts.owner)} done`].join('\n');
-    }
-  }
-}
-
-export function renderDoctorClean(): string {
-  return '✓ no problems found';
-}
-
-export function renderDoctorUnfixable(reason: string): string {
-  return ['✕ unreadable artifact', `  · ${truncateExternalDiagnostic(reason)}`].join('\n');
 }

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createArtifactPort, createSquareFile } from '../dist/artifact/artifact.js';
 import { Square } from '../dist/api/square-api.js';
 import { resolveKnownName } from '../dist/core/decisions.js';
-import { perceivePresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, queryStatus, streamProjection } from '../dist/core/views.js';
+import { perceivePresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, queryStatus, streamProjection } from '../dist/core/observations.js';
 
 const queryContext = { location: 'memory', now: 100_000 };
 

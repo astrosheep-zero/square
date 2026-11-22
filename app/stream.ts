@@ -2,9 +2,9 @@ import fs from 'node:fs/promises';
 import { SquareError } from '../core/model.js';
 import { createArtifactPort, observeSquareRevision } from '../artifact/artifact.js';
 import type { SquareArtifactPort } from '../core/ports.js';
-import { parseRequiredActivityId, streamProjection, streamTailProjection } from '../core/views.js';
+import { parseRequiredActivityId, streamProjection, streamTailProjection } from '../core/observations.js';
 import type { OperationControl } from '../core/neutral.js';
-import type { Activity, PerceivedActivity } from '../core/views.js';
+import type { Activity, PerceivedActivity } from '../core/observations.js';
 import type { ActivityId } from '../core/square-core.js';
 
 export type StreamStart =

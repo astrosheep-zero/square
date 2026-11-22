@@ -69,7 +69,7 @@ export { ACTIVITY_METADATA_MAX_BYTES } from '../core/model.js';
 export { localUserOwner, harnessOwner, decodeHarnessOwner } from '../core/owner.js';
 export { ACTIVITY_ID_PATTERN, formatActivityId, isNarratedActivity, MAX_IDENTITY_SET_SIZE, parseActivityId } from '../core/square-core.js';
 export { PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT } from '../core/perceive-decisions.js';
-export { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from '../core/views.js';
+export { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from '../core/observations.js';
 export { DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../app/list.js';
 export { diagnoseSquare } from '../app/square.js';
 export { discover } from '../app/list.js';

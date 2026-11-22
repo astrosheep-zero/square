@@ -1,19 +1,16 @@
 // Human-facing scenes for settled operations, with surface-specific next actions.
 import { sameName } from '../core/model.js';
 import { truncateChars } from '../core/neutral.js';
-import { isNarratedActivity, parseActivityId } from '../core/square-core.js';
 import { participantIdentity } from '../core/square-values.js';
 import type {
-  Activity, PerceiveOptions, PerceiveResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
+  ExpressResult,
   JoinResult, LifecycleResult, ListenerChangeResult, OperationFailureDetail, SquareErrorFacts,
   StatusResult, DiscoveryResult, MuteResult,
 } from '../api/types.js';
 import {
-  type PresentationSurface, displayPath, formatToolAction, commandPrefix, joinRecoveryCommand, participantCommandPrefix,
+  type PresentationSurface, displayPath, formatToolAction, commandPrefix, participantAction,
   quoteShell, renderAmbientEventFacts,
-  renderEventCli, renderGrepActivitiesView, renderPresenceAnchor,
-  renderWatchAlreadyActive, renderWatchReplaced, renderWatchStatus,
-  renderUnreadSummary, takeoverRecoveryLines, withPathOutput,
+  renderUnreadSummary, withPathOutput,
 } from './presentation.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from '../core/time.js';
 import { style } from './tty-style.js';
@@ -73,7 +70,7 @@ export function renderJoinResult(data: JoinResult, owner?: string, surface: Pres
     now: after.now, preview: 200, perception: event.perception,
   }).text).filter(Boolean).join('\n\n');
   const fallback = after.deliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
-    '', surface === 'tool' ? formatToolAction('perceive', { location: displayPath(after.location), as: name, idle: '30m' }) : `${participantCommandPrefix(after.location, name, owner)} perceive --idle 30m`,
+    '', participantAction(surface, after.location, name, owner, 'perceive', { idle: '30m' }),
     '  · stay within earshot — keep this perceive open for new activity',
   ];
   const entryLine = data.kind === 'joined' ? '● you stepped into the square'
@@ -105,7 +102,7 @@ export function renderExpression(squarePath: string, data: ExpressResult, owner?
     'Unread context · preview only, not consumed',
     ...context.activities.map(item => `· ${participantIdentity(item.actor)} · ${item.id}\n  ${item.preview}${item.truncated ? '… (truncated)' : ''}`),
     ...(context.remaining === 0 ? [] : [`· ${context.remaining} more unread activities`]),
-    surface === 'tool' ? formatToolAction('perceive', { location: displayPath(projection.location), as: name }) : `${participantCommandPrefix(projection.location, name, owner)} perceive`,
+    participantAction(surface, projection.location, name, owner, 'perceive'),
   ].join('\n');
   const ownCount = projection.ownActivityCount;
   const capCount = projection.hardCap === null ? '' : ` · ${ownCount}/${projection.hardCap}`;
@@ -120,104 +117,6 @@ export function renderExpression(squarePath: string, data: ExpressResult, owner?
   return withPathOutput(projection.location ?? squarePath,
     confirmation + (data.hint ? `\n${style('dim', `· ${data.hint}`)}` : '') + reachNotice + awayNotice + pending,
     { participantCount: projection.standingCount });
-}
-
-function continuationCommand(squarePath: string, name: string, options: PerceiveOptions, owner?: string): string {
-  const args: string[] = [];
-  if (options.from?.length) args.push('--from', options.from.join(','));
-  if (options.mention) args.push('--mention');
-  if (options.limit !== undefined) args.push('--limit', String(options.limit));
-  return [participantCommandPrefix(squarePath, name, owner), 'perceive', ...args].join(' ');
-}
-
-/** Render settled perceive facts; no selection, terminal decisions, receipts or wait machinery. */
-export function renderPerceiveOutcome(
-  squarePath: string,
-  data: PerceiveResult,
-  options: PerceiveOptions = {},
-  owner?: string,
-  surface: PresentationSurface = 'cli',
-): string {
-  const projection = data.observation;
-  if (projection === undefined) return '';
-  const location = projection.location ?? squarePath;
-  const name = projection.participant;
-  const stop = data.reason === 'drained' && data.activities.length > 0 ? undefined : data.reason;
-  const header = { participantCount: projection.standingCount };
-  const statusOptions = {
-    squarePath: location, name, owner, surface, presence: projection.presence,
-    showPerceiveHint: !projection.deliveryAvailable,
-    ownActivityCount: projection.ownActivityCount, hardCap: projection.hardCap,
-  };
-  if (stop === 'already-active' || stop === 'replaced') {
-    return withPathOutput(location, stop === 'already-active'
-      ? renderWatchAlreadyActive(statusOptions) : renderWatchReplaced(statusOptions), header);
-  }
-  const rendered = data.activities.map((activity) => renderAmbientEventFacts(activity, {
-    now: projection.now, perception: activity.perception, mention: options.mention ? name : undefined,
-  }).text).filter(Boolean).join('\n\n');
-  const remaining = data.remaining === 0 ? ''
-    : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${surface === 'tool' ? formatToolAction('perceive', { location: displayPath(location), as: name, ...(options.from?.length ? { from: options.from } : {}), ...(options.mention ? { mention: true } : {}), ...(options.limit !== undefined ? { limit: options.limit } : {}) }) : continuationCommand(location, name, options, owner)}`;
-  const terminal = stop === undefined ? '' : renderWatchStatus({
-    ...statusOptions, status: stop,
-    ...(stop === 'idle' && options.idle !== undefined ? { idleMs: options.idle } : {}),
-  });
-  const fallback = stop === undefined && !projection.deliveryAvailable && data.remaining === 0
-    ? `${surface === 'tool' ? formatToolAction('perceive', { location: displayPath(location), as: name, idle: '30m' }) : `${participantCommandPrefix(location, name, owner)} perceive --idle 30m`}\n  stay available for new activity` : '';
-  const hint = data.hint === undefined ? '' : style('dim', `· ${data.hint}`);
-  return withPathOutput(location, [terminal, rendered, hint, remaining, fallback].filter(Boolean).join('\n\n'), header);
-}
-
-function renderHistoryProjection(
-  projection: HistoryObservation,
-  visible: readonly Activity[],
-  full: boolean,
-  squarePath: string,
-  surface: PresentationSurface,
-): string {
-  const shown = visible;
-  const preview = full || shown.length <= 1 ? undefined : 200;
-  const chunks: string[] = [];
-  // Presence anchors collect into one closing line instead of interrupting the page.
-  const anchored: string[] = [];
-  for (const activity of shown) {
-    const rendered = renderEventCli(activity, { now: projection.now, preview });
-    if (rendered !== '') chunks.push(rendered);
-    for (const participant of projection.presenceAnchors[parseActivityId(activity.id)!] ?? []) {
-      if (!anchored.some((existing) => sameName(existing, participant))) anchored.push(participant);
-    }
-  }
-  if (chunks.length === 0) return '○ no activity matches this history query';
-  if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && (activity.body?.length ?? 0) > preview)) {
-    const ids = shown.map((activity) => activity.id);
-    chunks.push(surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), at: ids, full: true }) : `${commandPrefix(squarePath)} history --at ${ids.join(',')} --full`);
-  }
-  if (anchored.length > 0) chunks.push(renderPresenceAnchor(anchored));
-  return chunks.join('\n\n');
-}
-
-export function historyContinuationCommand(squarePath: string, args: readonly string[]): string {
-  return `${commandPrefix(squarePath)} history ${args.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
-}
-
-export function renderHistoryResult(
-  squarePath: string,
-  data: HistoryResult,
-  options: { query?: HistoryQuery; full?: boolean; continuationArgs?: readonly string[]; surface?: PresentationSurface } = {},
-): string | undefined {
-  const projection = data.observation;
-  if (projection === undefined) return undefined;
-  const query = options.query ?? {};
-  const full = options.full === true;
-  const search = query.search;
-  const shown = data.activities.filter((activity) => isNarratedActivity(activity.kind));
-  const output = search === undefined
-    ? renderHistoryProjection(projection, shown, full, squarePath, options.surface ?? 'cli')
-    : renderGrepActivitiesView(shown, projection.totalMatches, full, squarePath, search.text, search.mode === 'literal', options.surface);
-  const next = projection.continuation;
-  const base = options.continuationArgs ?? [];
-  const continuation = next === undefined ? '' : `\n\n${options.surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), ...(query.from?.length ? { from: query.from } : {}), ...(query.since !== undefined ? { since: formatTimestamp(query.since) } : {}), ...(query.at?.length ? { at: query.at } : {}), ...(query.context !== undefined ? { context: query.context } : {}), ...(query.mention !== undefined ? { mention: query.mention } : {}), ...(query.search !== undefined ? { search: query.search.text, ...(query.search.mode === 'regex' ? { regex: true } : {}) } : {}), ...(query.order !== undefined ? { order: query.order } : {}), ...(full ? { full: true } : {}), [next.direction]: next.cursor, limit: next.limit }) : historyContinuationCommand(squarePath, [...base, `--${next.direction}`, next.cursor, '--limit', String(next.limit)])}`;
-  return withPathOutput(squarePath, output + continuation, { participantCount: projection.standingCount });
 }
 
 export function renderStatusResult(squarePath: string, data: StatusResult, options: { surface?: PresentationSurface } = {}): string | undefined {
@@ -374,9 +273,7 @@ function expressGateLines(failure: FailureReport, options: FailureOptions): stri
       : ['✕ the square is packed — shoulder to shoulder', `  · a lull opens in ${formatDuration(facts?.retryAfterMs ?? 1)}`];
   const lines = [...scene, ...(options.draftPath === undefined ? [] : [style('dim', `· draft kept: ${options.draftPath}`)])];
   if (squarePath === undefined || name === undefined) return lines;
-  const action = (verb: 'perceive' | 'done') => tool
-    ? formatToolAction(verb, { location: displayPath(squarePath), as: name })
-    : `${participantCommandPrefix(squarePath, name, owner)} ${verb}`;
+  const action = (verb: 'perceive' | 'done') => participantAction(options.surface, squarePath, name, owner, verb);
   if (failure.code === 'behind') lines.push(...(tool ? ['Take it in, then express again:', action('perceive')] : [action('perceive'), '  · take it in, then retry:']));
   if (failure.code === 'capped') lines.push('  · your words stay unsent; done only steps out', action('done'));
   if (failure.code !== 'capped' && options.retry !== undefined) lines.push(options.retry);
@@ -400,16 +297,16 @@ export function renderFailureLines(failure: FailureReport, options: FailureOptio
       : `${commandPrefix(squarePath)} history --limit 10`);
   } else if (reason === 'needs_seat' && squarePath !== undefined && name !== undefined) {
     lines.splice(0, 1, `✕ ${failure.message}`);
-    lines.push(options.surface === 'tool' ? formatToolAction('join', { location: displayPath(squarePath), as: name }) : joinRecoveryCommand(squarePath, name, owner));
+    lines.push(participantAction(options.surface, squarePath, name, owner, 'join'));
   } else if (squarePath !== undefined && name !== undefined && failure.code === 'already_joined') {
     lines.splice(0, 1, `✕ ${participantIdentity(name)} shoos you out of the square`,
       `  · ${participantIdentity(name)} already stands here — another session holds the name`);
-    lines.push(...(options.surface === 'tool' ? ['If this is your name to reclaim, takeover banishes the one standing here so you can step in:', formatToolAction('join', { location: displayPath(squarePath), as: name, takeover: true })] : takeoverRecoveryLines(squarePath, name, owner)));
+    lines.push(`If this is your name to reclaim, ${options.surface === 'tool' ? 'takeover' : '--takeover'} banishes the one standing here so you can step in:`, participantAction(options.surface, squarePath, name, owner, 'join', { takeover: true }));
   } else if (squarePath !== undefined && name !== undefined && (failure.code === 'unknown_participant' || failure.code === 'not_joined') && reason !== 'not_standing') {
-    lines.push(options.surface === 'tool' ? formatToolAction('join', { location: displayPath(squarePath), as: name }) : joinRecoveryCommand(squarePath, name, owner));
+    lines.push(participantAction(options.surface, squarePath, name, owner, 'join'));
   } else if (squarePath !== undefined && reason === 'never_joined') {
     lines.push(options.surface === 'tool' ? (failure.operation?.subject !== 'filter' && name !== undefined ? formatToolAction('join', { location: displayPath(squarePath), as: name }) : formatToolAction('status', { location: displayPath(squarePath) })) : failure.operation?.subject !== 'filter' && name !== undefined
-      ? joinRecoveryCommand(squarePath, name, owner) : `${commandPrefix(squarePath)} status`);
+      ? participantAction(options.surface, squarePath, name, owner, 'join') : `${commandPrefix(squarePath)} status`);
   } else if (squarePath !== undefined && reason === 'not_standing') {
     lines.push(options.surface === 'tool' ? formatToolAction('status', { location: displayPath(squarePath) }) : `${commandPrefix(squarePath)} status`);
   } else if (squarePath !== undefined && reason === 'not_addressed' && facts?.activityId !== undefined) {

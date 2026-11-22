@@ -34,7 +34,7 @@ import {
   installOpenCodePlugin,
   uninstallOpenCodePlugin,
   verifyOpenCodeRuntime,
-} from '../dist/hosts/harness-links.js';
+} from '../dist/hosts/harness-opencode.js';
 
 function enabledPlugins(pluginId) { return JSON.stringify({ installed: [{ pluginId, installed: true, enabled: true }] }); }
 function enabledClaudePlugins(pluginId) { return JSON.stringify([{ id: pluginId, version: SQUARE_IDENTITY.packageVersion, enabled: true, installPath: '/tmp/plugin' }]); }

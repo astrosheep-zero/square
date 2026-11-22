@@ -11,7 +11,7 @@ import { participantIdentity } from '../core/square-values.js';
 import { muteDeadline } from '../core/time.js';
 import { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT, NON_READ, entryPresentation, publicActivities, queryParticipants, queryStatus,
   recoveryObservation, selectHistory, toPublicActivity, type Activity, type EntryPresentation, type HistoryObservation,
-  type HistoryQuery, type ParticipantsResult, type PerceivedActivity, type SquareObservation, type StatusOptions, type StatusResult } from '../core/views.js';
+  type HistoryQuery, type ParticipantsResult, type PerceivedActivity, type SquareObservation, type StatusOptions, type StatusResult } from '../core/observations.js';
 import { DeliveryLedger, deliveryLedgerLocation } from '../ledger/delivery-ledger.js';
 import { canonicalPath } from '../storage/canonical-path.js';
 import { SeatedParticipant, type MuteResult, type Participant } from './participant.js';

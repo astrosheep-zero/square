@@ -1,3 +1,4 @@
+import { renderWatchAlreadyActive, renderWatchStatus } from '../dist/surfaces/perceive-presentation.js';
 import assert from 'node:assert/strict';
 import { perceiveHint, expressHint } from '../dist/core/hints.js';
 import { renderFailureLines } from '../dist/surfaces/operation-presentation.js';
@@ -6,8 +7,6 @@ import test from 'node:test';
 import {
   renderAmbientEventFacts,
   renderPresenceAnchor,
-  renderWatchAlreadyActive,
-  renderWatchStatus,
 } from '../dist/surfaces/presentation.js';
 
 test('public activity rendering keeps reply ids, multiline bodies, and presence', () => {

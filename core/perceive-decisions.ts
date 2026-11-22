@@ -4,7 +4,7 @@ import { SquareError, type DirectedNotificationRoute, type HydratedAct } from '.
 import type { ObservationOptions } from './neutral.js';
 import { resolveKnownName } from './decisions.js';
 import type { ActivityIndex, DirectedFilter, SquareRead, SquareWrite } from './ports.js';
-import { toPerceivedActivity, type PerceivedActivity } from './views.js';
+import { toPerceivedActivity, type PerceivedActivity } from './observations.js';
 import { perceiveHint } from './hints.js';
 import { consumeReceived, ReceiveError, selectReceivedHeads, type ReceiveRead, type Selection } from './receive.js';
 

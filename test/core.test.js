@@ -9,7 +9,7 @@ import { renderPresenceLines } from '../dist/surfaces/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/core/runtime.js';
 import { Square } from '../dist/api/square-api.js';
 import { createArtifactPort } from '../dist/artifact/artifact.js';
-import { perceivePresence, publicActivities, NON_READ, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/core/views.js';
+import { perceivePresence, publicActivities, NON_READ, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/core/observations.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));

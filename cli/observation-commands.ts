@@ -1,3 +1,6 @@
+import { historyContinuationCommand, renderHistoryResult } from '../surfaces/history-presentation.js';
+import { renderPerceiveOutcome } from '../surfaces/perceive-presentation.js';
+import { renderWatchForceTakeover, renderWatchReplaceMissing } from '../surfaces/perceive-presentation.js';
 import path from 'node:path';
 import { once } from 'node:events';
 import { runClaudeMod } from '../hosts/claude-mod.js';
@@ -10,13 +13,8 @@ import {
   commandPrefix,
   withPathOutput,
   quoteShell,
-  renderWatchForceTakeover,
-  renderWatchReplaceMissing,
 } from '../surfaces/presentation.js';
 import {
-  historyContinuationCommand,
-  renderHistoryResult,
-  renderPerceiveOutcome,
   renderStatusResult,
   renderSquareList,
 } from '../surfaces/operation-presentation.js';

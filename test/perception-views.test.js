@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { createArtifactPort } from '../dist/artifact/artifact.js';
 import { emptyRuntimeState } from '../dist/artifact/square-store.js';
-import { directedTo, perceiveActivity, toPerceivedActivity } from '../dist/core/views.js';
+import { directedTo, perceiveActivity, toPerceivedActivity } from '../dist/core/observations.js';
 
 function squareState(acts, runtime = emptyRuntimeState(acts.length)) {
   return {

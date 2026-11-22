@@ -1,5 +1,6 @@
+import { truncateExternalDiagnostic } from '../hosts/boundary-presentation.js';
 import { diagnoseSquare, migrateSquare, type MigrateSquareResult } from '../api/square-api.js';
-import { renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../surfaces/presentation.js';
+import { withPathOutput } from '../surfaces/presentation.js';
 
 import { requireSquarePath, squareInput, type CommandSpec, usage } from './context.js';
 
@@ -31,13 +32,13 @@ export const doctorCommand: CommandSpec<undefined, DoctorResult> = {
       return {
         output: withPathOutput(
           squarePath,
-          renderDoctorUnfixable(diagnosis.unfixable ?? 'the artifact could not be decoded'),
+          ['✕ unreadable artifact', `  · ${truncateExternalDiagnostic(diagnosis.unfixable ?? 'the artifact could not be decoded')}`].join('\n'),
         ),
         exitCode: 2,
       };
     }
     return {
-      output: withPathOutput(squarePath, renderDoctorClean(), {
+      output: withPathOutput(squarePath, '✓ no problems found', {
         participantCount: diagnosis.standingCount,
       }),
     };

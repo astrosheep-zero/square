@@ -1,4 +1,6 @@
 import { z } from 'zod/v4';
+import { renderHistoryResult } from './history-presentation.js';
+import { renderPerceiveOutcome } from './perceive-presentation.js';
 import { isSquareError, SquareError } from '../core/model.js';
 import { ACTIVITY_ID_PATTERN, requireOwner, requireJoinName, selectOwnSeat, HISTORY_MAX_LIMIT, PERCEIVE_MAX_LIMIT, PERCEIVE_DEFAULT_LIMIT, DEFAULT_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_DEPTH, MAX_LIST_LIMIT, discover, muteDeliveryLedger, unmuteDeliveryLedger, Square } from '../api/square-api.js';
 import { parseDurationMs, parseTimeOrRelative } from '../core/time.js';
@@ -7,7 +9,7 @@ import type {
   OperationControl, OperationFailureDetail,
 } from '../api/types.js';
 import {
-  renderPerceiveOutcome, renderExpression, renderFailureLines, renderHistoryResult, renderJoinResult, type ListenerVerb,
+  renderExpression, renderFailureLines, renderJoinResult, type ListenerVerb,
   renderLifecycleResult, renderListenerChange, renderMuteResult, renderStatusResult, renderSquareList,
   type FailureReport,
 } from './operation-presentation.js';

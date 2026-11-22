@@ -5,7 +5,7 @@ import { deliveryLedgerLocation } from '../ledger/delivery-ledger.js';
 
 import { createArtifactPort } from '../artifact/artifact.js';
 import { nameKey, SquareError, type Owner, type Seat } from '../core/model.js';
-import { listPresentation } from '../core/views.js';
+import { listPresentation } from '../core/observations.js';
 import { canonicalPath } from '../storage/canonical-path.js';
 import { readLedgerMutedUntil, readSquareSeatMutes, seatMuteKey } from './square-notification-mute.js';
 

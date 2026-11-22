@@ -10,7 +10,8 @@ import { ACTIVITY_METADATA_MAX_BYTES } from '../dist/core/model.js';
 import { activityRetryCommand } from '../dist/cli/express-presentation.js';
 import { SQUARE_TOOLS } from '../dist/surfaces/square-tools.js';
 import { renderEventCli } from '../dist/surfaces/presentation.js';
-import { renderExpression, renderPerceiveOutcome } from '../dist/surfaces/operation-presentation.js';
+import { renderExpression } from '../dist/surfaces/operation-presentation.js';
+import { renderPerceiveOutcome } from '../dist/surfaces/perceive-presentation.js';
 import { Square } from '../dist/api/square-api.js';
 
 const body = (session) => `metadata-test:${session}`;

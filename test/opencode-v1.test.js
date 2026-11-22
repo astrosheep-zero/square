@@ -11,7 +11,7 @@ import { startReceiver } from '../dist/plugins/opencode-v1/runtime.js';
 import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
 import { renderDeliveryReminder } from '../dist/hosts/boundary-presentation.js';
 import { harnessOwner } from '../dist/core/owner.js';
-import { installOpenCodePlugin, uninstallOpenCodePlugin, verifyOpenCodeRuntime } from '../dist/hosts/harness-links.js';
+import { installOpenCodePlugin, uninstallOpenCodePlugin, verifyOpenCodeRuntime } from '../dist/hosts/harness-opencode.js';
 
 test('v1 persists correlation before submission but never claims native acceptance', async () => {
   const events = [];

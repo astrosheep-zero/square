@@ -1,3 +1,6 @@
+import { truncateExternalDiagnostic } from '../hosts/boundary-presentation.js';
+import { formatDuration } from '../core/time.js';
+import { style } from '../surfaces/tty-style.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -6,7 +9,7 @@ import { selectOwnSeat, type Square, formatActivityId, parseActivityId } from '.
 import type { Owner } from '../api/square-api.js';
 import type { ActivityId, OperationError, OperationControl, ExpressOptions } from '../api/types.js';
 import {
-  formatRefusal, renderActivityUncertain, renderExpressWaiting,
+  formatRefusal,
   participantCommandPrefix, commandPrefix, quoteShell, withPathOutput,
 } from '../surfaces/presentation.js';
 import { isExpressGate, renderExpression, renderFailureLines } from '../surfaces/operation-presentation.js';
@@ -136,4 +139,25 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     process.stderr.write(formatRefusal(squarePath, lines, output));
     exitCode(2);
   } finally { process.off('SIGINT', interrupt); await square?.close(); }
+}
+
+/** An indeterminate or already-committed send only points to inspection, never resend. */
+export function renderActivityUncertain(opts: { squarePath: string; name: string; owner?: string; participantCount?: number; draftPath: string; landedId?: string; detail?: string }): string {
+  return formatRefusal(opts.squarePath, [
+    opts.landedId === undefined
+      ? '✕ your activity may have landed — check history before sending again'
+      : `✕ your activity landed · ${opts.landedId} — the confirmation could not finish`,
+    ...(opts.detail === undefined ? [] : [`  · ${truncateExternalDiagnostic(opts.detail)}`]),
+    style('dim', `· draft kept: ${opts.draftPath}`),
+    '  · the draft is a saved copy; sending it again could repeat your activity',
+    `${commandPrefix(opts.squarePath)} history${opts.landedId === undefined ? ' --limit 10' : ` --at ${opts.landedId}`} --full`,
+  ], opts);
+}
+
+export function renderExpressWaiting(opts: { reason: 'throttled'; delayMs?: number }): string {
+  return [
+    '· the square is packed — your activity is waiting',
+    `  · a lull opens in ${formatDuration(opts.delayMs)}`,
+    '  · --no-wait saves a draft and returns now',
+  ].join('\n');
 }

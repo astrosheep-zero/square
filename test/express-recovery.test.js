@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import { activityRetryCommand, executeExpression } from '../dist/cli/express-presentation.js';
-import { renderActivityUncertain } from '../dist/surfaces/presentation.js';
+import { renderActivityUncertain } from '../dist/cli/express-presentation.js';
 import { SquareError } from '../dist/core/model.js';
 import { createArtifactPort } from '../dist/artifact/artifact.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';

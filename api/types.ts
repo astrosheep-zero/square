@@ -7,7 +7,7 @@ export type { Owner, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificat
 export type { ActivityCursor, ActivityQuery } from '../core/activity-query.js';
 export type { ParticipantPresence, ParticipantSummary } from '../core/decisions.js';
 export type { ArchiveRecord, Activity, PerceivedActivity, SquareObservation, EntryPresentation, PresenceClassification, PerceivePresence,
-  StatusOptions, StatusResult, ParticipantsResult, HistoryQuery, HistoryContinuation, HistoryObservation, StatusObservation, ParticipantsObservation } from '../core/views.js';
+  StatusOptions, StatusResult, ParticipantsResult, HistoryQuery, HistoryContinuation, HistoryObservation, StatusObservation, ParticipantsObservation } from '../core/observations.js';
 export type { PerceiveOptions, PerceiveReason } from '../core/perceive-decisions.js';
 export type { AckResult, ExpressOptions, ExpressInput, ExpressResult, ListenerChangeResult, ListeningResult, MuteResult, LifecycleResult,
   PendingOptions, PendingResult, PerceiveResult, Participant, ExpressionObservation, ExpressContext, ExpressObservation, PerceiveObservation, ListenerObservation } from '../app/participant.js';
