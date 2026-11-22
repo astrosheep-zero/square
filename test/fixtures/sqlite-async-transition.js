@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { createArtifactPort, prepareSquareBuild } from '../../dist/artifact.js';
+import { createArtifactPort, prepareSquareBuild } from '../../dist/artifact/artifact.js';
 
 const [kind, squarePath] = process.argv.slice(2);
 const cell = kind === 'file'

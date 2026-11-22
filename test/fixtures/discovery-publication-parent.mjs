@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { setImmediate } from 'node:timers/promises';
 import { DatabaseSync } from 'node:sqlite';
-import { Square } from '../../dist/square-api.js';
+import { Square } from '../../dist/api/square-api.js';
 import { rememberSquarePath } from '../../dist/square-index.js';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-discovery-publication-'));

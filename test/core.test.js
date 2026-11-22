@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { expressionContext } from '../dist/square-service.js';
-import { emptyRuntimeState } from '../dist/square-store.js';
-import { decidePerceive } from '../dist/perceive-decisions.js';
-import { attentionChange, coreListening, coreParticipants, decideAct, decideJoin } from '../dist/decisions.js';
-import { renderPresenceLines } from '../dist/presentation.js';
-import { presenceAnchor, readCursor } from '../dist/runtime.js';
-import { Square } from '../dist/square-api.js';
-import { createArtifactPort } from '../dist/artifact.js';
-import { perceivePresence, publicActivities, NON_READ, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/views.js';
+import { expressionContext } from '../dist/app/square-service.js';
+import { emptyRuntimeState } from '../dist/artifact/square-store.js';
+import { decidePerceive } from '../dist/core/perceive-decisions.js';
+import { attentionChange, coreListening, coreParticipants, decideAct, decideJoin } from '../dist/core/decisions.js';
+import { renderPresenceLines } from '../dist/surfaces/presentation.js';
+import { presenceAnchor, readCursor } from '../dist/core/runtime.js';
+import { Square } from '../dist/api/square-api.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
+import { perceivePresence, publicActivities, NON_READ, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/core/views.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));

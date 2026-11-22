@@ -4,10 +4,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { DeliveryLedger, migrateDeliveryLedger } from '../dist/delivery-ledger.js';
+import { DeliveryLedger, migrateDeliveryLedger } from '../dist/ledger/delivery-ledger.js';
 import { migrateDeliveryLedger as rootMigration } from '../dist/index.js';
-import { migrateDeliveryLedger as squareApiMigration } from '../dist/square-api.js';
-import { squarePostKey } from '../dist/delivery-key.js';
+import { migrateDeliveryLedger as squareApiMigration } from '../dist/api/square-api.js';
+import { squarePostKey } from '../dist/core/delivery-key.js';
 
 const FORMAT4_SCHEMA = `CREATE TABLE meta (format INTEGER NOT NULL, next_seq INTEGER NOT NULL, next_receipt_seq INTEGER NOT NULL);
 CREATE TABLE sessions (owner TEXT PRIMARY KEY, generation TEXT NOT NULL, state TEXT NOT NULL, routes_json TEXT NOT NULL, at REAL NOT NULL);

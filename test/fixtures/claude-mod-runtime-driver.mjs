@@ -1,6 +1,6 @@
-import { DeliveryLedger } from '../../dist/delivery-ledger.js';
-import { harnessOwner } from '../../dist/owner.js';
-import { beginClaudeMcpCall } from '../../dist/claude-mcp-context.js';
+import { DeliveryLedger } from '../../dist/ledger/delivery-ledger.js';
+import { harnessOwner } from '../../dist/core/owner.js';
+import { beginClaudeMcpCall } from '../../dist/hosts/claude-mcp-context.js';
 
 const [root, command, sessionId, key, text] = process.argv.slice(2);
 const owner = harnessOwner({ channel: 'claude-code', session: sessionId });

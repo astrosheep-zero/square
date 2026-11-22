@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { Square } from '../dist/square-api.js';
-import { renderExpression } from '../dist/operation-presentation.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { Square } from '../dist/api/square-api.js';
+import { renderExpression } from '../dist/surfaces/operation-presentation.js';
 import { draftPathFrom, persistSquare, run, withName } from './square-cli-helpers.js';
 
 test('express warns once for absent and observed away targets and resumes without rejoining', async (t) => {

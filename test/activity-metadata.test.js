@@ -6,12 +6,12 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import { ACTIVITY_METADATA_MAX_BYTES } from '../dist/model.js';
+import { ACTIVITY_METADATA_MAX_BYTES } from '../dist/core/model.js';
 import { activityRetryCommand } from '../dist/cli/express-presentation.js';
-import { SQUARE_TOOLS } from '../dist/square-tools.js';
-import { renderEventCli } from '../dist/presentation.js';
-import { renderExpression, renderPerceiveOutcome } from '../dist/operation-presentation.js';
-import { Square } from '../dist/square-api.js';
+import { SQUARE_TOOLS } from '../dist/surfaces/square-tools.js';
+import { renderEventCli } from '../dist/surfaces/presentation.js';
+import { renderExpression, renderPerceiveOutcome } from '../dist/surfaces/operation-presentation.js';
+import { Square } from '../dist/api/square-api.js';
 
 const body = (session) => `metadata-test:${session}`;
 

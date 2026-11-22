@@ -6,11 +6,11 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
-import { Square } from '../dist/square-api.js';
+import { Square } from '../dist/api/square-api.js';
 import { historyCommand } from '../dist/cli/observation-commands.js';
-import { renderFailureLines } from '../dist/operation-presentation.js';
-import { formatToolAction } from '../dist/presentation.js';
-import { createSquareMcpServer } from '../dist/mcp.js';
+import { renderFailureLines } from '../dist/surfaces/operation-presentation.js';
+import { formatToolAction } from '../dist/surfaces/presentation.js';
+import { createSquareMcpServer } from '../dist/surfaces/mcp.js';
 import { ROOT, testEnv } from './square-cli-helpers.js';
 
 process.env.NO_COLOR = '1';

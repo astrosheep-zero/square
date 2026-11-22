@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createArtifactPort } from '../dist/artifact.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
 
 const state = { hardCap: null, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } };
 

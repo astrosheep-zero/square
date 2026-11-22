@@ -1,4 +1,4 @@
-import { canonicalPath } from '../../canonical-path.js';
+import { canonicalPath } from '../../storage/canonical-path.js';
 import { connectNative, createNativeInputId, sendNativeText, type OpenCodeNativeSession, type OpenCodeSessionCapability } from '../../packages/agent-delivery/src/opencode-native.js';
 import { openCodeTransport, startOpenCodeReceivers, type OpenCodeContextMessage } from '../opencode-shared/delivery.js';
 

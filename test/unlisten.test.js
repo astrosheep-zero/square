@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { Square } from '../dist/square-api.js';
-import { diagnoseSquareFile } from '../dist/artifact.js';
+import { Square } from '../dist/api/square-api.js';
+import { diagnoseSquareFile } from '../dist/artifact/artifact.js';
 
 // One real file exercises the operation, persisted audience, and rebuild together.
 test('unlisten removes only its listen edge, preserves landed audience, and keeps mentions and replies', async (t) => {

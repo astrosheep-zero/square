@@ -5,10 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import test from 'node:test';
-import { Square } from '../dist/square-api.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { retainDeliveryLedger } from '../dist/delivery-lifetime.js';
-import { harnessOwner } from '../dist/owner.js';
+import { Square } from '../dist/api/square-api.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { retainDeliveryLedger } from '../dist/ledger/delivery-lifetime.js';
+import { harnessOwner } from '../dist/core/owner.js';
 import { receiveOpenCodePending } from '../dist/plugins/opencode-shared/delivery.js';
 
 const deferred = () => {

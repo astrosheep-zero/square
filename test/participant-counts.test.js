@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createArtifactPort } from '../dist/artifact.js';
-import { observePerceiveSelection, selectPerceivePage } from '../dist/perceive-decisions.js';
-import { inSquareCount, terminalStatusFor, watchTerminalStatus } from '../dist/runtime.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
+import { observePerceiveSelection, selectPerceivePage } from '../dist/core/perceive-decisions.js';
+import { inSquareCount, terminalStatusFor, watchTerminalStatus } from '../dist/core/runtime.js';
 
 function fixture(t, hardCap = null, acts = []) {
   const cell = createArtifactPort(':memory:', {

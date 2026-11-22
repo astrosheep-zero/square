@@ -13,9 +13,9 @@ const cli = 'cli/';
 const pi = 'plugins/pi/';
 const delivery = 'packages/agent-delivery/src/';
 const bin = 'square.ts';
-const facade = 'square-facade.ts';
-const driver = 'delivery-ledger-sqlite.ts';
-const storageLeaves = ['sqlite-framing.ts', 'sqlite-values.ts', 'sqlite-transaction.ts'];
+const facade = 'api/square-facade.ts';
+const driver = 'ledger/delivery-ledger-sqlite.ts';
+const storageLeaves = ['storage/sqlite-framing.ts', 'storage/sqlite-values.ts', 'storage/sqlite-transaction.ts'];
 const sqlite = /^(?:node:|bun:)sqlite$/;
 const sql = /^\s*(?:(?:CREATE|DROP|ALTER)\s+TABLE\b|INSERT(?:\s+OR\s+\w+)?\s+INTO\b|SELECT\s+[\s\S]+?\s+FROM\b|UPDATE\s+[\s\S]+?\s+SET\b|DELETE\s+FROM\b|PRAGMA\s+\w|BEGIN\s+(?:EXCLUSIVE|IMMEDIATE)\b)/i;
 
@@ -27,7 +27,7 @@ function productionSources() {
       return extensions.includes(path.posix.extname(file)) ? [[file, fs.readFileSync(path.join(root, file), 'utf8')]] : [];
     });
   }
-  return new Map([...collect('', false), ...[cli, 'plugins', delivery].flatMap((dir) => collect(dir, true))]);
+  return new Map([...collect('', false), ...[cli, 'core', 'storage', 'artifact', 'ledger', 'app', 'hosts', 'api', 'surfaces', 'plugins', delivery].flatMap((dir) => collect(dir, true))]);
 }
 
 // A binding is its source spelling: `Foo`, `type Foo`, or `*`/`type *` for a namespace.
@@ -90,13 +90,13 @@ function writesEnv(env) {
 
 function launcherImport(file, arg) {
   // The documented Keiyaku SDK override; no other computed dependency is a closed capability.
-  if (file !== 'keiyaku-delivery.ts' || !arg || !ts.isConditionalExpression(arg) || text(arg.whenTrue) !== '@astrosheep/keiyaku') return false;
+  if (file !== 'hosts/keiyaku-delivery.ts' || !arg || !ts.isConditionalExpression(arg) || text(arg.whenTrue) !== '@astrosheep/keiyaku') return false;
   const override = arg.whenFalse;
   return ts.isPropertyAccessExpression(override) && override.name.text === 'href' && ts.isCallExpression(override.expression)
     && id(override.expression.expression, 'pathToFileURL') && override.expression.arguments.length === 1 && id(override.expression.arguments[0], 'override');
 }
 
-const envFree = ['index.ts', 'square-api.ts', facade, 'neutral.ts', 'square-service.ts', 'square-posting.ts', 'decisions.ts', 'perceive-decisions.ts', 'views.ts', 'runtime.ts', 'notifications.ts'];
+const envFree = ['index.ts', 'api/square-api.ts', facade, 'core/neutral.ts', 'app/square-service.ts', 'app/square-posting.ts', 'core/decisions.ts', 'core/perceive-decisions.ts', 'core/views.ts', 'core/runtime.ts', 'hosts/notifications.ts'];
 const ambient = ['SQUARE_DELIVERY', 'SQUARE_NOW_MS', 'squareClock', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'OPENCODE_SESSION_ID', 'PI_SESSION_ID', 'PASEO_AGENT_ID'];
 const readsAmbient = (node) => ambient.includes(ts.isIdentifier(node) ? node.text : text(node))
   || (ts.isQualifiedName(node) && id(node.left, 'NodeJS') && id(node.right, 'ProcessEnv'));
@@ -159,70 +159,70 @@ function resolve(edge, sources, pkg) {
 }
 
 const physicalCallers = {
-  'square-store.ts': ['artifact.ts', 'migrate.ts'],
-  'square-producer-store.ts': ['square-store.ts', 'migrate.ts'],
-  'sqlite-framing.ts': ['artifact.ts', 'square-store.ts', 'migrate.ts', driver],
-  'sqlite-values.ts': ['sqlite-framing.ts', 'square-store.ts', 'square-producer-store.ts', 'artifact.ts', 'migrate.ts'],
-  'sqlite-transaction.ts': ['artifact.ts', 'migrate.ts', driver],
+  'artifact/square-store.ts': ['artifact/artifact.ts', 'artifact/migrate.ts'],
+  'artifact/square-producer-store.ts': ['artifact/square-store.ts', 'artifact/migrate.ts'],
+  'storage/sqlite-framing.ts': ['artifact/artifact.ts', 'artifact/square-store.ts', 'artifact/migrate.ts', driver],
+  'storage/sqlite-values.ts': ['storage/sqlite-framing.ts', 'artifact/square-store.ts', 'artifact/square-producer-store.ts', 'artifact/artifact.ts', 'artifact/migrate.ts'],
+  'storage/sqlite-transaction.ts': ['artifact/artifact.ts', 'artifact/migrate.ts', driver],
 };
-const sqlOwners = ['artifact.ts', 'migrate.ts', driver, `${delivery}file-lock.ts`, ...Object.keys(physicalCallers)];
+const sqlOwners = ['artifact/artifact.ts', 'artifact/migrate.ts', driver, `${delivery}file-lock.ts`, ...Object.keys(physicalCallers)];
 const artifactCallers = {
-  'square-service.ts': ['createArtifactPort', 'createSquare', 'prepareSquareBuild', 'diagnoseSquareFile'],
-  'list.ts': ['createArtifactPort'],
-  'inbox.ts': ['createArtifactPort'],
-  'stream.ts': ['createArtifactPort', 'observeSquareRevision'],
+  'app/square-service.ts': ['createArtifactPort', 'createSquare', 'prepareSquareBuild', 'diagnoseSquareFile'],
+  'app/list.ts': ['createArtifactPort'],
+  'app/inbox.ts': ['createArtifactPort'],
+  'app/stream.ts': ['createArtifactPort', 'observeSquareRevision'],
 };
-const ledgerCallers = { 'delivery-ledger.ts': ['LedgerStore', 'migrateDeliveryLedger'] };
+const ledgerCallers = { 'ledger/delivery-ledger.ts': ['LedgerStore', 'migrateDeliveryLedger'] };
 const ledgerTypes = ['DeliveryAttempt', 'DeliveryCard', 'DeliveryCorrelation', 'DeliveryHandoffRef', 'DeliveryHealth', 'DeliveryOutcome', 'DeliveryReceipt', 'DeliveryRoute', 'DeliverySession', 'PostResult', 'SuppressionResult', 'DeliverySuppression', 'MigrateDeliveryLedgerInput', 'MigrateDeliveryLedgerResult'].map(name => `type ${name}`);
-const portOwners = ['artifact.ts', 'square-service.ts', 'square-posting.ts', 'stream.ts', 'wakes.ts'];
+const portOwners = ['artifact/artifact.ts', 'app/square-service.ts', 'app/square-posting.ts', 'app/stream.ts', 'core/wakes.ts'];
 const factPorts = ['ActivityFilter', 'ActivityHead', 'ActivityIndex', 'ActivitySearch', 'ArtifactWriteAuthority', 'AttentionFact', 'DirectedFilter', 'DirectedHead', 'FutureAck', 'LandedRecipient', 'NotificationId', 'ParticipantCounts', 'ParticipantFact', 'SeatRef', 'SendInput', 'SendResult', 'SquareHeader', 'SquarePost', 'SquarePostDisposition', 'SquareRead', 'SquareWrite'].map(name => `type ${name}`);
 const producerPorts = {
-  'square-domain.ts': ['type ProducerWrite'],
-  'square-producer-store.ts': ['type ProducerRead', 'type ProducerWrite'],
+  'core/square-domain.ts': ['type ProducerWrite'],
+  'artifact/square-producer-store.ts': ['type ProducerRead', 'type ProducerWrite'],
 };
 const incomingRules = {
   ...Object.fromEntries(Object.entries(physicalCallers).map(([target, callers]) => [target, ['private-target', ({ from }) => callers.includes(from)]])),
   [bin]: ['entry-import', () => false],
-  'help.ts': ['help-owner', ({ from }) => from.startsWith(cli)],
-  'square-service.ts': ['resource-bypass', (edge) => edge.from === 'square-api.ts' || edge.from === facade && typeOnly(edge)],
-  'ports.ts': ['artifact-port', (edge) => named(edge, [...factPorts,
+  'cli/help.ts': ['help-owner', ({ from }) => from.startsWith(cli)],
+  'app/square-service.ts': ['resource-bypass', (edge) => edge.from === 'api/square-api.ts' || edge.from === facade && typeOnly(edge)],
+  'core/ports.ts': ['artifact-port', (edge) => named(edge, [...factPorts,
     ...(portOwners.includes(edge.from) ? ['type SquareArtifactPort'] : producerPorts[edge.from] ?? [])])],
   [facade]: ['runtime-dto', typeOnly],
-  'artifact.ts': ['artifact-capability', (edge) => named(edge, artifactCallers[edge.from])],
+  'artifact/artifact.ts': ['artifact-capability', (edge) => named(edge, artifactCallers[edge.from])],
   [driver]: ['driver-import', (edge) => Boolean(ledgerCallers[edge.from]) && named(edge, [...ledgerCallers[edge.from], ...ledgerTypes])],
 };
 
-const presentation = ['presentation.ts', 'operation-presentation.ts', 'square-tools.ts', 'mcp.ts'];
-const shared = [...presentation, 'time.ts', 'tty-style.ts', 'help.ts', 'identity.ts'];
+const presentation = ['surfaces/presentation.ts', 'surfaces/operation-presentation.ts', 'surfaces/square-tools.ts', 'surfaces/mcp.ts'];
+const shared = [...presentation, 'core/time.ts', 'surfaces/tty-style.ts', 'cli/help.ts', 'hosts/identity.ts'];
 const syntax = {
-  'square-core.ts': ['formatActivityId', 'isNarratedActivity', 'parseActivityId', 'MAX_IDENTITY_SET_SIZE', 'type Perception'],
-  'neutral.ts': ['SquareError', 'truncateChars'],
-  'model.ts': ['SquareError', 'isSquareError', 'sameName', 'formatHardCap', 'parseParticipantList', 'validateName', 'type HardCap', 'type BuildOptions', 'type WakeAddress'],
-  'square-values.ts': ['participantIdentity'],
-  'codex-address.ts': ['codexWakeAddress'],
-  'search.ts': ['grepSnippet'],
+  'core/square-core.ts': ['formatActivityId', 'isNarratedActivity', 'parseActivityId', 'MAX_IDENTITY_SET_SIZE', 'type Perception'],
+  'core/neutral.ts': ['SquareError', 'truncateChars'],
+  'core/model.ts': ['SquareError', 'isSquareError', 'sameName', 'formatHardCap', 'parseParticipantList', 'validateName', 'type HardCap', 'type BuildOptions', 'type WakeAddress'],
+  'core/square-values.ts': ['participantIdentity'],
+  'hosts/codex-address.ts': ['codexWakeAddress'],
+  'core/search.ts': ['grepSnippet'],
 };
 const native = {
-  'cli/harness-command.ts -> harness.ts': ['executeHarnessTarget', 'harnessTargets', 'type HarnessAction', 'type HarnessTargetResult'],
-  'cli/observation-commands.ts -> claude-mod.ts': ['runClaudeMod'],
-  'cli/observation-commands.ts -> codex-hook.ts': ['runCodexHook', 'runCodexInterrupt'],
-  'cli/observation-commands.ts -> codex-watch.ts': ['runCodexWatch'],
-  'mcp.ts -> claude-mcp-context.ts': ['readClaudeMcpCall'],
-  'cli/context.ts -> participant-identity.ts': ['akumaActorFromEnvironment', 'harnessSessionSources', 'resolveParticipantIdentity'],
-  'cli/mcp-server-command.ts -> participant-identity.ts': ['akumaActorFromEnvironment'],
-  'mcp.ts -> participant-identity.ts': ['resolveParticipantIdentity', 'type AkumaActor'],
-  'presentation.ts -> boundary-presentation.ts': ['truncateExternalDiagnostic'],
-  'harness.ts -> boundary-presentation.ts': ['truncateExternalDiagnostic'],
-  'harness-links.ts -> boundary-presentation.ts': ['truncateExternalDiagnostic'],
+  'cli/harness-command.ts -> hosts/harness.ts': ['executeHarnessTarget', 'harnessTargets', 'type HarnessAction', 'type HarnessTargetResult'],
+  'cli/observation-commands.ts -> hosts/claude-mod.ts': ['runClaudeMod'],
+  'cli/observation-commands.ts -> hosts/codex-hook.ts': ['runCodexHook', 'runCodexInterrupt'],
+  'cli/observation-commands.ts -> hosts/codex-watch.ts': ['runCodexWatch'],
+  'surfaces/mcp.ts -> hosts/claude-mcp-context.ts': ['readClaudeMcpCall'],
+  'cli/context.ts -> hosts/participant-identity.ts': ['akumaActorFromEnvironment', 'harnessSessionSources', 'resolveParticipantIdentity'],
+  'cli/mcp-server-command.ts -> hosts/participant-identity.ts': ['akumaActorFromEnvironment'],
+  'surfaces/mcp.ts -> hosts/participant-identity.ts': ['resolveParticipantIdentity', 'type AkumaActor'],
+  'surfaces/presentation.ts -> hosts/boundary-presentation.ts': ['truncateExternalDiagnostic'],
+  'hosts/harness.ts -> hosts/boundary-presentation.ts': ['truncateExternalDiagnostic'],
+  'hosts/harness-links.ts -> hosts/boundary-presentation.ts': ['truncateExternalDiagnostic'],
 };
 const piNative = {
   'plugins/paseo/shared/card-format.ts': ['activityLabel', 'isDirectCardReach', 'shortOrigin', 'timeLabel'],
   'plugins/paseo/shared/card-presentation.ts': ['isCardPresentation', 'type CardPresentation'],
-  'owner.ts': ['harnessOwner'],
-  'participant-identity.ts': ['requestPiAkumaActor', 'resolveParticipantIdentity'],
-  'delivery-ledger.ts': ['DeliveryLedger'],
-  'boundary-presentation.ts': ['deliveryFrameOverhead', 'renderDeliveryReminder'],
-  'session-lifecycle.ts': ['attachDeliverySessionRoutes', 'detachDeliverySession'],
+  'core/owner.ts': ['harnessOwner'],
+  'hosts/participant-identity.ts': ['requestPiAkumaActor', 'resolveParticipantIdentity'],
+  'ledger/delivery-ledger.ts': ['DeliveryLedger'],
+  'hosts/boundary-presentation.ts': ['deliveryFrameOverhead', 'renderDeliveryReminder'],
+  'ledger/session-lifecycle.ts': ['attachDeliverySessionRoutes', 'detachDeliverySession'],
   [`${delivery}pi.ts`]: ['createPiReceiver', 'sendPiMessage'],
 };
 
@@ -232,14 +232,14 @@ const piRaw = /^(?:node:)?fs(?:\/promises)?$|^(?:node:|bun:)sqlite$/;
 function adapter(edge, isPi) {
   const { from, target, specifier } = edge;
   if (!target) return isPi && piRaw.test(specifier) ? 'pi-raw' : undefined;
-  if (target === 'square-api.ts' || target === (isPi ? 'square-tools.ts' : facade)) return;
+  if (target === 'api/square-api.ts' || target === (isPi ? 'surfaces/square-tools.ts' : facade)) return;
   if (isPi ? target.startsWith(pi) : target.startsWith(cli) || shared.includes(target)) return FOLLOW;
   const allowed = isPi ? piNative[target] : native[`${from} -> ${target}`] ?? syntax[target];
   return allowed ? (named(edge, allowed) ? undefined : 'adapter-binding') : 'adapter-private';
 }
 
-const domain = ['square-domain.ts', 'decisions.ts', 'perceive-decisions.ts', 'views.ts'];
-const factInputs = ['model.ts', 'message.ts', 'attention.ts', 'ports.ts', 'neutral.ts', 'runtime.ts', 'square-core.ts', 'square-values.ts', 'mention-parse.ts', 'decisions.ts', 'views.ts', 'hints.ts', 'receive.ts', 'activity-query.ts'];
+const domain = ['core/square-domain.ts', 'core/decisions.ts', 'core/perceive-decisions.ts', 'core/views.ts'];
+const factInputs = ['core/model.ts', 'core/message.ts', 'core/attention.ts', 'core/ports.ts', 'core/neutral.ts', 'core/runtime.ts', 'core/square-core.ts', 'core/square-values.ts', 'core/mention-parse.ts', 'core/decisions.ts', 'core/views.ts', 'core/hints.ts', 'core/receive.ts', 'core/activity-query.ts'];
 const outsideDomain = (edge) => domain.includes(edge.from) && !factInputs.includes(edge.target);
 
 const isTypeStatement = (node) => ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)
@@ -269,9 +269,9 @@ function violations(sources, pkg = manifest) {
     if (target === undefined) issue('unresolved-import', edge);
     if (specifier === undefined) issue('dynamic-import', edge);
     if (sqlite.test(specifier) && !sqlOwners.includes(from)) issue('raw-sqlite', edge);
-    if (target?.startsWith(cli) && ![bin, 'help.ts'].includes(from) && !from.startsWith(cli)) issue('cli-import', edge);
+    if (target?.startsWith(cli) && ![bin, 'cli/help.ts'].includes(from) && !from.startsWith(cli)) issue('cli-import', edge);
     if (target && from.startsWith(delivery) && !target.startsWith(delivery)) issue('delivery-outbound', edge);
-    if (['receive.ts', 'attention.ts'].includes(from)) issue('leaf-import', edge);
+    if (['core/receive.ts', 'core/attention.ts'].includes(from)) issue('leaf-import', edge);
     if (outsideDomain(edge)) issue('domain-direction', edge);
   }
   for (const [target, [code, allowed]] of Object.entries(incomingRules))
@@ -283,7 +283,7 @@ function violations(sources, pkg = manifest) {
     if (!exportPath) continue;
     const target = matchSource(exportPath, sources);
     if (!target) issue('package-target', { from: subpath, target: exportPath });
-    else if ([bin, ...sqlOwners, 'square-service.ts', 'ports.ts'].includes(target)) issue('package-alias', { from: subpath, target });
+    else if ([bin, ...sqlOwners, 'app/square-service.ts', 'core/ports.ts'].includes(target)) issue('package-alias', { from: subpath, target });
   }
 
   function closure(roots, policy) {
@@ -294,13 +294,13 @@ function violations(sources, pkg = manifest) {
       else if (decision && decision !== FOLLOW) issue(decision, edge, trail);
     }
   }
-  const sdkRoots = ['square-api.ts', 'index.ts', ...['default', 'types'].map((kind) => packageTarget(pkg.exports?.['.'], kind)).filter(Boolean).map((target) => matchSource(target, sources))];
+  const sdkRoots = ['api/square-api.ts', 'index.ts', ...['default', 'types'].map((kind) => packageTarget(pkg.exports?.['.'], kind)).filter(Boolean).map((target) => matchSource(target, sources))];
   closure(sdkRoots, ({ target }) => {
     if (!target) return;
-    return target.startsWith(cli) || [...presentation, 'help.ts', 'tty-style.ts'].includes(target) ? 'sdk-direction' : FOLLOW;
+    return target.startsWith(cli) || [...presentation, 'cli/help.ts', 'surfaces/tty-style.ts'].includes(target) ? 'sdk-direction' : FOLLOW;
   });
   closure(storageLeaves, ({ target, specifier }) => {
-    if (target) return [...storageLeaves, 'neutral.ts'].includes(target) ? FOLLOW : 'neutral-edge';
+    if (target) return [...storageLeaves, 'core/neutral.ts'].includes(target) ? FOLLOW : 'neutral-edge';
     if (!specifier?.startsWith('node:')) return 'neutral-edge';
   });
   closure([bin, ...presentation, ...[...sources.keys()].filter((file) => file.startsWith(cli))], (edge) => adapter(edge, false));
@@ -318,9 +318,9 @@ test('the same graph rejects resolved escapes and admits named capabilities', ()
   const pkg = {
     name: '@sample/square',
     bin: { square: './dist/square.js' },
-    exports: { '.': { types: './dist/square-facade.d.ts', default: './dist/index.js' }, './bin': './dist/square.js' },
+    exports: { '.': { types: './dist/api/square-facade.d.ts', default: './dist/index.js' }, './bin': './dist/square.js' },
   };
-  const stubs = ['cli/program.ts', 'square-core.ts', 'harness.ts', 'model.ts', 'owner.ts', 'square-service.ts', 'ports.ts'];
+  const stubs = ['cli/program.ts', 'core/square-core.ts', 'hosts/harness.ts', 'core/model.ts', 'core/owner.ts', 'app/square-service.ts', 'core/ports.ts'];
   const samples = {
     'square.ts': "import { runCli } from './cli/program.js';",
     'index.ts': "export * from './sdk-helper.js';",
@@ -328,32 +328,32 @@ test('the same graph rejects resolved escapes and admits named capabilities', ()
       const bun = 'bun:sqlite'; await import(bun);
       const query = 'INSERT OR REPLACE INTO activities VALUES (1)';
       import '@sample/square/bin';`,
-    'presentation.ts': "import { formatActivityId, type Perception } from './square-core.js'; import type { Dto } from '@sample/square';",
-    'square-facade.ts': "export type { SquareArtifactPort as Dto } from './ports.js';",
-    'cli/harness-command.ts': "import { executeHarnessTarget, type HarnessAction } from '../harness.js'; import * as native from '../harness.js';",
-    'sqlite-framing.ts': "import type { X } from './neutral.js';",
-    'neutral.ts': "export type X = import('./model.js').X;",
-    'plugins/pi/square-pi.js': "import { helper } from '../../dist/plugins/pi/helper.js'; import { harnessOwner } from '../../dist/owner.js';",
-    'plugins/pi/helper.ts': "import 'fs'; export const helper = () => import('../../dist/square-service.js');",
-    'decisions.ts': "import type { SquareArtifactPort as Handle, SquareRead } from './ports.js';",
-    'perceive-decisions.ts': "import type * as Ports from './ports.js'; type Handle = Ports.SquareArtifactPort;",
-    'views.ts': "type Ports = typeof import('./ports.js'); type Handle = import('./ports.js').SquareArtifactPort;",
-    'square-domain.ts': "import type { SquareRead } from './ports.js'; type Head = import('./ports.js').ActivityHead;",
+    'surfaces/presentation.ts': "import { formatActivityId, type Perception } from '../core/square-core.js'; import type { Dto } from '@sample/square';",
+    'api/square-facade.ts': "export type { SquareArtifactPort as Dto } from '../core/ports.js';",
+    'cli/harness-command.ts': "import { executeHarnessTarget, type HarnessAction } from '../hosts/harness.js'; import * as native from '../hosts/harness.js';",
+    'storage/sqlite-framing.ts': "import type { X } from '../core/neutral.js';",
+    'core/neutral.ts': "export type X = import('./model.js').X;",
+    'plugins/pi/square-pi.js': "import { helper } from '../../dist/plugins/pi/helper.js'; import { harnessOwner } from '../../dist/core/owner.js';",
+    'plugins/pi/helper.ts': "import 'fs'; export const helper = () => import('../../dist/app/square-service.js');",
+    'core/decisions.ts': "import type { SquareArtifactPort as Handle, SquareRead } from './ports.js';",
+    'core/perceive-decisions.ts': "import type * as Ports from './ports.js'; type Handle = Ports.SquareArtifactPort;",
+    'core/views.ts': "type Ports = typeof import('./ports.js'); type Handle = import('./ports.js').SquareArtifactPort;",
+    'core/square-domain.ts': "import type { SquareRead } from './ports.js'; type Head = import('./ports.js').ActivityHead;",
     'env-writer.ts': "process['env'][id] += 'x'; Reflect['set'](process.env, id, 'x');",
-    'delivery-ledger-sqlite.ts': 'export class LedgerStore {} export function migrateDeliveryLedger() {}',
-    'plugins/opencode/index.ts': "const { DatabaseSync: Raw } = await import('../../dist/delivery-ledger-sqlite.js');",
+    'ledger/delivery-ledger-sqlite.ts': 'export class LedgerStore {} export function migrateDeliveryLedger() {}',
+    'plugins/opencode/index.ts': "const { DatabaseSync: Raw } = await import('../../dist/ledger/delivery-ledger-sqlite.js');",
     'shadowed.ts': "export function migrate() { return require('./not-a-module.js'); function require(value) { return value; } }",
-    'keiyaku-delivery.ts': "await import(flag ? '@astrosheep/keiyaku' : './square-store.js');",
+    'hosts/keiyaku-delivery.ts': "await import(flag ? '@astrosheep/keiyaku' : '../artifact/square-store.js');",
   };
   const issues = violations(new Map([...stubs.map((file) => [file, '']), ...Object.entries(samples)]), pkg);
   assert.deepEqual(keys(issues).sort(), [
     'raw-sqlite:sdk-helper.ts->node:sqlite', 'raw-sqlite:sdk-helper.ts->bun:sqlite', 'sql-literal:sdk-helper.ts->sdk-helper.ts',
     'entry-import:sdk-helper.ts->square.ts', 'package-alias:./bin->square.ts', 'sdk-direction:square.ts->cli/program.ts',
-    'neutral-edge:neutral.ts->model.ts', 'pi-raw:plugins/pi/helper.ts->fs', 'adapter-private:plugins/pi/helper.ts->square-service.ts',
-    'resource-bypass:plugins/pi/helper.ts->square-service.ts', 'driver-import:plugins/opencode/index.ts->delivery-ledger-sqlite.ts',
-    'artifact-port:decisions.ts->ports.ts', 'artifact-port:perceive-decisions.ts->ports.ts', 'artifact-port:views.ts->ports.ts',
-    'artifact-port:views.ts->ports.ts', 'artifact-port:square-facade.ts->ports.ts', 'adapter-binding:cli/harness-command.ts->harness.ts',
-    'env-write:env-writer.ts->process.env', 'env-write:env-writer.ts->process.env', 'dynamic-import:keiyaku-delivery.ts-><computed>',
+    'neutral-edge:core/neutral.ts->core/model.ts', 'pi-raw:plugins/pi/helper.ts->fs', 'adapter-private:plugins/pi/helper.ts->app/square-service.ts',
+    'resource-bypass:plugins/pi/helper.ts->app/square-service.ts', 'driver-import:plugins/opencode/index.ts->ledger/delivery-ledger-sqlite.ts',
+    'artifact-port:core/decisions.ts->core/ports.ts', 'artifact-port:core/perceive-decisions.ts->core/ports.ts', 'artifact-port:core/views.ts->core/ports.ts',
+    'artifact-port:core/views.ts->core/ports.ts', 'artifact-port:api/square-facade.ts->core/ports.ts', 'adapter-binding:cli/harness-command.ts->hosts/harness.ts',
+    'env-write:env-writer.ts->process.env', 'env-write:env-writer.ts->process.env', 'dynamic-import:hosts/keiyaku-delivery.ts-><computed>',
   ].sort());
   const hidden = issues.find(({ code }) => code === 'adapter-private');
   assert.deepEqual(hidden.trail, ['plugins/pi/square-pi.js', 'plugins/pi/helper.ts']);

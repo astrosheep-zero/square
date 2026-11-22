@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { readSquareSnapshot } from '../dist/artifact.js';
+import { readSquareSnapshot } from '../dist/artifact/artifact.js';
 import { persistSquare, run, withName, withPath } from './square-cli-helpers.js';
 
 test('a departed participant steps back in before speaking, and only the return announces itself', async () => {

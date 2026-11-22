@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { createArtifactPort } from '../dist/artifact.js';
-import { decodeHarnessOwner, harnessOwner } from '../dist/owner.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
+import { decodeHarnessOwner, harnessOwner } from '../dist/core/owner.js';
 
 const repo = path.resolve(import.meta.dirname, '..');
 const enabled = process.env.SQUARE_CLAUDE_MOD_NATIVE_SMOKE === '1';
@@ -17,7 +17,7 @@ test('native Claude mod preserves main/child MCP attribution, denies collision, 
   const root = fs.realpathSync(fs.mkdtempSync('/tmp/square-claude-mcp-mod-'));
   console.log(`Claude MCP mod evidence: ${root}`);
   const location = path.join(root, 'work/test.square');
-  const { Square } = await import('../dist/square-api.js');
+  const { Square } = await import('../dist/api/square-api.js');
   const square = await Square.build({ path: location, markdown: 'Local Claude MCP ownership fixture' });
   await square.close();
   const run = spawnSync('python3', ['-B', path.join(repo, 'test/fixtures/claude-mcp-runtime.py'), repo, root, binary, process.execPath], {

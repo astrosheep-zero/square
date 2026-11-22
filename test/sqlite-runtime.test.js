@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
 
 const exec = promisify(execFile);
 const fixture = new URL('./fixtures/sqlite-runtime.mjs', import.meta.url).pathname;

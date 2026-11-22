@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createArtifactPort } from '../dist/artifact.js';
-import { Square, selectOwnSeat } from '../dist/square-api.js';
-import { renderJoinResult } from '../dist/operation-presentation.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
+import { Square, selectOwnSeat } from '../dist/api/square-api.js';
+import { renderJoinResult } from '../dist/surfaces/operation-presentation.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
 
 const owner = `test:${'api-parity'}`;

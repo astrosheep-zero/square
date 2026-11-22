@@ -51,16 +51,16 @@
   },
   "exports": {
     "./delivery-ledger": {
-      "types": "./dist/delivery-ledger.d.ts",
-      "default": "./dist/delivery-ledger.js"
+      "types": "./dist/ledger/delivery-ledger.d.ts",
+      "default": "./dist/ledger/delivery-ledger.js"
     },
     "./receive": {
-      "types": "./dist/receive.d.ts",
-      "default": "./dist/receive.js"
+      "types": "./dist/core/receive.d.ts",
+      "default": "./dist/core/receive.js"
     },
     "./attention": {
-      "types": "./dist/attention.d.ts",
-      "default": "./dist/attention.js"
+      "types": "./dist/core/attention.d.ts",
+      "default": "./dist/core/attention.js"
     },
     ".": {
       "types": "./dist/index.d.ts",
@@ -79,8 +79,8 @@
       "default": "./dist/plugins/opencode/index.js"
     },
     "./mcp": {
-      "types": "./dist/mcp.d.ts",
-      "default": "./dist/mcp.js"
+      "types": "./dist/surfaces/mcp.d.ts",
+      "default": "./dist/surfaces/mcp.js"
     }
   },
   "main": "dist/index.js",

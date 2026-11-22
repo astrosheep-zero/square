@@ -2,14 +2,14 @@ import { Box, Markdown, stripTerminalSequences, truncateToWidth, visibleWidth } 
 import { activityLabel, isDirectCardReach, shortOrigin, timeLabel } from '../../dist/plugins/paseo/shared/card-format.js';
 import { z } from 'zod/v4';
 
-import { deliveryLedgerLocation } from '../../dist/square-api.js';
-import { harnessOwner } from '../../dist/owner.js';
-import { requestPiAkumaActor, resolveParticipantIdentity } from '../../dist/participant-identity.js';
-import { DeliveryLedger } from '../../dist/delivery-ledger.js';
-import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/boundary-presentation.js';
+import { deliveryLedgerLocation } from '../../dist/api/square-api.js';
+import { harnessOwner } from '../../dist/core/owner.js';
+import { requestPiAkumaActor, resolveParticipantIdentity } from '../../dist/hosts/participant-identity.js';
+import { DeliveryLedger } from '../../dist/ledger/delivery-ledger.js';
+import { deliveryFrameOverhead, renderDeliveryReminder } from '../../dist/hosts/boundary-presentation.js';
 import { isCardPresentation } from '../../dist/plugins/paseo/shared/card-presentation.js';
-import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, runSquareTool, squareToolsEnabled } from '../../dist/square-tools.js';
-import { attachDeliverySessionRoutes, detachDeliverySession } from '../../dist/session-lifecycle.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, runSquareTool, squareToolsEnabled } from '../../dist/surfaces/square-tools.js';
+import { attachDeliverySessionRoutes, detachDeliverySession } from '../../dist/ledger/session-lifecycle.js';
 import { createPiReceiver, sendPiMessage } from '../../dist/packages/agent-delivery/src/pi.js';
 
 const BUDGET_CHARS = 12_000;

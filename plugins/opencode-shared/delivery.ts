@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { renderDeliveryReminder } from '../../boundary-presentation.js';
-import { DeliveryLedger, type DeliveryTransport, type TransportOutcome } from '../../delivery-ledger.js';
-import { retainDeliveryLedger } from '../../delivery-lifetime.js';
-import { harnessOwner, decodeHarnessOwner } from '../../owner.js';
-import { attachDeliverySessionRoutes, detachDeliverySession, markDeliverySessionDeleted } from '../../session-lifecycle.js';
+import { renderDeliveryReminder } from '../../hosts/boundary-presentation.js';
+import { DeliveryLedger, type DeliveryTransport, type TransportOutcome } from '../../ledger/delivery-ledger.js';
+import { retainDeliveryLedger } from '../../ledger/delivery-lifetime.js';
+import { harnessOwner, decodeHarnessOwner } from '../../core/owner.js';
+import { attachDeliverySessionRoutes, detachDeliverySession, markDeliverySessionDeleted } from '../../ledger/session-lifecycle.js';
 
 const routeKind = 'opencode-server';
 const ownerFor = (sessionId: string) => harnessOwner({ channel: 'opencode', session: sessionId });

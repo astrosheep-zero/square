@@ -9,10 +9,10 @@ import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { seedFormat12 } from '../fixtures/format12.js';
 
-import { formatActivityId } from '../../dist/square-core.js';
-import { createArtifactPort, readSquareSnapshot, writeSquareFile } from '../../dist/artifact.js';
-import { Square, discover } from '../../dist/square-api.js';
-import { renderSquareList } from '../../dist/operation-presentation.js';
+import { formatActivityId } from '../../dist/core/square-core.js';
+import { createArtifactPort, readSquareSnapshot, writeSquareFile } from '../../dist/artifact/artifact.js';
+import { Square, discover } from '../../dist/api/square-api.js';
+import { renderSquareList } from '../../dist/surfaces/operation-presentation.js';
 import { run, withPath, withName, persistSquare } from '../square-cli-helpers.js';
 
 function command(output, flag) {

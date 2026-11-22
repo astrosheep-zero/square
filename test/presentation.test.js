@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { perceiveHint, expressHint } from '../dist/hints.js';
-import { renderFailureLines } from '../dist/operation-presentation.js';
+import { perceiveHint, expressHint } from '../dist/core/hints.js';
+import { renderFailureLines } from '../dist/surfaces/operation-presentation.js';
 import test from 'node:test';
 
 import {
@@ -8,7 +8,7 @@ import {
   renderPresenceAnchor,
   renderWatchAlreadyActive,
   renderWatchStatus,
-} from '../dist/presentation.js';
+} from '../dist/surfaces/presentation.js';
 
 test('public activity rendering keeps reply ids, multiline bodies, and presence', () => {
   const say = { id: 'act/9', kind: 'say', actor: 'Alice', body: 'first line\nsecond line', mentions: ['Bob'], reply: 'act/3', at: 0 };

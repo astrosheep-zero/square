@@ -1,17 +1,17 @@
-import { deliveryKeyEqual, encodeDeliveryKey } from '../dist/delivery-key.js';
+import { deliveryKeyEqual, encodeDeliveryKey } from '../dist/core/delivery-key.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { Square } from '../dist/square-api.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { squarePostKey, parseSquarePostKey } from '../dist/delivery-key.js';
-import { nameKey } from '../dist/model.js';
-import { flushSquarePosts, reconcileSquareDelivery, readSquareSessions, ensureInitialDeliverySession } from '../dist/square-posting.js';
-import { SqliteSquare } from '../dist/square-service.js';
-import { dispatchPostedCard } from '../dist/notifications.js';
+import { Square } from '../dist/api/square-api.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { squarePostKey, parseSquarePostKey } from '../dist/core/delivery-key.js';
+import { nameKey } from '../dist/core/model.js';
+import { flushSquarePosts, reconcileSquareDelivery, readSquareSessions, ensureInitialDeliverySession } from '../dist/app/square-posting.js';
+import { SqliteSquare } from '../dist/app/square-service.js';
+import { dispatchPostedCard } from '../dist/hosts/notifications.js';
 
 test('receipt folds and owner watermarks commit atomically, replay safely and skip retained history', async t => {
   const c = await fixture(t);

@@ -4,10 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import squarePiExtension from '../plugins/pi/square-pi.js';
-import { Square } from '../dist/square-api.js';
-import { createArtifactPort } from '../dist/artifact.js';
-import { SQUARE_TOOLS } from '../dist/square-tools.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { Square } from '../dist/api/square-api.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
+import { SQUARE_TOOLS } from '../dist/surfaces/square-tools.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
 import { akumaDeliveryOwner } from '../dist/index.js';
 
 function registeredTools(events) {

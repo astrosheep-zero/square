@@ -8,11 +8,11 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import { activityRetryCommand, executeExpression } from '../dist/cli/express-presentation.js';
-import { renderActivityUncertain } from '../dist/presentation.js';
-import { SquareError } from '../dist/model.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { renderActivityUncertain } from '../dist/surfaces/presentation.js';
+import { SquareError } from '../dist/core/model.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
-import { Square } from '../dist/square-api.js';
+import { Square } from '../dist/api/square-api.js';
 import { CLI, ROOT, run, withName, persistSquare, draftPathFrom, testEnv } from './square-cli-helpers.js';
 
 const shellReplay = { skip: process.platform === 'win32' ? 'Printed command replay requires a POSIX shell.' : false };

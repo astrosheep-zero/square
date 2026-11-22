@@ -1,11 +1,11 @@
-import { deliveryKeyEqual } from '../dist/delivery-key.js';
+import { deliveryKeyEqual } from '../dist/core/delivery-key.js';
 // Test-only read of the host ledger's presentation receipt.
 import fs from 'node:fs';
-import { createArtifactPort } from '../dist/artifact.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { harnessOwner } from '../dist/owner.js';
-import { sameName } from '../dist/model.js';
-import { squarePostKey } from '../dist/delivery-key.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { harnessOwner } from '../dist/core/owner.js';
+import { sameName } from '../dist/core/model.js';
+import { squarePostKey } from '../dist/core/delivery-key.js';
 
 export async function hasPresentedForOwner(sessionId, squarePath, name, actIndex, env = process.env) {
   const owner = harnessOwner({ channel: 'pi', session: sessionId });

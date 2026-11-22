@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { Square } from '../dist/square-api.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { Square } from '../dist/api/square-api.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
 import { joinCommand } from '../dist/cli/square-commands.js';
 import { CLI, run, runAsync, testEnv, withName, withPath } from './square-cli-helpers.js';
 

@@ -1,4 +1,4 @@
-import { deliveryKeyEqual, encodeDeliveryKey } from '../dist/delivery-key.js';
+import { deliveryKeyEqual, encodeDeliveryKey } from '../dist/core/delivery-key.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -8,11 +8,11 @@ import http from 'node:http';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
-import { Square } from '../dist/square-api.js';
-import { createArtifactPort } from '../dist/artifact.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { flushSquarePosts } from '../dist/square-posting.js';
-import { dispatchPostedCard } from '../dist/notifications.js';
+import { Square } from '../dist/api/square-api.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { flushSquarePosts } from '../dist/app/square-posting.js';
+import { dispatchPostedCard } from '../dist/hosts/notifications.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 async function setup(t, route) {

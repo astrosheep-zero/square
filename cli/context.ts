@@ -1,12 +1,12 @@
 import os from 'node:os';
-import { harnessOwner, localUserOwner, type Owner } from '../square-api.js';
-import { akumaActorFromEnvironment, harnessSessionSources, resolveParticipantIdentity } from '../participant-identity.js';
-import { codexWakeAddress } from '../codex-address.js';
+import { harnessOwner, localUserOwner, type Owner } from '../api/square-api.js';
+import { akumaActorFromEnvironment, harnessSessionSources, resolveParticipantIdentity } from '../hosts/participant-identity.js';
+import { codexWakeAddress } from '../hosts/codex-address.js';
 
-import { commandUsageHint } from '../help.js';
-import { SquareError, type HardCap, type WakeAddress, parseParticipantList, validateName } from '../model.js';
-import { Square } from '../square-api.js';
-import type { OperationControl } from '../square-facade.js';
+import { commandUsageHint } from './help.js';
+import { SquareError, type HardCap, type WakeAddress, parseParticipantList, validateName } from '../core/model.js';
+import { Square } from '../api/square-api.js';
+import type { OperationControl } from '../api/square-facade.js';
 
 function squareClock(env: NodeJS.ProcessEnv, clock?: () => number): () => number {
   if (clock !== undefined) return clock;
@@ -64,7 +64,7 @@ export function requireValue(args: string[], index: number, flag: string): strin
   return value;
 }
 
-export { parseDurationMs } from '../time.js';
+export { parseDurationMs } from '../core/time.js';
 
 export function parsePositiveInteger(value: string, flag: string): number {
   if (!/^[1-9]\d*$/.test(value)) fail(`✕ invalid ${flag}: expected a positive integer`);

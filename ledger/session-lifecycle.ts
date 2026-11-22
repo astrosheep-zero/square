@@ -1,0 +1,44 @@
+import { DeliveryLedger, deliveryLedgerLocation, type DeliveryRoute, type DeliverySession } from './delivery-ledger.js';
+import type { Owner } from '../core/owner.js';
+
+const NATIVE_RECEIVER_ROUTES = new Set(['codex-queue', 'claude-mod', 'pi-native']);
+
+/** Native receiver custody is never acquired by producer dispatch. */
+export function isProducerDispatchRoute(route: DeliveryRoute): boolean {
+  return !NATIVE_RECEIVER_ROUTES.has(route.kind);
+}
+
+function openLedger(env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<DeliveryLedger> {
+  return DeliveryLedger.open({ location: deliveryLedgerLocation(env), signal });
+}
+
+/** Rotate the captured session generation; omitted routes retain its registrations. */
+export async function attachDeliverySession(owner: Owner, env: NodeJS.ProcessEnv = process.env, routes?: readonly DeliveryRoute[], signal?: AbortSignal): Promise<DeliverySession | false> {
+  return attach(owner, env, routes, false, signal);
+}
+
+/** Replace the supplied route kinds while preserving every other registered route. */
+export async function attachDeliverySessionRoutes(owner: Owner, env: NodeJS.ProcessEnv = process.env, routes: readonly DeliveryRoute[], signal?: AbortSignal): Promise<DeliverySession | false> {
+  return attach(owner, env, routes, true, signal);
+}
+
+async function attach(owner: Owner, env: NodeJS.ProcessEnv, routes: readonly DeliveryRoute[] | undefined, merge: boolean, signal?: AbortSignal): Promise<DeliverySession | false> {
+  if (signal?.aborted) return false;
+  const ledger = await openLedger(env, signal);
+  try {
+    const previous = await ledger.session(owner, signal);
+    if (signal?.aborted) return false;
+    const selected = merge && routes ? [...(previous?.routes ?? []).filter(old => !routes.some(route => route.kind === old.kind)), ...routes] : routes ?? previous?.routes ?? [];
+    return await ledger.attach({ owner, expectedGeneration: previous?.generation ?? null, routes: selected }, signal);
+  } finally { await ledger.close(); }
+}
+
+export async function detachDeliverySession(owner: Owner, generation: string, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<boolean> {
+  const ledger = await openLedger(env, signal);
+  try { return await ledger.detach({ owner, generation }, signal); } finally { await ledger.close(); }
+}
+
+export async function markDeliverySessionDeleted(owner: Owner, generation: string, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<boolean> {
+  const ledger = await openLedger(env, signal);
+  try { return await ledger.markDeleted({ owner, generation }, signal); } finally { await ledger.close(); }
+}

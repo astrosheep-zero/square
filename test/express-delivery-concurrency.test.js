@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Square } from '../dist/square-api.js';
+import { Square } from '../dist/api/square-api.js';
 
 test('concurrent expressions land exactly once with distinct activities and their frozen audiences', async t => {
   const square = Square.inMemory({ markdown: 'concurrent producers' });

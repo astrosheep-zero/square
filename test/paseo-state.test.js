@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-import { discoverPaseoAgents } from '../dist/paseo-state.js';
+import { discoverPaseoAgents } from '../dist/hosts/paseo-state.js';
 import { nodeCommandFixture } from './node-command-fixture.js';
 
 test('Paseo discovery parses inventory without blocking the event loop', async () => {

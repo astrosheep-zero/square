@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto';
-import type { DeliveryTransport } from '../../delivery-ledger.js';
+import type { DeliveryTransport } from '../../ledger/delivery-ledger.js';
 import { openCodeTransport } from '../opencode-shared/delivery.js';
 
 type Client = { session: { promptAsync(input: unknown): Promise<{ error?: unknown; response?: Response }> } };

@@ -5,10 +5,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { Square, SquareError, akumaDeliveryOwner, harnessOwner, decodeHarnessOwner, localUserOwner, inbox } from '../dist/index.js';
-import { validateOwner } from '../dist/model.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { validateOwner } from '../dist/core/model.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
 import { commandIdentity } from '../dist/cli/context.js';
-import { requestPiAkumaActor } from '../dist/participant-identity.js';
+import { requestPiAkumaActor } from '../dist/hosts/participant-identity.js';
 
 test('a complete actor supersedes native routes, but explicit CLI ownership still wins', () => {
   const pair = { world: '/one:world', akuId: 'aku/alpha/1234abcd' };

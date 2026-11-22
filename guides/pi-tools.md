@@ -41,7 +41,7 @@ with at most 400 Unicode characters per preview. Already consumed activities are
 excluded, including those beyond an earlier unread hole. Previews never consume
 activity; the text supplies a `perceive` command and the count of other unread activities.
 Use `perceive` for consumption or `history` for archives. Exact parameters and semantics
-come from the tool descriptions, shared with MCP through `square-tools.ts`.
+come from the tool descriptions, shared with MCP through `surfaces/square-tools.ts`.
 
 Each single-square operation opens and closes its own connection, including failure and cancellation cleanup.
 Discovery runs without opening a single `Square` resource.

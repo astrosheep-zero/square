@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Square } from '../dist/square-api.js';
-import { renderHistoryResult } from '../dist/operation-presentation.js';
-import { renderExpressWaiting } from '../dist/presentation.js';
+import { Square } from '../dist/api/square-api.js';
+import { renderHistoryResult } from '../dist/surfaces/operation-presentation.js';
+import { renderExpressWaiting } from '../dist/surfaces/presentation.js';
 
 test('expanding a clipped history page keeps its activity coordinates', async () => {
   const square = Square.inMemory({ markdown: 'Conversation' });

@@ -6,12 +6,12 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import squarePiExtension, { renderSquareCard } from '../plugins/pi/square-pi.js';
-import { createSquareMcpServer } from '../dist/mcp.js';
-import { SquareError } from '../dist/model.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { Square } from '../dist/square-api.js';
-import { harnessOwner } from '../dist/owner.js';
-import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolsEnabled } from '../dist/square-tools.js';
+import { createSquareMcpServer } from '../dist/surfaces/mcp.js';
+import { SquareError } from '../dist/core/model.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { Square } from '../dist/api/square-api.js';
+import { harnessOwner } from '../dist/core/owner.js';
+import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, squareToolsEnabled } from '../dist/surfaces/square-tools.js';
 import { connectPi } from '../dist/packages/agent-delivery/src/pi-client.js';
 
 function setEnv(t, key, value) {

@@ -1,5 +1,5 @@
-import { renderGlobalHelp, renderSubcommandHelp } from '../help.js';
-import { SQUARE_IDENTITY } from '../identity.js';
+import { renderGlobalHelp, renderSubcommandHelp } from './help.js';
+import { SQUARE_IDENTITY } from '../hosts/identity.js';
 
 import { type CommandSpec, fail } from './context.js';
 

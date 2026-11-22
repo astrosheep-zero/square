@@ -3,9 +3,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createSquareFile } from '../dist/artifact.js';
-import { Square } from '../dist/square-api.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { createSquareFile } from '../dist/artifact/artifact.js';
+import { Square } from '../dist/api/square-api.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
 
 async function setup(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-content-'));

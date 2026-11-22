@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Square } from '../dist/square-api.js';
+import { Square } from '../dist/api/square-api.js';
 import { persistSquare, run, withName } from './square-cli-helpers.js';
 
 test('done refuses argument and stdin bodies, then leaves without one', async (t) => {

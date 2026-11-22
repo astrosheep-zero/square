@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { receive, selectReceivedHeads, consumeReceived, recordConsumed, ReceiveError } from '../dist/receive.js';
+import { receive, selectReceivedHeads, consumeReceived, recordConsumed, ReceiveError } from '../dist/core/receive.js';
 
 // Caller-owned transactional memory, with storage uniqueness and rollback. Keys
 // are equality identities; array insertion order, not key spelling, orders heads.

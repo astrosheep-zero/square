@@ -6,7 +6,7 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { createArtifactPort, createSquareFile, readSquareSnapshot } from '../dist/artifact.js';
+import { createArtifactPort, createSquareFile, readSquareSnapshot } from '../dist/artifact/artifact.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 const initial = () => ({ hardCap: null, preamble: [], warmup: [], acts: [], runtime: { nextActIndex: 0, observations: {}, leases: {} } });
@@ -168,7 +168,7 @@ test('process death before commit recovers authority and derived landing indices
   const { file, port } = await fixture(t);
   const alice = await join(port, 'Alice', 0), bob = await join(port, 'Bob', 1);
   const before = await readSquareSnapshot(file);
-  const script = `import {createArtifactPort} from './dist/artifact.js';
+  const script = `import {createArtifactPort} from './dist/artifact/artifact.js';
     const p=createArtifactPort(process.argv[1]);const seat=(await p.read(facts=>facts.seat('Alice'))).value;
     await p.transactAs({kind:'participant',seat},w=>{w.land({kind:'say',actor:'Alice',body:'uncommitted',mentions:['Bob'],at:2});process.stdout.write('ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);});`;
   const running = child(script, file);

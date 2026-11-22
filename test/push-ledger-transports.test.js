@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { renderDeliveryReminder } from '../dist/boundary-presentation.js';
-import { attachDeliverySession, attachDeliverySessionRoutes, detachDeliverySession, markDeliverySessionDeleted } from '../dist/session-lifecycle.js';
-import { HttpWakeTransport } from '../dist/http-delivery.js';
-import { PaseoWakeTransport } from '../dist/paseo-delivery.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { renderDeliveryReminder } from '../dist/hosts/boundary-presentation.js';
+import { attachDeliverySession, attachDeliverySessionRoutes, detachDeliverySession, markDeliverySessionDeleted } from '../dist/ledger/session-lifecycle.js';
+import { HttpWakeTransport } from '../dist/hosts/http-delivery.js';
+import { PaseoWakeTransport } from '../dist/hosts/paseo-delivery.js';
 
 const owner = 'test:push';
 const card = { seq: 1, owner, key: ["producer","one"], text: 'hello', postedAt: 1 };

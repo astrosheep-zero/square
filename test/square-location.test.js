@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { Square, squareLocation, discover } from '../dist/square-api.js';
+import { Square, squareLocation, discover } from '../dist/api/square-api.js';
 import { run } from './square-cli-helpers.js';
 
 test('Windows drive paths are local, not URI schemes', () => {

@@ -5,36 +5,36 @@ import path from 'node:path';
 import test from 'node:test';
 import { parse } from 'jsonc-parser';
 import squarePiExtension from '../plugins/pi/square-pi.js';
-import { readSquareSnapshot } from '../dist/artifact.js';
-import { SQUARE_IDENTITY } from '../dist/identity.js';
+import { readSquareSnapshot } from '../dist/artifact/artifact.js';
+import { SQUARE_IDENTITY } from '../dist/hosts/identity.js';
 import {
   CLAUDE_PLUGIN_ID,
   doctorClaudePlugin,
   installClaudePlugin,
   uninstallClaudePlugin,
-} from '../dist/harness-claude.js';
+} from '../dist/hosts/harness-claude.js';
 import {
   CODEX_PLUGIN_ID,
   codexMarketplaceRoot,
   doctorCodexPlugin,
   installCodexPlugin,
   uninstallCodexPlugin,
-} from '../dist/harness-codex.js';
+} from '../dist/hosts/harness-codex.js';
 import {
   doctorPiPackage,
   installPiPackage,
   piPackageRoot,
   piPackageSource,
   uninstallPiPackage,
-} from '../dist/harness-pi.js';
-import { Square } from '../dist/square-api.js';
-import { executeHarnessTarget } from '../dist/harness.js';
+} from '../dist/hosts/harness-pi.js';
+import { Square } from '../dist/api/square-api.js';
+import { executeHarnessTarget } from '../dist/hosts/harness.js';
 import { executeTargetBatch } from '../dist/cli/harness-command.js';
 import {
   installOpenCodePlugin,
   uninstallOpenCodePlugin,
   verifyOpenCodeRuntime,
-} from '../dist/harness-links.js';
+} from '../dist/hosts/harness-links.js';
 
 function enabledPlugins(pluginId) { return JSON.stringify({ installed: [{ pluginId, installed: true, enabled: true }] }); }
 function enabledClaudePlugins(pluginId) { return JSON.stringify([{ id: pluginId, version: SQUARE_IDENTITY.packageVersion, enabled: true, installPath: '/tmp/plugin' }]); }

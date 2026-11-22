@@ -9,7 +9,7 @@ import {
   codexMarketplaceRoot,
   installCodexPlugin,
   uninstallCodexPlugin,
-} from '../dist/harness-codex.js';
+} from '../dist/hosts/harness-codex.js';
 
 test('Codex lifecycle retires only the legacy Square identity', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'square-codex-hidden-legacy-'));

@@ -1,7 +1,7 @@
 import {
   deliveryLedgerLocation, muteDeliveryLedger, selectOwnSeat, unmuteDeliveryLedger,
-} from '../square-api.js';
-import { renderMuteResult } from '../operation-presentation.js';
+} from '../api/square-api.js';
+import { renderMuteResult } from '../surfaces/operation-presentation.js';
 import { jsonResult } from './json.js';
 import {
   type CommandContext, type CommandSpec,

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { createArtifactPort } from '../../dist/artifact.js';
-import { DeliveryLedger } from '../../dist/delivery-ledger.js';
-import { squarePostKey } from '../../dist/delivery-key.js';
+import { createArtifactPort } from '../../dist/artifact/artifact.js';
+import { DeliveryLedger } from '../../dist/ledger/delivery-ledger.js';
+import { squarePostKey } from '../../dist/core/delivery-key.js';
 
 const [location, stage, ledgerLocation, configuredNow] = process.argv.slice(2);
 const clock = configuredNow === undefined ? Date.now : () => Number(configuredNow);

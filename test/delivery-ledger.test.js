@@ -1,5 +1,5 @@
-import { dispatchPostedCard } from '../dist/notifications.js';
-import { deliveryKeyEqual } from '../dist/delivery-key.js';
+import { dispatchPostedCard } from '../dist/hosts/notifications.js';
+import { deliveryKeyEqual } from '../dist/core/delivery-key.js';
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { dispatchEligibleCards, postAndDispatch } from '../dist/index.js';
-import { DeliveryLedger, deliveryLedgerLocation } from '../dist/delivery-ledger.js';
+import { DeliveryLedger, deliveryLedgerLocation } from '../dist/ledger/delivery-ledger.js';
 
 const owner = 'native:session/1';
 const pull = { kind: 'boundary', address: {} };

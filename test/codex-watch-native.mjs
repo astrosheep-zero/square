@@ -11,8 +11,8 @@ import { once } from 'node:events';
 import { createConnection } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { postAndDispatch } from '../dist/notifications.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { postAndDispatch } from '../dist/hosts/notifications.js';
 import { codexIdleAtStop } from '../dist/packages/agent-delivery/src/codex.js';
 
 if (process.env.SQUARE_CODEX_NATIVE_SMOKE !== '1') throw new Error('Set SQUARE_CODEX_NATIVE_SMOKE=1 to run the isolated native smoke.');

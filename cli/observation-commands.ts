@@ -1,28 +1,28 @@
 import path from 'node:path';
 import { once } from 'node:events';
-import { runClaudeMod } from '../claude-mod.js';
-import { runCodexHook, runCodexInterrupt } from '../codex-hook.js';
-import { runCodexWatch } from '../codex-watch.js';
-import { isSquareError } from '../model.js';
-import { truncateChars } from '../neutral.js';
-import type { ActivityId, OperationError, ArchiveRecord, PerceiveOptions, DiscoveryOptions, HistoryQuery, StreamStart } from '../square-facade.js';
+import { runClaudeMod } from '../hosts/claude-mod.js';
+import { runCodexHook, runCodexInterrupt } from '../hosts/codex-hook.js';
+import { runCodexWatch } from '../hosts/codex-watch.js';
+import { isSquareError } from '../core/model.js';
+import { truncateChars } from '../core/neutral.js';
+import type { ActivityId, OperationError, ArchiveRecord, PerceiveOptions, DiscoveryOptions, HistoryQuery, StreamStart } from '../api/square-facade.js';
 import {
   commandPrefix,
   withPathOutput,
   quoteShell,
   renderWatchForceTakeover,
   renderWatchReplaceMissing,
-} from '../presentation.js';
+} from '../surfaces/presentation.js';
 import {
   historyContinuationCommand,
   renderHistoryResult,
   renderPerceiveOutcome,
   renderStatusResult,
   renderSquareList,
-} from '../operation-presentation.js';
-import { formatTimestamp, parseTimeOrRelative } from '../time.js';
-import { deliveryLedgerLocation, discover, inbox, formatActivityId, parseActivityId, PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../square-api.js';
-import { selectOwnSeat } from '../square-api.js';
+} from '../surfaces/operation-presentation.js';
+import { formatTimestamp, parseTimeOrRelative } from '../core/time.js';
+import { deliveryLedgerLocation, discover, inbox, formatActivityId, parseActivityId, PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../api/square-api.js';
+import { selectOwnSeat } from '../api/square-api.js';
 import { jsonResult } from './json.js';
 
 import {

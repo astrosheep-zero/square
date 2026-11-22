@@ -5,10 +5,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { runClaudeMod } from '../dist/claude-mod.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { harnessOwner } from '../dist/owner.js';
-import { beginClaudeMcpCall, readClaudeMcpCall } from '../dist/claude-mcp-context.js';
+import { runClaudeMod } from '../dist/hosts/claude-mod.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { harnessOwner } from '../dist/core/owner.js';
+import { beginClaudeMcpCall, readClaudeMcpCall } from '../dist/hosts/claude-mcp-context.js';
 
 async function until(check) {
   const deadline = Date.now() + 4000;

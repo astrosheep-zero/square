@@ -6,11 +6,11 @@ import test from 'node:test';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { postAndDispatch } from '../dist/notifications.js';
-import { runCodexWatch } from '../dist/codex-watch.js';
-import { runCodexHook, runCodexInterrupt } from '../dist/codex-hook.js';
-import { codexBoundaryStore } from '../dist/codex-address.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { postAndDispatch } from '../dist/hosts/notifications.js';
+import { runCodexWatch } from '../dist/hosts/codex-watch.js';
+import { runCodexHook, runCodexInterrupt } from '../dist/hosts/codex-hook.js';
+import { codexBoundaryStore } from '../dist/hosts/codex-address.js';
 
 const cli = fileURLToPath(new URL('../dist/square.js', import.meta.url));
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));

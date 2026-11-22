@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SqliteSquare } from '../../dist/square-service.js';
-import { dispatchPostedCard } from '../../dist/notifications.js';
+import { SqliteSquare } from '../../dist/app/square-service.js';
+import { dispatchPostedCard } from '../../dist/hosts/notifications.js';
 
 /** Internal unit-test construction with an instrumented artifact owned by the resource. */
 export async function resourceWithArtifact(t, artifact, clock = () => 100) {

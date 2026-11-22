@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { Square, selectOwnSeat } from '../dist/square-api.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
+import { Square, selectOwnSeat } from '../dist/api/square-api.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
 
 const match = (turn = 'turn/7') => ({ fields: [
   { path: ['keiyaku', 'kind'], equals: 'akuma.turn-outcome' },

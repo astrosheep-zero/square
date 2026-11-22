@@ -7,11 +7,11 @@ import { DatabaseSync } from 'node:sqlite';
 
 import {
   Square, deliveryLedgerMutedUntil, discover, muteDeliveryLedger, unmuteDeliveryLedger,
-} from '../dist/square-api.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { canonicalPath } from '../dist/canonical-path.js';
-import { seatMuteId, seatMutePrefix } from '../dist/square-notification-mute.js';
-import { renderSquareList, renderStatusResult } from '../dist/operation-presentation.js';
+} from '../dist/api/square-api.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { canonicalPath } from '../dist/storage/canonical-path.js';
+import { seatMuteId, seatMutePrefix } from '../dist/app/square-notification-mute.js';
+import { renderSquareList, renderStatusResult } from '../dist/surfaces/operation-presentation.js';
 import { run, withName } from './square-cli-helpers.js';
 
 async function fixture(t, options = {}) {

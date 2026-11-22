@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { Square } from '../dist/square-api.js';
-import { readSquareSnapshot } from '../dist/artifact.js';
+import { Square } from '../dist/api/square-api.js';
+import { readSquareSnapshot } from '../dist/artifact/artifact.js';
 import { CLI, ROOT, run, tempSquare, testEnv, withName } from './square-cli-helpers.js';
 
 const shellReplay = { skip: process.platform === 'win32' ? 'Printed command replay requires a POSIX shell.' : false };

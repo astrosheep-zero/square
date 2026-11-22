@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Square } from '../dist/square-api.js';
+import { Square } from '../dist/api/square-api.js';
 
 const idsOf = (page) => page.activities.map((activity) => activity.id);
 

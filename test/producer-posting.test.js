@@ -1,4 +1,4 @@
-import { encodeDeliveryKey } from '../dist/delivery-key.js';
+import { encodeDeliveryKey } from '../dist/core/delivery-key.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -7,11 +7,11 @@ import path from 'node:path';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
-import { createProducerDriver } from '../dist/square-producer-store.js';
-import { Square } from '../dist/square-api.js';
-import { createArtifactPort } from '../dist/artifact.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { parseSquarePostKey, squarePostKey } from '../dist/delivery-key.js';
+import { createProducerDriver } from '../dist/artifact/square-producer-store.js';
+import { Square } from '../dist/api/square-api.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { parseSquarePostKey, squarePostKey } from '../dist/core/delivery-key.js';
 
 test('in-memory producer keys round-trip, fold exact receipts and withdraw only the current card', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-memory-keys-'));

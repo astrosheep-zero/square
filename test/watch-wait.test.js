@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
-import { Square } from '../dist/square-api.js';
+import { Square } from '../dist/api/square-api.js';
 import { CLI, ROOT, testEnv, withPath } from './square-cli-helpers.js';
 
 async function fixture(t) {

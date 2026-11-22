@@ -3,7 +3,7 @@ import {
   harnessTargets,
   type HarnessAction,
   type HarnessTargetResult,
-} from '../harness.js';
+} from '../hosts/harness.js';
 
 import { type CommandSpec } from './context.js';
 

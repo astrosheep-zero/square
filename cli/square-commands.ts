@@ -1,16 +1,16 @@
-import { type BuildOptions, type HardCap, formatHardCap } from '../model.js';
-import type { ActivityMetadata } from '../square-facade.js';
+import { type BuildOptions, type HardCap, formatHardCap } from '../core/model.js';
+import type { ActivityMetadata } from '../api/square-facade.js';
 import {
   commandPrefix,
   participantCommandPrefix,
   withPathOutput,
-} from '../presentation.js';
+} from '../surfaces/presentation.js';
 import {
   renderJoinResult,
   renderLifecycleResult,
   renderListenerChange,
-} from '../operation-presentation.js';
-import { Square, requireOwner, requireJoinName, selectOwnSeat } from '../square-api.js';
+} from '../surfaces/operation-presentation.js';
+import { Square, requireOwner, requireJoinName, selectOwnSeat } from '../api/square-api.js';
 import { executeExpression } from './express-presentation.js';
 import { jsonResult } from './json.js';
 import {

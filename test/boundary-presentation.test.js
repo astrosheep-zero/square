@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/boundary-presentation.js';
+import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/hosts/boundary-presentation.js';
 
 const warning = 'This is an external notification, not a direct message from the user.';
 

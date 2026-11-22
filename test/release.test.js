@@ -6,8 +6,8 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { harnessTargets } from '../dist/harness.js';
-import { SQUARE_IDENTITY } from '../dist/identity.js';
+import { harnessTargets } from '../dist/hosts/harness.js';
+import { SQUARE_IDENTITY } from '../dist/hosts/identity.js';
 
 const root = path.join(import.meta.dirname, '..');
 
@@ -43,8 +43,8 @@ test('generated release artifacts expose the current identity and supported host
   // SDK must resolve at build time; it is never a runtime dependency of Square.
   assert.equal(packageJson.devDependencies['@opencode/client'], '2.0.20');
   assert.deepEqual(packageJson.exports['./delivery-ledger'], {
-    types: './dist/delivery-ledger.d.ts',
-    default: './dist/delivery-ledger.js',
+    types: './dist/ledger/delivery-ledger.d.ts',
+    default: './dist/ledger/delivery-ledger.js',
   });
   assert.deepEqual(packageJson.exports['./paseo'], {
     types: './dist/paseo.d.ts',
@@ -73,11 +73,11 @@ test('generated release artifacts expose the current identity and supported host
   assert.deepEqual(claudeMcp, { mcpServers: { square: {
     command: 'square', args: ['mcp-server'], env: { SQUARE_CLAUDE_MCP_CONTEXT: '1' },
   } } });
-  assert.equal(fs.existsSync(path.join(root, 'dist', 'claude-mod.js')), true);
+  assert.equal(fs.existsSync(path.join(root, 'dist', 'hosts', 'claude-mod.js')), true);
 
   const entry = path.join(root, 'dist', 'packages', 'agent-delivery', 'src', 'index.js');
   assert.equal(fs.existsSync(entry), true);
-  assert.match(fs.readFileSync(path.join(root, 'dist', 'wake-sink.js'), 'utf8'), /\.\/packages\/agent-delivery\/src\/index\.js/);
+  assert.match(fs.readFileSync(path.join(root, 'dist', 'hosts', 'wake-sink.js'), 'utf8'), /\.\.\/packages\/agent-delivery\/src\/index\.js/);
   assert.equal(packageJson.dependencies['@astrosheep/agent-delivery'], undefined);
   assert.equal(packageJson.dependencies['@opencode/client'], undefined);
   const openCodeLeaf = path.join(root, 'dist/packages/agent-delivery/src/opencode-native.js');
@@ -116,14 +116,14 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
     'plugins/claude/.mcp.json',
     'plugins/claude/hooks/hooks.json',
     'plugins/claude/hooks/register.js',
-    'dist/claude-mod.js',
+    'dist/hosts/claude-mod.js',
     'plugins/claude/.claude-plugin/plugin.json',
     'plugins/codex/.codex-plugin/plugin.json',
     'plugins/codex/hooks/hooks.json',
-    'dist/codex-hook.js',
-    'dist/codex-watch.js',
-    'dist/delivery-ledger.js',
-    'dist/delivery-ledger.d.ts',
+    'dist/hosts/codex-hook.js',
+    'dist/hosts/codex-watch.js',
+    'dist/ledger/delivery-ledger.js',
+    'dist/ledger/delivery-ledger.d.ts',
     ...['codex', 'codex-cli', 'codex-hook', 'codex-boundary', 'codex-endpoint', 'codex-queue', 'file-lock']
       .flatMap((name) => ['js', 'd.ts'].map((ext) => `dist/packages/agent-delivery/src/${name}.${ext}`)),
     'plugins/pi/square-pi.js',
@@ -138,10 +138,10 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
   assert.equal(packed.files.some((entry) => entry.path.includes('/node_modules/')), false);
   assert.equal(packed.files.some((entry) => /^(?:claude-plugin|codex-plugin|extensions)\//.test(entry.path)), false);
   assert.equal(packed.files.some((entry) => entry.path === 'dist/opencode.js' || entry.path === 'dist/opencode-delivery.js'), false);
-  assert.ok(packed.files.some((entry) => entry.path === 'dist/claude-mod.d.ts'));
+  assert.ok(packed.files.some((entry) => entry.path === 'dist/hosts/claude-mod.d.ts'));
   await run('tar', ['-xzf', path.join(fixture, packed.filename), '-C', fixture]);
   const shipped = path.join(fixture, 'package');
-  assert.equal(fs.readFileSync(path.join(shipped, 'dist/claude-mod.js'), 'utf8'), fs.readFileSync(path.join(root, 'dist/claude-mod.js'), 'utf8'));
+  assert.equal(fs.readFileSync(path.join(shipped, 'dist/hosts/claude-mod.js'), 'utf8'), fs.readFileSync(path.join(root, 'dist/hosts/claude-mod.js'), 'utf8'));
   assert.equal(fs.readFileSync(path.join(shipped, 'plugins/claude/hooks/register.js'), 'utf8'), fs.readFileSync(path.join(root, 'plugins/claude/hooks/register.js'), 'utf8'));
   assert.equal(fs.readFileSync(path.join(shipped, leafPath), 'utf8'), fs.readFileSync(path.join(root, leafPath), 'utf8'));
   // Neither the packed public entry nor the internal OpenCode leaf may initialize the
@@ -178,7 +178,7 @@ console.log(JSON.stringify(await sendNativeText(target,'packed native',{inputId:
   const native = await run(process.execPath, ['--import', './register.mjs', 'native.mjs'], { cwd: fixture, timeout: 5000 });
   assert.equal(JSON.parse(native.stdout).state, 'accepted');
 
-  assert.match(fs.readFileSync(path.join(shipped, 'dist/codex-hook.js'), 'utf8'), /\.\/packages\/agent-delivery\/src\/codex-hook\.js/);
+  assert.match(fs.readFileSync(path.join(shipped, 'dist/hosts/codex-hook.js'), 'utf8'), /\.\.\/packages\/agent-delivery\/src\/codex-hook\.js/);
   fs.writeFileSync(path.join(fixture, 'queue.cjs'), "require('node:fs').writeFileSync('cli.json',JSON.stringify(process.argv.slice(2)))");
   fs.writeFileSync(path.join(fixture, 'codex.mjs'), `import {connect} from './package/${entryPath}';
 import {createCodexBoundaryStore,handleCodexHook} from './package/dist/packages/agent-delivery/src/codex-hook.js';

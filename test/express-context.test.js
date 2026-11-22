@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Square } from '../dist/square-api.js';
-import { renderExpression } from '../dist/operation-presentation.js';
+import { Square } from '../dist/api/square-api.js';
+import { renderExpression } from '../dist/surfaces/operation-presentation.js';
 
 test('express previews only five latest unseen activities, keeps Unicode intact, and never consumes', async t => {
   const body = "test" + ":" + ('context');

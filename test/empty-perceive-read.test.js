@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createArtifactPort } from '../dist/artifact.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
 
 const bodyFor = name => ("test" + ":" + (name.toLowerCase()));

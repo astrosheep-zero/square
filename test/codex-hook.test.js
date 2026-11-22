@@ -5,11 +5,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/boundary-presentation.js';
-import { runCodexHook, runCodexInterrupt } from '../dist/codex-hook.js';
-import { runCodexWatch } from '../dist/codex-watch.js';
-import { harnessOwner } from '../dist/owner.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/hosts/boundary-presentation.js';
+import { runCodexHook, runCodexInterrupt } from '../dist/hosts/codex-hook.js';
+import { runCodexWatch } from '../dist/hosts/codex-watch.js';
+import { harnessOwner } from '../dist/core/owner.js';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'square-codex-hook-'));

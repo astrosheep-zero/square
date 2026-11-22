@@ -21,7 +21,7 @@ test('the sandbox replaces inherited delivery storage and Paseo endpoints before
     const inheritedLedger = ${JSON.stringify(path.join(inheritedHome, 'do-not-use.sqlite'))};
     assert.notEqual(process.env.SQUARE_DELIVERY, inheritedLedger);
     assert.equal(process.env.SQUARE_HOST_LEDGER_ROOT, undefined);
-    const { DeliveryLedger } = await import('./dist/delivery-ledger.js');
+    const { DeliveryLedger } = await import('./dist/ledger/delivery-ledger.js');
     const ledger = await DeliveryLedger.open();
     await ledger.close();
     assert.equal(fs.existsSync(inheritedLedger), false);

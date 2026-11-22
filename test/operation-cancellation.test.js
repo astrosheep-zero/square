@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { Square } from '../dist/square-api.js';
-import { createArtifactPort, prepareSquareBuild, readSquareSnapshot } from '../dist/artifact.js';
+import { Square } from '../dist/api/square-api.js';
+import { createArtifactPort, prepareSquareBuild, readSquareSnapshot } from '../dist/artifact/artifact.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
 
 function aborted(message = 'cancelled') {

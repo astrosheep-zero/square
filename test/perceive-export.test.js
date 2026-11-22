@@ -3,10 +3,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { Square } from '../dist/square-api.js';
-import { createArtifactPort } from '../dist/artifact.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { WATCH_STALE_MS } from '../dist/runtime.js';
+import { Square } from '../dist/api/square-api.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { WATCH_STALE_MS } from '../dist/core/runtime.js';
 
 const deferred = () => {
   let resolve;

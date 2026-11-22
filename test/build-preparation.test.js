@@ -5,8 +5,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { prepareSquareBuild, readSquareSnapshot } from '../dist/artifact.js';
-import { Square } from '../dist/square-api.js';
+import { prepareSquareBuild, readSquareSnapshot } from '../dist/artifact/artifact.js';
+import { Square } from '../dist/api/square-api.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -57,9 +57,9 @@ test('ordinary storage/resource imports do not read guides; builds load and cach
       if (String(file).includes('/guides/')) guides.push({ file: String(file), mode: 'async' });
       return readAsync.call(this, file, ...args);
     };
-    await import('./dist/square-store.js');
-    const { prepareSquareBuild } = await import('./dist/artifact.js');
-    const { Square } = await import('./dist/square-api.js');
+    await import('./dist/artifact/square-store.js');
+    const { prepareSquareBuild } = await import('./dist/artifact/artifact.js');
+    const { Square } = await import('./dist/api/square-api.js');
     assert.deepEqual(guides, []);
     const memory = Square.inMemory({ markdown: '' });
     assert.equal(guides.length, 1);

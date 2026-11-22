@@ -4,10 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { mock } from 'node:test';
 import squarePiExtension from '../plugins/pi/square-pi.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/boundary-presentation.js';
-import { harnessOwner } from '../dist/owner.js';
-import { Square } from '../dist/square-api.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { deliveryFrameOverhead, renderDeliveryReminder } from '../dist/hosts/boundary-presentation.js';
+import { harnessOwner } from '../dist/core/owner.js';
+import { Square } from '../dist/api/square-api.js';
 
 async function until(predicate, message) {
   for (let i = 0; i < 300; i++) {

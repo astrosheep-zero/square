@@ -1,4 +1,4 @@
-import { deliveryKeyEqual } from '../dist/delivery-key.js';
+import { deliveryKeyEqual } from '../dist/core/delivery-key.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,12 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { migrateSquare, Square } from '../dist/index.js';
-import { migrateSquare as apiMigrate } from '../dist/square-api.js';
-import { createArtifactPort, createSquareFile } from '../dist/artifact.js';
-import { DeliveryLedger } from '../dist/delivery-ledger.js';
-import { flushSquarePosts, reconcileSquareDelivery } from '../dist/square-posting.js';
-import { dispatchPostedCard } from '../dist/notifications.js';
-import { squarePostKey } from '../dist/delivery-key.js';
+import { migrateSquare as apiMigrate } from '../dist/api/square-api.js';
+import { createArtifactPort, createSquareFile } from '../dist/artifact/artifact.js';
+import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { flushSquarePosts, reconcileSquareDelivery } from '../dist/app/square-posting.js';
+import { dispatchPostedCard } from '../dist/hosts/notifications.js';
+import { squarePostKey } from '../dist/core/delivery-key.js';
 import { seedFormat12 } from './fixtures/format12.js';
 
 function setup(t) {

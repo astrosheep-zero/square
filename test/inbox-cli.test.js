@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { inbox } from '../dist/index.js';
-import { Square } from '../dist/square-api.js';
+import { Square } from '../dist/api/square-api.js';
 import { run, testEnv } from './square-cli-helpers.js';
 
 async function makeMembership(root, name) {

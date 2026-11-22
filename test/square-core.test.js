@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { formatActivityId, parseActivityId } from '../dist/square-core.js';
-import { NAME_GRAPHEME_SOURCE, validateName } from '../dist/model.js';
+import { formatActivityId, parseActivityId } from '../dist/core/square-core.js';
+import { NAME_GRAPHEME_SOURCE, validateName } from '../dist/core/model.js';
 
 test('Unicode text-name fast path preserves full name acceptance and malformed boundaries', () => {
   const markedAkuId = 'aku/a\u0315/1234abcd'.normalize('NFC');

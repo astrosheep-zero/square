@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { readCursor, presenceAnchor } from '../dist/runtime.js';
-import { createArtifactPort } from '../dist/artifact.js';
+import { readCursor, presenceAnchor } from '../dist/core/runtime.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
 
 const T0 = 1_700_000_000_000;
 

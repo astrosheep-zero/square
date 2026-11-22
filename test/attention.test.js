@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveAudience } from '../dist/attention.js';
+import { resolveAudience } from '../dist/core/attention.js';
 
 test('attention resolves canonical recipients with precedence and ignore', () => {
   const input = {

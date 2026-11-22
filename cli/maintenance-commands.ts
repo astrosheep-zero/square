@@ -1,5 +1,5 @@
-import { diagnoseSquare, migrateSquare, type MigrateSquareResult } from '../square-api.js';
-import { renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../presentation.js';
+import { diagnoseSquare, migrateSquare, type MigrateSquareResult } from '../api/square-api.js';
+import { renderDoctorClean, renderDoctorUnfixable, withPathOutput } from '../surfaces/presentation.js';
 
 import { requireSquarePath, squareInput, type CommandSpec, usage } from './context.js';
 

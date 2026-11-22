@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { DeliveryLedger } from '../../dist/delivery-ledger.js';
+import { DeliveryLedger } from '../../dist/ledger/delivery-ledger.js';
 import plugin from '../../dist/plugins/opencode-v1/index.js';
 
 const [location, generation, mode] = process.argv.slice(2);

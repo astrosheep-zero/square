@@ -1,15 +1,15 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { isSquareError } from '../model.js';
-import { selectOwnSeat, type Square, formatActivityId, parseActivityId } from '../square-api.js';
-import type { Owner } from '../square-api.js';
-import type { ActivityId, OperationError, OperationControl, ExpressOptions } from '../square-facade.js';
+import { isSquareError } from '../core/model.js';
+import { selectOwnSeat, type Square, formatActivityId, parseActivityId } from '../api/square-api.js';
+import type { Owner } from '../api/square-api.js';
+import type { ActivityId, OperationError, OperationControl, ExpressOptions } from '../api/square-facade.js';
 import {
   formatRefusal, renderActivityUncertain, renderExpressWaiting,
   participantCommandPrefix, commandPrefix, quoteShell, withPathOutput,
-} from '../presentation.js';
-import { isExpressGate, renderExpression, renderFailureLines } from '../operation-presentation.js';
+} from '../surfaces/presentation.js';
+import { isExpressGate, renderExpression, renderFailureLines } from '../surfaces/operation-presentation.js';
 import { jsonResult } from './json.js';
 
 export interface ActivityOptions extends Omit<ExpressOptions, 'reply'> {

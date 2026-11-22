@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 
-import { Square } from '../dist/square-api.js';
+import { Square } from '../dist/api/square-api.js';
 
 export const ROOT = path.resolve(import.meta.dirname, '..');
 export const CLI = path.join(ROOT, 'dist', 'square.js');

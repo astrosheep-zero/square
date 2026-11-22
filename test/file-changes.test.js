@@ -4,8 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
-import { observeFileVersion, observeFileMetadata } from '../dist/file-changes.js';
-import { createArtifactPort, prepareSquareBuild, writeSquareFile, observeSquareRevision } from '../dist/artifact.js';
+import { observeFileVersion, observeFileMetadata } from '../dist/storage/file-changes.js';
+import { createArtifactPort, prepareSquareBuild, writeSquareFile, observeSquareRevision } from '../dist/artifact/artifact.js';
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'square-change-test-'));

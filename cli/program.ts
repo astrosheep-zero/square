@@ -1,8 +1,8 @@
-import { helpRequest } from '../help.js';
-import { isSquareError } from '../model.js';
-import type { OperationError } from '../square-facade.js';
-import { formatRefusal } from '../presentation.js';
-import { renderFailureLines } from '../operation-presentation.js';
+import { helpRequest } from './help.js';
+import { isSquareError } from '../core/model.js';
+import type { OperationError } from '../api/square-facade.js';
+import { formatRefusal } from '../surfaces/presentation.js';
+import { renderFailureLines } from '../surfaces/operation-presentation.js';
 import { type CommandContext, withSquare, defaultContext, parseGlobalArgs } from './context.js';
 import { executeRegisteredCommand, findCommand } from './registry.js';
 

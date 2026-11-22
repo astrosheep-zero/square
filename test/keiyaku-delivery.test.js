@@ -4,8 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { akumaDeliveryOwner, DeliveryLedger, Square, postAndDispatch } from '../dist/index.js';
-import { KeiyakuWakeTransport } from '../dist/keiyaku-delivery.js';
-import { resolveParticipantIdentity } from '../dist/participant-identity.js';
+import { KeiyakuWakeTransport } from '../dist/hosts/keiyaku-delivery.js';
+import { resolveParticipantIdentity } from '../dist/hosts/participant-identity.js';
 
 const bind = actor => resolveParticipantIdentity(actor, () => assert.fail('actor cannot fall through to a native route'));
 const byPromptAndActor = (a, b) => a.prompt.localeCompare(b.prompt) || a.akuId.localeCompare(b.akuId);

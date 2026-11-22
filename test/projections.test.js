@@ -3,10 +3,10 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createArtifactPort, createSquareFile } from '../dist/artifact.js';
-import { Square } from '../dist/square-api.js';
-import { resolveKnownName } from '../dist/decisions.js';
-import { perceivePresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, queryStatus, streamProjection } from '../dist/views.js';
+import { createArtifactPort, createSquareFile } from '../dist/artifact/artifact.js';
+import { Square } from '../dist/api/square-api.js';
+import { resolveKnownName } from '../dist/core/decisions.js';
+import { perceivePresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, queryStatus, streamProjection } from '../dist/core/views.js';
 
 const queryContext = { location: 'memory', now: 100_000 };
 

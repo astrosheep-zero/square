@@ -1,0 +1,89 @@
+import fs from 'node:fs/promises';
+import { SquareError } from '../core/model.js';
+import { createArtifactPort, observeSquareRevision } from '../artifact/artifact.js';
+import type { SquareArtifactPort } from '../core/ports.js';
+import { parseRequiredActivityId, streamProjection, streamTailProjection } from '../core/views.js';
+import type { OperationControl } from '../core/neutral.js';
+import type { Activity, PerceivedActivity } from '../core/views.js';
+import type { ActivityId } from '../core/square-core.js';
+
+export type StreamStart =
+  | { readonly kind: 'tail'; readonly last: number }
+  | { readonly kind: 'after'; readonly after: ActivityId };
+export interface StreamOptions {
+  readonly recipient?: string;
+  readonly start?: StreamStart;
+}
+export type StreamRecord = Activity | PerceivedActivity;
+
+/** Pull-based observation; return interrupts an outstanding pull before awaiting its cleanup. */
+export function streamSquare(squarePath: string, options: StreamOptions = {}, control?: OperationControl, borrowed?: SquareArtifactPort): AsyncIterable<StreamRecord> {
+  return {
+    [Symbol.asyncIterator]() {
+      const disposal = new AbortController();
+      const signal = control?.signal === undefined ? disposal.signal : AbortSignal.any([control.signal, disposal.signal]);
+      const records = observe();
+      return {
+        next: () => records.next(),
+        return() {
+          disposal.abort();
+          return records.return(undefined);
+        },
+      };
+
+      async function* observe(): AsyncGenerator<StreamRecord, void, unknown> {
+        try {
+          signal.throwIfAborted();
+          try { await fs.stat(squarePath); }
+          catch {
+            signal.throwIfAborted();
+            throw new SquareError('unavailable', `Square is unavailable at ${squarePath}`);
+          }
+          signal.throwIfAborted();
+          const start = options.start ?? { kind: 'tail', last: 10 };
+          let cursor = start.kind === 'after' ? parseRequiredActivityId(start.after) : -1;
+          let initial = start.kind === 'tail' ? start : undefined;
+          const observer = await observeSquareRevision(squarePath);
+          const close = () => observer.close();
+          signal.addEventListener('abort', close, { once: true });
+          try {
+            signal.throwIfAborted();
+            while (true) {
+              const generation = observer.generation;
+              let baseline: number | null;
+              let projection;
+              try {
+                baseline = await observer.read(signal);
+                const artifact = borrowed ?? createArtifactPort(squarePath, undefined, signal);
+                try {
+                  projection = (await artifact.read(facts => initial === undefined
+                    ? streamProjection(facts, cursor, options.recipient)
+                    : streamTailProjection(facts, initial.last, options.recipient), signal)).value;
+                } finally { if (borrowed === undefined) await artifact.close(); }
+              } catch (error) {
+                signal.throwIfAborted();
+                if (borrowed !== undefined || error instanceof SquareError && error.code === 'invalid_args') throw error;
+                // Repair/replacement is a hint, not a reason to scan history on a timer.
+                await observer.hinted(generation, Infinity, signal);
+                continue;
+              }
+              for (const activity of projection.activities) {
+                signal.throwIfAborted();
+                yield activity;
+              }
+              cursor = projection.cursor;
+              initial = undefined;
+              if (!projection.hasMore) await observer.changed(baseline, Infinity, signal);
+            }
+          } finally {
+            signal.removeEventListener('abort', close);
+            observer.close();
+          }
+        } catch (error) {
+          // Iterator disposal is completion; a caller cancellation still rejects the pull.
+          if (!disposal.signal.aborted || control?.signal?.aborted || error !== signal.reason) throw error;
+        }
+      }
+    },
+  };
+}

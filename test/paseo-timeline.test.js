@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { waitForPaseoToolBoundary } from '../dist/paseo-timeline.js';
+import { waitForPaseoToolBoundary } from '../dist/hosts/paseo-timeline.js';
 
 function snapshot(agentStatus, toolCalls = []) {
   return { agentStatus, toolCalls };

@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createArtifactPort } from '../dist/artifact.js';
-import { emptyRuntimeState } from '../dist/square-store.js';
-import { decideAct } from '../dist/decisions.js';
-import { scanMentionCandidates } from '../dist/mention-parse.js';
+import { createArtifactPort } from '../dist/artifact/artifact.js';
+import { emptyRuntimeState } from '../dist/artifact/square-store.js';
+import { decideAct } from '../dist/core/decisions.js';
+import { scanMentionCandidates } from '../dist/core/mention-parse.js';
 import { activityRetryCommand } from '../dist/cli/express-presentation.js';
-import { Square } from '../dist/square-api.js';
+import { Square } from '../dist/api/square-api.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));

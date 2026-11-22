@@ -4,10 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { Square, harnessOwner, localUserOwner } from '../dist/square-api.js';
+import { Square, harnessOwner, localUserOwner } from '../dist/api/square-api.js';
 import { commandIdentity } from '../dist/cli/context.js';
 import { statusCommand, streamCommand } from '../dist/cli/observation-commands.js';
-import { helpRequest, renderSubcommandHelp } from '../dist/help.js';
+import { helpRequest, renderSubcommandHelp } from '../dist/cli/help.js';
 import { ROOT, persistSquare, run, tempSquare, testEnv, withName, withPath } from './square-cli-helpers.js';
 
 test('CLI uses a harness identity only when the environment carries one', () => {

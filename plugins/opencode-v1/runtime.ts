@@ -1,4 +1,4 @@
-import { canonicalPath } from '../../canonical-path.js';
+import { canonicalPath } from '../../storage/canonical-path.js';
 import { startOpenCodeReceivers } from '../opencode-shared/delivery.js';
 import { legacyTransport } from './transport.js';
 

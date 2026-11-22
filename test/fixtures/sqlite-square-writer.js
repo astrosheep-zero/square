@@ -1,4 +1,4 @@
-import { Square } from '../../dist/square-api.js';
+import { Square } from '../../dist/api/square-api.js';
 
 const [squarePath, actor, text] = process.argv.slice(2);
 const body = "test" + ":" + ('square-test-fixture');

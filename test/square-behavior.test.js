@@ -5,10 +5,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { gunzipSync } from 'node:zlib';
 
-import { readSquareSnapshot } from '../dist/artifact.js';
-import { readCursor } from '../dist/runtime.js';
+import { readSquareSnapshot } from '../dist/artifact/artifact.js';
+import { readCursor } from '../dist/core/runtime.js';
 import { SquareError } from '../dist/index.js';
-import { Square } from '../dist/square-api.js';
+import { Square } from '../dist/api/square-api.js';
 
 function tempSquarePath() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'square-behavior-')), 'SQUARE.square');
