@@ -25,7 +25,7 @@ export interface RegisteredCommand {
 }
 
 /** Every public command is an executable adapter, including aliases and utility commands. */
-export const commandRegistry: readonly RegisteredCommand[] = [
+export const commands: readonly RegisteredCommand[] = [
   { names: ['build'], spec: buildCommand },
   { names: ['list', 'ls'], spec: listCommand },
   { names: ['join'], spec: joinCommand },
@@ -56,7 +56,7 @@ export const commandRegistry: readonly RegisteredCommand[] = [
 ];
 
 export function findCommand(name: string): RegisteredCommand | undefined {
-  return commandRegistry.find((command) => command.names.includes(name));
+  return commands.find((command) => command.names.includes(name));
 }
 
 export async function executeRegisteredCommand(name: string, argv: string[], context: CommandContext): Promise<void> {

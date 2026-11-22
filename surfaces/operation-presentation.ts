@@ -7,7 +7,7 @@ import type {
   Activity, PerceiveOptions, PerceiveResult, ExpressResult, HistoryObservation, HistoryQuery, HistoryResult,
   JoinResult, LifecycleResult, ListenerChangeResult, OperationFailureDetail, SquareErrorFacts,
   StatusResult, DiscoveryResult, MuteResult,
-} from '../api/square-facade.js';
+} from '../api/types.js';
 import {
   type PresentationSurface, displayPath, formatToolAction, commandPrefix, joinRecoveryCommand, participantCommandPrefix,
   quoteShell, renderAmbientEventFacts,

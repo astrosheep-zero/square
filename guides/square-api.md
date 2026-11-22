@@ -1,7 +1,7 @@
 # Square and Participant API
 
 `Square` is the concrete resource shared by SDK, CLI, MCP and Pi; `square.ts` is the CLI
-entrypoint. `api/square-facade.ts` declares public operation types, not a second execution path. See
+entrypoint. `api/types.ts` declares public operation types, not a second execution path. See
 [attention-primitive.md](attention-primitive.md) for audience computation and
 [delivery-primitives.md](delivery-primitives.md) for the host delivery ledger.
 
@@ -201,7 +201,7 @@ path lazily (read-only probe and validation, then a non-creating writable open),
 a same-directory temporary file and hard link, and exposes only guarded `SquareRead`/`LandingWriter`
 capabilities inside a synchronous transaction callback. The capability expires when the callback returns;
 SQLite framing and row handles stay inside the artifact boundary (`artifact/artifact.ts`, `artifact/square-store.ts` and
-`artifact/square-producer-store.ts`). The application service (`app/square-service.ts`) works through the typed
+`artifact/square-producer-store.ts`). The application square (`app/square.ts`) works through the typed
 port; no public package entry exports a database handle or a second runtime data path.
 
 Format 13 owns activities, audience, participants, read state, posting/full-card bookkeeping,

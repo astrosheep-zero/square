@@ -1,26 +1,26 @@
-import { SqliteSquare } from '../app/square-service.js';
+import { Square as ApplicationSquare } from '../app/square.js';
 import { SquareError, type Owner } from '../core/model.js';
 import { requireOwner } from '../core/runtime.js';
 import { DeliveryLedger, deliveryLedgerLocation } from '../ledger/delivery-ledger.js';
 import { openReadOnlyDeliveryLedger } from '../ledger/delivery-lifetime.js';
 import { dispatchPostedCard } from '../hosts/notifications.js';
 import { muteDeadline } from '../core/time.js';
-import type { OperationControl, Participant, SquareAtInput, SquareBuildInput } from './square-facade.js';
+import type { OperationControl, Participant, SquareAtInput, SquareBuildInput } from './types.js';
 
 export { migrateDeliveryLedger, type MigrateDeliveryLedgerInput, type MigrateDeliveryLedgerResult } from '../ledger/delivery-ledger.js';
 export { DeliveryLedger, deliveryLedgerLocation } from '../ledger/delivery-ledger.js';
 export { migrateSquare, type MigrateSquareResult } from '../artifact/migrate.js';
-export type Square = SqliteSquare;
-export const Square = { at: (input: SquareAtInput, control?: OperationControl) => SqliteSquare.at(input, dispatchPostedCard, control),
-  build: (input: SquareBuildInput, control?: OperationControl) => SqliteSquare.build(input, dispatchPostedCard, control),
-  inMemory: (input: Omit<SquareBuildInput, 'path'>) => SqliteSquare.inMemory(input, dispatchPostedCard) };
+export type Square = ApplicationSquare;
+export const Square = { at: (input: SquareAtInput, control?: OperationControl) => ApplicationSquare.at(input, dispatchPostedCard, control),
+  build: (input: SquareBuildInput, control?: OperationControl) => ApplicationSquare.build(input, dispatchPostedCard, control),
+  inMemory: (input: Omit<SquareBuildInput, 'path'>) => ApplicationSquare.inMemory(input, dispatchPostedCard) };
 
 export { requireOwner, requireJoinName } from '../core/runtime.js';
-export type * from './square-facade.js';
+export type * from './types.js';
 export { squareLocation } from '../core/neutral.js';
-export function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name?: string): Promise<Participant>;
-export function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name: string | undefined, options: { readonly optional: true }): Promise<Participant | undefined>;
-export async function selectOwnSeat(square: Pick<SqliteSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name?: string, options?: { readonly optional?: boolean }): Promise<Participant | undefined> {
+export function selectOwnSeat(square: Pick<ApplicationSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name?: string): Promise<Participant>;
+export function selectOwnSeat(square: Pick<ApplicationSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name: string | undefined, options: { readonly optional: true }): Promise<Participant | undefined>;
+export async function selectOwnSeat(square: Pick<ApplicationSquare, 'participant' | 'seatsOf'>, owner: Owner | undefined, name?: string, options?: { readonly optional?: boolean }): Promise<Participant | undefined> {
   if (owner === undefined && options?.optional && name === undefined) return undefined;
   const caller = requireOwner(owner);
   if (name !== undefined) return square.participant(name, { owner: caller });
@@ -71,4 +71,6 @@ export { ACTIVITY_ID_PATTERN, formatActivityId, isNarratedActivity, MAX_IDENTITY
 export { PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT } from '../core/perceive-decisions.js';
 export { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from '../core/views.js';
 export { DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../app/list.js';
-export { diagnoseSquare, discover, inbox } from '../app/square-service.js';
+export { diagnoseSquare } from '../app/square.js';
+export { discover } from '../app/list.js';
+export { inbox } from '../app/inbox.js';

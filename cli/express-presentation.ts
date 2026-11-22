@@ -4,7 +4,7 @@ import path from 'node:path';
 import { isSquareError } from '../core/model.js';
 import { selectOwnSeat, type Square, formatActivityId, parseActivityId } from '../api/square-api.js';
 import type { Owner } from '../api/square-api.js';
-import type { ActivityId, OperationError, OperationControl, ExpressOptions } from '../api/square-facade.js';
+import type { ActivityId, OperationError, OperationControl, ExpressOptions } from '../api/types.js';
 import {
   formatRefusal, renderActivityUncertain, renderExpressWaiting,
   participantCommandPrefix, commandPrefix, quoteShell, withPathOutput,

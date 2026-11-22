@@ -9,7 +9,7 @@ export type * from './ledger/delivery-ledger.js';
 export { isCardPresentation } from './plugins/paseo/shared/card-presentation.js';
 export type { CardPresentation } from './plugins/paseo/shared/card-presentation.js';
 // Public operation contracts; no alternate runtime surface.
-export type * from './api/square-facade.js';
+export type * from './api/types.js';
 // Participant-name and activity-id syntax shared with adapters.
 export { parseActivityId } from './core/square-core.js';
 export { NAME_GRAPHEME_SOURCE, PARTICIPANT_NAME_SOURCE, isParticipantName } from './core/square-values.js';

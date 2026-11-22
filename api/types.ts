@@ -9,9 +9,10 @@ export type { ParticipantPresence, ParticipantSummary } from '../core/decisions.
 export type { ArchiveRecord, Activity, PerceivedActivity, SquareObservation, EntryPresentation, PresenceClassification, PerceivePresence,
   StatusOptions, StatusResult, ParticipantsResult, HistoryQuery, HistoryContinuation, HistoryObservation, StatusObservation, ParticipantsObservation } from '../core/views.js';
 export type { PerceiveOptions, PerceiveReason } from '../core/perceive-decisions.js';
-export type { AckResult, HeldSeat, ExpressOptions, ExpressInput, ExpressResult, ListenerChangeResult, ListeningResult, MuteResult, LifecycleResult,
-  PendingOptions, PendingResult, PerceiveResult, OpenOptions, SquareAtInput, SquareBuildInput, JoinOptions, JoinResult, Participant, RecoveryResult,
-  HistoryResult, JoinObservation, ExpressionObservation, ExpressContext, ExpressObservation, PerceiveObservation, ListenerObservation } from '../app/square-service.js';
+export type { AckResult, ExpressOptions, ExpressInput, ExpressResult, ListenerChangeResult, ListeningResult, MuteResult, LifecycleResult,
+  PendingOptions, PendingResult, PerceiveResult, Participant, ExpressionObservation, ExpressContext, ExpressObservation, PerceiveObservation, ListenerObservation } from '../app/participant.js';
+export type { HeldSeat, OpenOptions, SquareAtInput, SquareBuildInput, JoinOptions, JoinResult, RecoveryResult,
+  HistoryResult, JoinObservation } from '../app/square.js';
 export type { StreamStart, StreamOptions, StreamRecord } from '../app/stream.js';
 export type { DiscoveryOptions, SquareListItem, DiscoveryResult } from '../app/list.js';
 export type { InboxOptions, InboxMembershipSummary, InboxResult } from '../app/inbox.js';

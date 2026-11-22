@@ -5,7 +5,7 @@ import { parseDurationMs, parseTimeOrRelative } from '../core/time.js';
 import type {
   Owner, WakeAddress, ActivityId, PerceiveOptions, HistoryQuery,
   OperationControl, OperationFailureDetail,
-} from '../api/square-facade.js';
+} from '../api/types.js';
 import {
   renderPerceiveOutcome, renderExpression, renderFailureLines, renderHistoryResult, renderJoinResult, type ListenerVerb,
   renderLifecycleResult, renderListenerChange, renderMuteResult, renderStatusResult, renderSquareList,

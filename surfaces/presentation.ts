@@ -6,7 +6,7 @@ import { truncateChars } from '../core/neutral.js';
 import { participantIdentity } from '../core/square-values.js';
 import { MAX_IDENTITY_SET_SIZE, type Perception } from '../core/square-core.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from '../core/time.js';
-import type { Activity, UnreadActivitySummary, ParticipantSummary } from '../api/square-facade.js';
+import type { Activity, UnreadActivitySummary, ParticipantSummary } from '../api/types.js';
 import { grepSnippet } from '../core/search.js';
 import { style } from './tty-style.js';
 

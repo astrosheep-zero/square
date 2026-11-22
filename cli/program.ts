@@ -1,10 +1,10 @@
 import { helpRequest } from './help.js';
 import { isSquareError } from '../core/model.js';
-import type { OperationError } from '../api/square-facade.js';
+import type { OperationError } from '../api/types.js';
 import { formatRefusal } from '../surfaces/presentation.js';
 import { renderFailureLines } from '../surfaces/operation-presentation.js';
 import { type CommandContext, withSquare, defaultContext, parseGlobalArgs } from './context.js';
-import { executeRegisteredCommand, findCommand } from './registry.js';
+import { executeRegisteredCommand, findCommand } from './commands.js';
 
 async function handleSquareError(error: unknown, context?: CommandContext): Promise<never> {
   if (!isSquareError(error)) throw error;

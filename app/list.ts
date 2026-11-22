@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { squareLocation, type OperationControl, type SquareLocation } from '../core/neutral.js';
+import { deliveryLedgerLocation } from '../ledger/delivery-ledger.js';
 
 import { createArtifactPort } from '../artifact/artifact.js';
-import { canonicalPath } from '../storage/canonical-path.js';
 import { nameKey, SquareError, type Owner, type Seat } from '../core/model.js';
-import { readLedgerMutedUntil, readSquareSeatMutes, seatMuteKey } from './square-notification-mute.js';
 import { listPresentation } from '../core/views.js';
-import type { OperationControl } from '../core/neutral.js';
+import { canonicalPath } from '../storage/canonical-path.js';
+import { readLedgerMutedUntil, readSquareSeatMutes, seatMuteKey } from './square-notification-mute.js';
 
 export const DEFAULT_LIST_DEPTH = 4;
 export const MAX_LIST_DEPTH = 16;
@@ -124,4 +125,13 @@ export async function discoverSquares(root: string, options: DiscoveryOptions = 
   return { items: selected, total: items.length, stopped, remaining,
     ...(remaining > 0 ? { next: selected.at(-1)!.path } : {}),
     ...(ledgerMutedUntil === undefined ? {} : { ledgerMutedUntil }) };
+}
+
+export function discover(input: SquareLocation, options: DiscoveryOptions = {}, control?: OperationControl) {
+  if (input.path !== undefined) squareLocation(input);
+  return discoverSquares(input.cwd ?? process.cwd(), {
+    ...options,
+    ledgerLocation: options.ledgerLocation ?? deliveryLedgerLocation(),
+    clock: options.clock ?? Date.now,
+  }, control);
 }

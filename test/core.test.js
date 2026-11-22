@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { expressionContext } from '../dist/app/square-service.js';
+import { expressionContext } from '../dist/app/participant.js';
 import { emptyRuntimeState } from '../dist/artifact/square-store.js';
 import { decidePerceive } from '../dist/core/perceive-decisions.js';
 import { attentionChange, coreListening, coreParticipants, decideAct, decideJoin } from '../dist/core/decisions.js';

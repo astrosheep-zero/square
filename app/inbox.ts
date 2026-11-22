@@ -1,8 +1,10 @@
 import path from 'node:path';
 import { createArtifactPort } from '../artifact/artifact.js';
-import { discoverSquares, MAX_LIST_LIMIT } from './list.js';
+import { nameKey, SquareError, type Owner } from '../core/model.js';
+import { checkControl, type OperationControl, type SquareLocation } from '../core/neutral.js';
+import { requireOwner } from '../core/runtime.js';
 import { canonicalPath } from '../storage/canonical-path.js';
-import type { Owner } from '../core/model.js';
+import { discoverSquares, MAX_LIST_LIMIT } from './list.js';
 
 export interface InboxOptions {
   readonly limit?: number;
@@ -42,4 +44,16 @@ export async function sessionInboxCounts(input: { readonly owner: Owner; readonl
     after = page.next;
   } while (after !== undefined);
   return rows;
+}
+
+export async function inbox(input: SquareLocation, owner: Owner, options: InboxOptions = {}, control?: OperationControl): Promise<InboxResult> {
+  checkControl(control);
+  requireOwner(owner);
+  const limit = options.limit ?? 20;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new SquareError('invalid_args', 'Inbox limit must be between 1 and 100');
+  const rows = await sessionInboxCounts({ owner, cwd: input.cwd }, control?.signal);
+  checkControl(control);
+  const compare = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
+  rows.sort((a, b) => compare(a.squarePath, b.squarePath) || compare(nameKey(a.name), nameKey(b.name)) || compare(a.name, b.name));
+  return { rows: rows.slice(0, limit), total: rows.length };
 }

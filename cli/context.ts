@@ -6,7 +6,7 @@ import { codexWakeAddress } from '../hosts/codex-address.js';
 import { commandUsageHint } from './help.js';
 import { SquareError, type HardCap, type WakeAddress, parseParticipantList, validateName } from '../core/model.js';
 import { Square } from '../api/square-api.js';
-import type { OperationControl } from '../api/square-facade.js';
+import type { OperationControl } from '../api/types.js';
 
 function squareClock(env: NodeJS.ProcessEnv, clock?: () => number): () => number {
   if (clock !== undefined) return clock;

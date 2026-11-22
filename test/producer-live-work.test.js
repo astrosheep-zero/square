@@ -10,7 +10,7 @@ import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
 import { squarePostKey, parseSquarePostKey } from '../dist/core/delivery-key.js';
 import { nameKey } from '../dist/core/model.js';
 import { flushSquarePosts, reconcileSquareDelivery, readSquareSessions, ensureInitialDeliverySession } from '../dist/app/square-posting.js';
-import { SqliteSquare } from '../dist/app/square-service.js';
+import { Square as ApplicationSquare } from '../dist/app/square.js';
 import { dispatchPostedCard } from '../dist/hosts/notifications.js';
 
 test('receipt folds and owner watermarks commit atomically, replay safely and skip retained history', async t => {
@@ -149,7 +149,7 @@ test('internal delivery entry points refuse omitted locations before accessing s
   await assert.rejects(ensureInitialDeliverySession('owner'), /resolved absolute/);
   await assert.rejects(reconcileSquareDelivery(undefined, c.location, Date.now), /resolved absolute/);
   await assert.rejects(flushSquarePosts(undefined, c.location, Date.now, undefined, undefined, dispatchPostedCard), /resolved absolute/);
-  assert.throws(() => new SqliteSquare(c.location, c.artifact, Date.now, c.location, undefined, dispatchPostedCard), /resolved absolute/);
+  assert.throws(() => new ApplicationSquare(c.location, c.artifact, Date.now, c.location, undefined, dispatchPostedCard), /resolved absolute/);
   assert.equal(open.mock.callCount(), 0);
   open.mock.restore();
   const previous = process.env.SQUARE_DELIVERY;

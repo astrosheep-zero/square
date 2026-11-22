@@ -1,5 +1,5 @@
 import { type BuildOptions, type HardCap, formatHardCap } from '../core/model.js';
-import type { ActivityMetadata } from '../api/square-facade.js';
+import type { ActivityMetadata } from '../api/types.js';
 import {
   commandPrefix,
   participantCommandPrefix,

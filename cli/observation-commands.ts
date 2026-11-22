@@ -5,7 +5,7 @@ import { runCodexHook, runCodexInterrupt } from '../hosts/codex-hook.js';
 import { runCodexWatch } from '../hosts/codex-watch.js';
 import { isSquareError } from '../core/model.js';
 import { truncateChars } from '../core/neutral.js';
-import type { ActivityId, OperationError, ArchiveRecord, PerceiveOptions, DiscoveryOptions, HistoryQuery, StreamStart } from '../api/square-facade.js';
+import type { ActivityId, OperationError, ArchiveRecord, PerceiveOptions, DiscoveryOptions, HistoryQuery, StreamStart } from '../api/types.js';
 import {
   commandPrefix,
   withPathOutput,

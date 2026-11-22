@@ -6,7 +6,7 @@ import { readClaudeMcpCall } from '../hosts/claude-mcp-context.js';
 import { SQUARE_IDENTITY } from '../hosts/identity.js';
 import { deliveryLedgerLocation, harnessOwner, type Owner } from '../api/square-api.js';
 import { resolveParticipantIdentity, type AkumaActor } from '../hosts/participant-identity.js';
-import type { SquareAtInput } from '../api/square-facade.js';
+import type { SquareAtInput } from '../api/types.js';
 import type { WakeAddress } from '../core/model.js';
 
 /** Each tool call chooses its square and owns its connection lifetime. */

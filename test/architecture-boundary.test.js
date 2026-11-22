@@ -116,9 +116,9 @@ function scan(file, source, issue) {
     const launcher = ts.isImportCall(call) && file === 'hosts/keiyaku-delivery.ts' && arg && ts.isConditionalExpression(arg) && text(arg.whenTrue) === '@astrosheep/keiyaku' && arg.whenFalse.getText() === 'pathToFileURL(override).href';
     record(call, launcher ? '@astrosheep/keiyaku' : text(arg) ?? constants.get(arg?.text));
   }
-  if (file === 'api/square-facade.ts') for (const node of parsed.statements) {
+  if (file === 'api/types.ts') for (const node of parsed.statements) {
     const typeStatement = ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node) || ts.isImportEqualsDeclaration(node)) && (node.isTypeOnly || node.importClause?.isTypeOnly || (!node.importClause?.name && (node.importClause?.namedBindings ?? node.exportClause)?.elements?.every((item) => item.isTypeOnly))));
-    if (!typeStatement) report('facade-runtime', node);
+    if (!typeStatement) report('types-runtime', node);
   }
   return edges;
 }
@@ -156,12 +156,12 @@ function violations(sources, pkg = manifest) {
     if (['core/receive.ts', 'core/attention.ts'].includes(from)) issue('leaf-import', edge);
     if (sqlite.test(specifier) && !sqlOwner(from)) issue('raw-sqlite', edge);
     if (origin === 'square-plugin' && from.startsWith('plugins/pi/') && /^(?:node:)?fs(?:\/promises)?$|^(?:node:|bun:)sqlite$/.test(specifier)) issue('pi-raw', edge);
-    if (target === 'core/ports.ts' && (!edge.typeOnly || names.includes('*') || (names.includes('SquareArtifactPort') && (!edge.explicit || !['artifact/artifact.ts', 'app/square-service.ts', 'app/square-posting.ts', 'app/stream.ts', 'core/wakes.ts'].includes(from))))) issue('artifact-port', edge);
+    if (target === 'core/ports.ts' && (!edge.typeOnly || names.includes('*') || (names.includes('SquareArtifactPort') && (!edge.explicit || !['artifact/artifact.ts', 'app/square.ts', 'app/participant.ts', 'app/square-posting.ts', 'app/stream.ts', 'core/wakes.ts'].includes(from))))) issue('artifact-port', edge);
     if (from === 'core/neutral.ts' && target?.startsWith('core/')) issue('neutral-edge', edge);
     if (origin === 'storage' && destination === 'core' && target !== 'core/neutral.ts') issue('neutral-edge', edge);
     if (from.startsWith('cli/') && destination === 'hosts' && names.includes('*')) issue('host-namespace', edge);
     if (target === 'ledger/delivery-ledger-sqlite.ts' && origin !== 'ledger') issue('driver-private', edge);
-    if (target === 'app/square-service.ts' && !['app', 'api'].includes(origin)) issue('service-private', edge);
+    if (['app/square.ts', 'app/participant.ts'].includes(target) && !['app', 'api'].includes(origin)) issue('app-private', edge);
     if (target === 'artifact/artifact.ts' && !['artifact', 'app'].includes(origin)) issue('artifact-private', edge);
     if (target === 'square.ts') issue('entry-import', edge);
   }
@@ -186,7 +186,7 @@ function violations(sources, pkg = manifest) {
     if (!exportPath) continue;
     const target = matchSource(exportPath, sources);
     if (!target) issue('package-target', { from: subpath, target: exportPath });
-    else if (target === 'square.ts' || sqlOwner(target) || ['app/square-service.ts', 'core/ports.ts'].includes(target)) issue('package-alias', { from: subpath, target });
+    else if (target === 'square.ts' || sqlOwner(target) || ['app/square.ts', 'app/participant.ts', 'core/ports.ts'].includes(target)) issue('package-alias', { from: subpath, target });
   }
   return found;
 }
@@ -196,7 +196,7 @@ test('production graph respects directory ownership', () => {
 });
 
 test('new files are classified, dependencies resolved, and capabilities fenced', () => {
-  const sources = new Map(['cli/program.ts', 'cli/help.ts', 'app/square-service.ts', 'api/square-api.ts', 'core/model.ts', 'core/ports.ts', 'ledger/delivery-ledger.ts', 'ledger/delivery-ledger-sqlite.ts', 'artifact/artifact.ts', 'hosts/harness.ts', 'plugins/paseo/client/grain.ts', 'packages/agent-delivery/src/index.ts', 'index.ts'].map((file) => [file, '']));
+  const sources = new Map(['cli/program.ts', 'cli/help.ts', 'app/square.ts', 'api/square-api.ts', 'core/model.ts', 'core/ports.ts', 'ledger/delivery-ledger.ts', 'ledger/delivery-ledger-sqlite.ts', 'artifact/artifact.ts', 'hosts/harness.ts', 'plugins/paseo/client/grain.ts', 'packages/agent-delivery/src/index.ts', 'index.ts'].map((file) => [file, '']));
   sources.set('square.ts', "import { runCli } from './cli/program.js';");
   const fixturePkg = { name: manifest.name, bin: { square: './dist/square.js' }, exports: { '.': './dist/index.js' } };
   const check = (files, code, target) => {
@@ -206,7 +206,7 @@ test('new files are classified, dependencies resolved, and capabilities fenced',
   };
   const pass = (files) => assert.deepEqual(violations(new Map([...sources, ...Object.entries(files)]), fixturePkg), []);
   pass({ 'hosts/new.ts': "import '../ledger/delivery-ledger.js';", 'surfaces/new.ts': "import '../api/square-api.js';" });
-  for (const source of ["import '../app/square-service.js';", "export * from '../app/square-service.js';", "import('../app/square-service.js');", "require('../app/square-service.js');"]) check({ 'core/new.ts': source }, 'layer-direction', 'app/square-service.ts');
+  for (const source of ["import '../app/square.js';", "export * from '../app/square.js';", "import('../app/square.js');", "require('../app/square.js');"]) check({ 'core/new.ts': source }, 'layer-direction', 'app/square.ts');
   check({ 'artifact/new.ts': "import '../ledger/delivery-ledger.js';" }, 'layer-direction', 'ledger/delivery-ledger.ts');
   check({ 'app/new.ts': "import 'node:sqlite';" }, 'raw-sqlite', 'node:sqlite');
   check({ 'core/new.ts': "import type { B } from './other.js'; export type A = B;", 'core/other.ts': "import type { A } from './new.js'; export type B = A;" }, 'cycle', undefined);
@@ -229,7 +229,7 @@ test('new files are classified, dependencies resolved, and capabilities fenced',
   check({ 'storage/new.ts': "import '../core/model.js';" }, 'neutral-edge', 'core/model.ts');
   check({ 'cli/new.ts': "import * as host from '../hosts/harness.js';" }, 'host-namespace', 'hosts/harness.ts');
   check({ 'plugins/pi/new.ts': "import 'fs';" }, 'pi-raw', 'fs');
-  check({ 'plugins/pi/new.ts': "import '../../app/square-service.js';" }, 'layer-direction', 'app/square-service.ts');
+  check({ 'plugins/pi/new.ts': "import '../../app/square.js';" }, 'layer-direction', 'app/square.ts');
   check({ 'plugins/opencode/new.ts': "import '../../ledger/delivery-ledger-sqlite.js';" }, 'driver-private', 'ledger/delivery-ledger-sqlite.ts');
   check({ 'packages/agent-delivery/src/new.ts': "import '../../../core/model.js';" }, 'layer-direction', 'core/model.ts');
   check({ 'plugins/paseo/shared/new.ts': "import '../../../core/model.js';" }, 'layer-direction', 'core/model.ts');
@@ -239,22 +239,22 @@ test('new files are classified, dependencies resolved, and capabilities fenced',
   const transit = new Map([...sources, ['index.ts', "import './paseo.js';"], ['paseo.ts', "import './surfaces/new.js';"], ['surfaces/new.ts', '']]);
   assert.ok(violations(transit, fixturePkg).some(({ code, from, target }) => code === 'sdk-direction' && from === 'paseo.ts' && target === 'surfaces/new.ts'));
   check({ 'hosts/notifications.ts': 'process.env.PI_SESSION_ID;' }, 'ambient-env', 'hosts/notifications.ts');
-  check({ 'api/square-facade.ts': 'export const runtime = 1;' }, 'facade-runtime', 'api/square-facade.ts');
+  check({ 'api/types.ts': 'export const runtime = 1;' }, 'types-runtime', 'api/types.ts');
   check({ 'core/receive.ts': "import './model.js';" }, 'leaf-import', 'core/model.ts');
   check({ 'core/attention.ts': "import './model.js';" }, 'leaf-import', 'core/model.ts');
-  check({ 'plugins/pi/helper.ts': "import '../../app/square-service.js'; import 'node:sqlite';" }, 'layer-direction', 'app/square-service.ts');
+  check({ 'plugins/pi/helper.ts': "import '../../app/square.js'; import 'node:sqlite';" }, 'layer-direction', 'app/square.ts');
   check({ 'plugins/pi/helper.ts': "import '../../ledger/delivery-ledger-sqlite.js';" }, 'driver-private', 'ledger/delivery-ledger-sqlite.ts');
   check({ 'plugins/pi/helper.ts': "import '../../artifact/artifact.js';" }, 'artifact-private', 'artifact/artifact.ts');
   check({ 'core/new.ts': "import '../cli/program.js';" }, 'layer-direction', 'cli/program.ts');
   check({ 'index.ts': "import './square.js';" }, 'entry-import', 'square.ts');
-  const pkg = { ...fixturePkg, exports: { ...fixturePkg.exports, './private': './dist/app/square-service.js' } };
+  const pkg = { ...fixturePkg, exports: { ...fixturePkg.exports, './private': './dist/app/square.js' } };
   const alias = new Map([...sources, ['plugins/pi/alias.ts', `import type * as Hidden from '${pkg.name}/private';`]]);
-  assert.ok(violations(alias, pkg).some(({ code }) => code === 'service-private'));
+  assert.ok(violations(alias, pkg).some(({ code }) => code === 'app-private'));
   assert.ok(violations(alias, pkg).some(({ code }) => code === 'package-alias'));
-  const split = { ...fixturePkg, exports: { ...fixturePkg.exports, './split': { types: './dist/app/square-service.d.ts', default: './dist/index.js' } } };
+  const split = { ...fixturePkg, exports: { ...fixturePkg.exports, './split': { types: './dist/app/square.d.ts', default: './dist/index.js' } } };
   const mixed = new Map([...sources, ['plugins/pi/alias.ts', `import { value, type Hidden } from '${split.name}/split';`]]);
-  assert.ok(violations(mixed, split).some(({ code, from, target }) => code === 'service-private' && from === 'plugins/pi/alias.ts' && target === 'app/square-service.ts'));
-  assert.ok(violations(mixed, split).some(({ code, target }) => code === 'package-alias' && target === 'app/square-service.ts'));
+  assert.ok(violations(mixed, split).some(({ code, from, target }) => code === 'app-private' && from === 'plugins/pi/alias.ts' && target === 'app/square.ts'));
+  assert.ok(violations(mixed, split).some(({ code, target }) => code === 'package-alias' && target === 'app/square.ts'));
   assert.ok(violations(sources, { ...fixturePkg, bin: { square: './wrong.js' } }).some(({ code }) => code === 'package-bin'));
   assert.ok(violations(sources, { ...fixturePkg, exports: { ...fixturePkg.exports, './missing': './dist/missing.js' } }).some(({ code }) => code === 'package-target'));
   check({ 'square.ts': "import './cli/help.js';" }, 'entry-shape', undefined);
@@ -262,7 +262,7 @@ test('new files are classified, dependencies resolved, and capabilities fenced',
   const launcher = "flag ? '@astrosheep/keiyaku' : pathToFileURL(override).href";
   pass({ 'hosts/keiyaku-delivery.ts': `import(${launcher});` });
   check({ 'hosts/keiyaku-delivery.ts': `require(${launcher});` }, 'dynamic-import', undefined);
-  pass({ 'core/new.ts': "function f(require) { return require('./missing.js'); }", 'api/square-facade.ts': "import { type X } from '../core/model.js';" });
+  pass({ 'core/new.ts': "function f(require) { return require('./missing.js'); }", 'api/types.ts': "import { type X } from '../core/model.js';" });
   pass({ 'core/new.ts': "const target = './model.js'; import(target);" });
   check({ 'packages/agent-delivery/src/new.ts': `import '${fixturePkg.name}';` }, 'layer-direction', 'index.ts');
   check({ 'core/new.ts': "import '@astrosheep/agent-delivery';" }, 'layer-direction', 'packages/agent-delivery/src/index.ts');
