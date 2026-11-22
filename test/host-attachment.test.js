@@ -6,6 +6,7 @@ import test from 'node:test';
 import { createSquareFile } from '../dist/artifact/artifact.js';
 import { Square } from '../dist/api/square-api.js';
 import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
+import { reconcile } from '../dist/app/square-posting.js';
 import { renderExpression } from '../dist/surfaces/operation-presentation.js';
 
 async function setup(t) {
@@ -81,7 +82,7 @@ test('a missing session remains unknown even with a stale detached seat and neve
   const session = await ledger.session('test:bob');
   await ledger.detach({ owner: 'test:bob', generation: session.generation });
   await alice.express('observe detach', { force: true });
-  assert.equal((await square.artifact.read(facts => facts.seat('Bob'))).value.attachment, 'detached');
+  assert.equal((await square.resource.artifact.read(facts => facts.seat('Bob'))).value.attachment, 'detached');
   const unknownLocation = path.join(root, 'missing-sessions.sqlite');
   const unknown = await DeliveryLedger.open({ location: unknownLocation });
   const peer = await Square.at({ path: location, ledgerLocation: unknownLocation });
@@ -101,9 +102,10 @@ test('captured away observations cannot pass to a replaced owner or a new join g
       const { square, ledger, alice, bob } = await setup(t);
       const session = await ledger.session('test:bob');
       await ledger.detach({ owner: 'test:bob', generation: session.generation });
-      const transact = square.artifact.transactAs.bind(square.artifact);
+      const artifact = square.resource.artifact;
+      const transact = artifact.transactAs.bind(artifact);
       let replacement;
-      const intercept = t.mock.method(square.artifact, 'transactAs', async (authority, change, signal) => {
+      const intercept = t.mock.method(artifact, 'transactAs', async (authority, change, signal) => {
         if (authority.kind === 'participant' && authority.seat.participant === 'Alice') {
           intercept.mock.restore();
           // Real lifecycle changes after reconciliation and before the landing transaction.
@@ -126,13 +128,18 @@ test('away is a captured observation even if the recipient resumes and consumes 
   const { square, ledger, alice, bob, location } = await setup(t);
   const session = await ledger.session('test:bob');
   await ledger.detach({ owner: 'test:bob', generation: session.generation });
-  const flush = square.flush.bind(square);
-  t.mock.method(square, 'flush', async signal => {
-    await ledger.attach({ owner: 'test:bob', expectedGeneration: session.generation, routes: [] });
-    await square.reconcile();
-    const id = (await square.history()).activities.at(-1).id;
-    assert.deepEqual(await bob.ack([id]), { consumed: 1 });
-    await flush(signal);
+  const artifact = square.resource.artifact;
+  const transact = artifact.transactAs.bind(artifact);
+  const intercept = t.mock.method(artifact, 'transactAs', async (authority, change, signal) => {
+    const result = await transact(authority, change, signal);
+    if (authority.kind === 'participant' && authority.seat.participant === 'Alice' && result.value?.stored) {
+      intercept.mock.restore();
+      await ledger.attach({ owner: 'test:bob', expectedGeneration: session.generation, routes: [] });
+      await reconcile(square.resource);
+      const id = (await square.history()).activities.at(-1).id;
+      assert.deepEqual(await bob.ack([id]), { consumed: 1 });
+    }
+    return result;
   });
   const result = await alice.express('@bob', { force: true, observe: true });
   assert.deepEqual(result.awayRecipients, ['Bob']);

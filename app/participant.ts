@@ -7,13 +7,17 @@ import { expressHint } from '../core/hints.js';
 import { SquareError, isSquareError, nameKey, validateName, type ActivityMetadata, type Seat, type WatchOptions } from '../core/model.js';
 import { checkControl, failure, type ObservationOptions, type OperationControl } from '../core/neutral.js';
 import { decidePerceive, observePerceiveSelection, perceiveLimit, selectPerceivePage, type PerceiveOptions, type PerceiveReason, type PerceiveSelection } from '../core/perceive-decisions.js';
-import type { FutureAck, SquareArtifactPort, SquareRead } from '../core/ports.js';
+import type { FutureAck, SquareRead } from '../core/ports.js';
 import { WATCH_HEARTBEAT_MS, asSeatRef, inSquareCount, participantAuthority } from '../core/runtime.js';
 import { formatActivityId, type ActivityId } from '../core/square-core.js';
 import { assertCurrentSeat } from '../core/square-domain.js';
 import { participantIdentity } from '../core/square-values.js';
 import { parseRequiredActivityId, perceivePresence, toPerceivedActivity, toPublicActivity,
   type Activity, type PerceivePresence, type PerceivedActivity, type SquareObservation } from '../core/observations.js';
+import { muteDeadline } from '../core/time.js';
+import { DeliveryLedger } from '../ledger/delivery-ledger.js';
+import { seatMuteId, seatMutePrefix } from './square-notification-mute.js';
+import { flush, observation, reconcile, withHostPresence, type SquareResource } from './square-posting.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease } from '../core/wakes.js';
 
 export interface AckResult { readonly consumed: number }
@@ -141,14 +145,8 @@ function rejectUnsentActivity<T>(operation: () => T): T {
 }
 
 export class SeatedParticipant implements Participant {
-  constructor(readonly name: string, private readonly seat: Seat,
-    private readonly artifact: SquareArtifactPort, private readonly clock: () => number,
-    private readonly changeSeatMute: (verb: 'mute' | 'unmute', durationMs: number | undefined, options: ObservationOptions, control?: OperationControl) => Promise<MuteResult>,
-    private readonly reconcile: (signal?: AbortSignal) => Promise<readonly Seat[]>,
-    private readonly flush: (signal?: AbortSignal) => Promise<void>,
-    private readonly observation: (standingCount: number, participant?: string, now?: number) => SquareObservation,
-    private readonly withHostPresence: <T>(select: (facts: SquareRead, available: (name: string) => boolean) => T,
-      control?: OperationControl) => Promise<T>) {}
+  constructor(private readonly seat: Seat, private readonly resource: SquareResource) {}
+  get name() { return this.seat.participant; }
   get generation() { return this.seat.generation; }
 
   async express(bodyOrInput: string | undefined | ExpressInput, optionsOrControl: ExpressOptions | OperationControl = {}, operationControl?: OperationControl): Promise<ExpressResult> {
@@ -162,17 +160,17 @@ export class SeatedParticipant implements Participant {
       checkControl(control);
       if ('reach' in options || 'bell' in options)
         throw new SquareError('invalid_args', 'Express no longer accepts bell reach. Use named mentions instead.', { activityUnsent: true });
-      await this.reconcile(control?.signal);
-      name = (await this.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
+      await reconcile(this.resource, control?.signal);
+      name = (await this.resource.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
       const seat = this.seat;
-      const context = !options.observe ? undefined : (await this.artifact.read(
+      const context = !options.observe ? undefined : (await this.resource.artifact.read(
         facts => expressionContext(facts, name), control?.signal)).value;
       while (true) {
         checkControl(control);
         try {
-          const awayByName = new Map((await this.reconcile(control?.signal)).map(seat => [nameKey(seat.participant), seat]));
+          const awayByName = new Map((await reconcile(this.resource, control?.signal)).map(seat => [nameKey(seat.participant), seat]));
           effect = 'unknown';
-          const now = this.clock();
+          const now = this.resource.clock();
           const reply = rejectUnsentActivity(() => {
             try { return options.reply === undefined ? undefined : parseRequiredActivityId(options.reply); }
             catch (error) {
@@ -180,7 +178,7 @@ export class SeatedParticipant implements Participant {
               throw error;
             }
           });
-          const committed = (await this.artifact.transactAs(participantAuthority(seat), facts => {
+          const committed = (await this.resource.artifact.transactAs(participantAuthority(seat), facts => {
             // Decoding selected rows is storage work, not proof of safe admission refusal.
             const proposed = decideAct(facts, { name, body, force: options.force ?? false, metadata: options.metadata, now, mentions: options.mentions,
               noMention: options.noMention, reply });
@@ -210,12 +208,12 @@ export class SeatedParticipant implements Participant {
           }, control?.signal)).value;
           landedId = formatActivityId(committed.stored.index);
           effect = 'landed';
-          await this.flush(control?.signal);
+          await flush(this.resource, control?.signal);
           const { stored, standingCount, ownActivityCount, hardCap, ...metadata } = committed;
           const hint = expressHint(ownActivityCount);
           return { activity: toPublicActivity(stored), ...metadata,
             ...(hint === undefined ? {} : { hint }), ...(context === undefined ? {} : { observation: {
-              ...this.observation(standingCount, name, now), ownActivityCount, hardCap, context, participant: name,
+              ...observation(this.resource, standingCount, name, now), ownActivityCount, hardCap, context, participant: name,
             } }) };
         } catch (error) {
           if (effect !== 'landed' && isSquareError(error) && error.facts?.activityUnsent === true) effect = 'unsent';
@@ -233,28 +231,63 @@ export class SeatedParticipant implements Participant {
 
   private async listener(verb: 'listen' | 'ignore' | 'unlisten', target: string, options: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult> {
     checkControl(control);
-    await this.reconcile(control?.signal);
-    const name = (await this.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
-    const seat = this.seat, now = this.clock();
-    const result = (await this.artifact.transactAs(participantAuthority(seat), facts => {
+    await reconcile(this.resource, control?.signal);
+    const name = (await this.resource.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
+    const seat = this.seat, now = this.resource.clock();
+    const result = (await this.resource.artifact.transactAs(participantAuthority(seat), facts => {
       const act = attentionChange(facts, verb, name, target, now);
       const activity = act === undefined ? null : toPublicActivity(facts.land(act));
       return { activity, ...(!options.observe ? {} : { observation: {
-        ...this.observation(inSquareCount(facts), name, now), participant: name,
+        ...observation(this.resource, inSquareCount(facts), name, now), participant: name,
         target: activity?.target ?? target,
       } }) };
     }, control?.signal)).value;
-    await this.flush(control?.signal);
+    await flush(this.resource, control?.signal);
     return result;
   }
   listen(target: string, options: ObservationOptions = {}, control?: OperationControl) { return this.listener('listen', target, options, control); }
   ignore(target: string, options: ObservationOptions = {}, control?: OperationControl) { return this.listener('ignore', target, options, control); }
   unlisten(target: string, options: ObservationOptions = {}, control?: OperationControl) { return this.listener('unlisten', target, options, control); }
   async listening(options: ObservationOptions = {}, control?: OperationControl): Promise<ListeningResult> {
-    return (await this.artifact.read(facts => {
+    return (await this.resource.artifact.read(facts => {
       const name = resolveKnownName(facts, this.name);
-      return { listening: coreListening(facts, name), ...(!options.observe ? {} : { observation: this.observation(inSquareCount(facts), name) }) };
+      return { listening: coreListening(facts, name), ...(!options.observe ? {} : { observation: observation(this.resource, inSquareCount(facts), name) }) };
     }, control?.signal)).value;
+  }
+  /** Install or release only this captured seat generation's named hold. */
+  private async changeSeatMute(verb: 'mute' | 'unmute', durationMs: number | undefined, options: ObservationOptions, control?: OperationControl): Promise<MuteResult> {
+    const seat = this.seat;
+    checkControl(control);
+    const now = this.resource.clock();
+    const expiresAt = verb === 'mute' ? muteDeadline(now, durationMs!) : undefined;
+    const prefix = seatMutePrefix(this.resource.canonicalLocation, seat);
+    const id = seatMuteId(seat.owner, prefix);
+    const assertCaptured = async (): Promise<void> => {
+      await this.resource.artifact.read(facts => {
+        assertCurrentSeat(facts, asSeatRef(seat));
+        if (!facts.participant(seat.participant)?.joined)
+          throw new SquareError('already_joined', 'This participant is no longer standing here.', { reason: 'needs_seat' });
+      }, control?.signal);
+    };
+    await assertCaptured();
+    const ledger = await DeliveryLedger.open({ location: this.resource.ledgerLocation, clock: this.resource.clock, signal: control?.signal });
+    try {
+      if (verb === 'mute') await ledger.setSuppression({ owner: seat.owner, id, key: prefix, scope: 'prefix', expiresAt: expiresAt! }, control?.signal);
+      else await ledger.releaseSuppression({ owner: seat.owner, id }, control?.signal);
+      try { await assertCaptured(); }
+      catch (error) {
+        if (verb === 'mute' && isSquareError(error) && error.code === 'already_joined')
+          await ledger.releaseSuppression({ owner: seat.owner, id }, control?.signal).catch(() => undefined);
+        throw error;
+      }
+    } finally { await ledger.close(); }
+    let observed;
+    if (options.observe) {
+      try {
+        observed = (await this.resource.artifact.read(facts => observation(this.resource, inSquareCount(facts), seat.participant, now), control?.signal)).value;
+      } catch { /* The hold is committed; optional facts cannot turn it into a retry. */ }
+    }
+    return { mutedUntil: verb === 'mute' ? expiresAt! : null, ...(observed === undefined ? {} : { observation: observed }) };
   }
   mute(input: { readonly durationMs: number }, options: ObservationOptions = {}, control?: OperationControl): Promise<MuteResult> {
     return this.changeSeatMute('mute', input?.durationMs, options, control);
@@ -265,9 +298,9 @@ export class SeatedParticipant implements Participant {
 
   /** Receipt selection rechecks the lease inside the writer, not at its last heartbeat. */
   private async perceivePage(name: string, seat: Seat, options: PerceiveOptions, control?: OperationControl, leaseId?: string): Promise<PerceiveSelection | null> {
-    return (await this.artifact.transactAs(participantAuthority(seat), facts => {
+    return (await this.resource.artifact.transactAs(participantAuthority(seat), facts => {
       if (leaseId !== undefined && facts.lease(name)?.leaseId !== leaseId) return null;
-      return decidePerceive(facts, name, options, this.clock());
+      return decidePerceive(facts, name, options, this.resource.clock());
     }, control?.signal)).value;
   }
   async perceive(options: PerceiveOptions = {}, control?: OperationControl): Promise<PerceiveResult> {
@@ -276,20 +309,20 @@ export class SeatedParticipant implements Participant {
     let selection = options;
     const idle = options.idle ?? 0;
     const complete = async (perceived: PerceiveSelection | undefined, reason: PerceiveReason = 'drained'): Promise<PerceiveResult> => {
-      const view = perceived ?? (await this.artifact.read(facts => observePerceiveSelection(facts, name, [], {
+      const view = perceived ?? (await this.resource.artifact.read(facts => observePerceiveSelection(facts, name, [], {
         unseenOnly: true, senders: selection.from, ...(selection.mention === true ? { attentionOnly: true } : {}),
-      }, this.clock()))).value;
+      }, this.resource.clock()))).value;
       if (reason === 'drained') reason = view.terminalStatus ?? reason;
-      await this.flush(control?.signal);
+      await flush(this.resource, control?.signal);
       if (leaseId !== undefined) {
-        await releaseWatchLease(this.artifact, seat!, leaseId).catch(() => undefined);
+        await releaseWatchLease(this.resource.artifact, seat!, leaseId).catch(() => undefined);
         leaseId = undefined;
       }
       let presence, deliveryAvailable = false;
       if (options.observe) {
         try {
-          const observed = await this.withHostPresence((facts, available) => {
-            const data = perceivePresence(facts, this.clock());
+          const observed = await withHostPresence(this.resource, (facts, available) => {
+            const data = perceivePresence(facts, this.resource.clock());
             return { presence: { ...data, participants: data.participants.map(person => ({ ...person, deliveryAvailable: available(person.name) })) },
               deliveryAvailable: available(view.participant) };
           }, control);
@@ -299,7 +332,7 @@ export class SeatedParticipant implements Participant {
       }
       return { activities: view.activities, remaining: view.remaining, reason,
         ...(view.hint === undefined ? {} : { hint: view.hint }), ...(!options.observe ? {} : { observation: {
-          ...this.observation(view.standingCount, view.participant, view.now), participant: view.participant,
+          ...observation(this.resource, view.standingCount, view.participant, view.now), participant: view.participant,
           deliveryAvailable,
           ownActivityCount: view.ownActivityCount, hardCap: view.hardCap,
           ...(presence === undefined ? { enrichmentUnavailable: true as const } : { presence }),
@@ -307,14 +340,14 @@ export class SeatedParticipant implements Participant {
     };
     try {
       checkControl(control);
-      await this.reconcile(control?.signal);
+      await reconcile(this.resource, control?.signal);
       validateName(name);
       if (!Number.isFinite(idle) || idle < 0) throw new SquareError('invalid_args', 'Perceive idle duration must be a non-negative number');
       if (options.id !== undefined && ['idle', 'from', 'mention', 'limit', 'takeover'].some(key => Object.hasOwn(options, key)))
         throw new SquareError('invalid_args', 'Perceive id cannot be combined with idle, from, mention, limit or takeover');
       if (Object.hasOwn(options, 'takeover') && idle === 0) throw new SquareError('invalid_args', 'Perceive takeover requires a positive idle duration');
       perceiveLimit(options.limit);
-      const probe = (await this.artifact.read(facts => {
+      const probe = (await this.resource.artifact.read(facts => {
         name = resolveKnownName(facts, this.name);
         seat = this.seat;
         assertCurrentSeat(facts, asSeatRef(seat));
@@ -324,7 +357,7 @@ export class SeatedParticipant implements Participant {
         subject = 'caller';
         if (idle !== 0 || options.id !== undefined) return undefined;
         const page = selectPerceivePage(facts, name, selection);
-        return page.indexes.length === 0 ? observePerceiveSelection(facts, page.participant, [], page.filter, this.clock()) : undefined;
+        return page.indexes.length === 0 ? observePerceiveSelection(facts, page.participant, [], page.filter, this.resource.clock()) : undefined;
       }, control?.signal)).value;
       if (idle === 0) {
         const data = probe ?? (await this.perceivePage(name, seat!, selection, control))!;
@@ -334,36 +367,36 @@ export class SeatedParticipant implements Participant {
         ...(selection.from === undefined ? {} : { participants: [...selection.from] }), ...(options.mention ? { mention: name } : {}),
         ...(options.takeover === undefined ? {} : { takeover: options.takeover }),
       };
-      const start = await acquireWatchLease(this.artifact, seat!, this.clock(), crypto.randomUUID(), watch, control?.signal);
+      const start = await acquireWatchLease(this.resource.artifact, seat!, this.resource.clock(), crypto.randomUUID(), watch, control?.signal);
       if (start.type === 'active') return await complete(undefined, 'already-active');
       leaseId = start.leaseId;
       control?.onProgress?.({ kind: 'perceive-started', participant: name, idleMs: idle, replacementRequested: options.takeover ?? false, replaced: start.replaced });
-      const quietSince = this.clock();
+      const quietSince = this.resource.clock();
       let nextHeartbeat = start.heartbeatAt + WATCH_HEARTBEAT_MS;
       while (true) {
         checkControl(control);
         // Arm before selecting: a commit during selection must not be missed.
-        const baseline = await this.artifact.revision(control?.signal);
-        const pulse = await pulseWatchLease(this.artifact, seat!, this.clock(), leaseId, watch, this.clock() >= nextHeartbeat, control?.signal);
+        const baseline = await this.resource.artifact.revision(control?.signal);
+        const pulse = await pulseWatchLease(this.resource.artifact, seat!, this.resource.clock(), leaseId, watch, this.resource.clock() >= nextHeartbeat, control?.signal);
         if (pulse.type === 'replaced') return await complete(undefined, 'replaced');
         if (pulse.type === 'terminal') return await complete(undefined, pulse.status);
         if (pulse.heartbeatAt !== undefined) nextHeartbeat = pulse.heartbeatAt + WATCH_HEARTBEAT_MS;
-        await this.reconcile(control?.signal);
+        await reconcile(this.resource, control?.signal);
         const perceived = await this.perceivePage(name, seat!, selection, control, leaseId);
         if (perceived === null) return await complete(undefined, 'replaced');
         if (perceived.activities.length > 0) return await complete(perceived);
-        if (this.clock() - quietSince >= idle) {
-          const owns = await ownsWatchLease(this.artifact, seat!, this.clock(), leaseId, control?.signal);
+        if (this.resource.clock() - quietSince >= idle) {
+          const owns = await ownsWatchLease(this.resource.artifact, seat!, this.resource.clock(), leaseId, control?.signal);
           return await complete(undefined, owns ? 'idle' : 'replaced');
         }
         const deadline = Math.min(nextHeartbeat, quietSince + idle);
-        await this.artifact.changed(baseline, Math.max(0, deadline - this.clock()), control?.signal);
+        await this.resource.artifact.changed(baseline, Math.max(0, deadline - this.resource.clock()), control?.signal);
       }
     } catch (error) {
       throw failure(error, { operation: 'perceive', subject, participant: name });
     } finally {
       // Cancellation releases only this captured generation and this lease.
-      if (leaseId !== undefined) await releaseWatchLease(this.artifact, seat!, leaseId).catch(() => undefined);
+      if (leaseId !== undefined) await releaseWatchLease(this.resource.artifact, seat!, leaseId).catch(() => undefined);
     }
   }
   async pending(options: PendingOptions = {}, control?: OperationControl): Promise<PendingResult> {
@@ -380,7 +413,7 @@ export class SeatedParticipant implements Participant {
       ...(shared.search === undefined ? {} : { search: shared.search }),
       ...(shared.afterIndex === undefined ? {} : { afterIndex: shared.afterIndex }),
       ...(shared.beforeIndex === undefined ? {} : { beforeIndex: shared.beforeIndex }) };
-    return (await this.artifact.read(facts => {
+    return (await this.resource.artifact.read(facts => {
       assertCurrentSeat(facts, asSeatRef(this.seat));
       const heads = facts.directed(this.name, filter, { edge: 'oldest', limit });
       return { activities: facts.activities(heads.items.map(head => head.index)).map(activity => toPerceivedActivity(facts, activity, this.name)),
@@ -391,12 +424,12 @@ export class SeatedParticipant implements Participant {
   ack(input: FutureAck, control?: OperationControl): Promise<AckResult>;
   ack(input: readonly ActivityId[] | FutureAck, control?: OperationControl): Promise<AckResult> {
     checkControl(control);
-    return this.artifact.transactAs(participantAuthority(this.seat), facts => {
+    return this.resource.artifact.transactAs(participantAuthority(this.seat), facts => {
       if (!Array.isArray(input)) {
         const exact = input as FutureAck;
         if (exact?.future !== 'exact') throw new SquareError('invalid_args', 'Ack requires an exact future predicate.');
         validateName(exact.from);
-        return { consumed: facts.ackMatching(asSeatRef(this.seat), { from: exact.from, match: validateMetadataMatch(exact.match), future: 'exact' }, this.clock()) };
+        return { consumed: facts.ackMatching(asSeatRef(this.seat), { from: exact.from, match: validateMetadataMatch(exact.match), future: 'exact' }, this.resource.clock()) };
       }
       const indexes: number[] = [];
       for (const id of input) {
@@ -407,22 +440,22 @@ export class SeatedParticipant implements Participant {
         if (head === undefined) throw new SquareError('invalid_args', `${id} is not addressed to you.`, { reason: 'not_addressed', activityId: id });
         indexes.push(activity.index);
       }
-      return { consumed: facts.markSeen(this.name, indexes, this.clock()) };
+      return { consumed: facts.markSeen(this.name, indexes, this.resource.clock()) };
     }, control?.signal).then(result => result.value);
   }
   async done(body?: string, options: ObservationOptions = {}, control?: OperationControl): Promise<LifecycleResult> {
     validateDoneBody(body);
     checkControl(control);
-    await this.reconcile(control?.signal);
-    const name = (await this.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
-    const seat = this.seat, now = this.clock();
-    const result = (await this.artifact.transactAs(participantAuthority(seat), facts => {
+    await reconcile(this.resource, control?.signal);
+    const name = (await this.resource.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
+    const seat = this.seat, now = this.resource.clock();
+    const result = (await this.resource.artifact.transactAs(participantAuthority(seat), facts => {
       const stored = facts.land(coreDone(facts, name, body ?? '', now));
       return { activity: toPublicActivity(stored), ...(!options.observe ? {} : { observation:
-        this.observation(inSquareCount(facts), name, now),
+        observation(this.resource, inSquareCount(facts), name, now),
       }) };
     }, control?.signal)).value;
-    await this.flush(control?.signal);
+    await flush(this.resource, control?.signal);
     return result;
   }
 }

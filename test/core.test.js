@@ -191,7 +191,7 @@ test('landings advance the actor cursor and never reuse an index', async () => {
     await alice.express('hello @Alice', { force: true, mentions: ['Alice'] });
     await alice.done();
     const history = (await square.history()).activities;
-    assert.equal((await square.artifact.read(facts => readCursor(facts, 'Alice'))).value, 2);
+    assert.equal((await square.resource.artifact.read(facts => readCursor(facts, 'Alice'))).value, 2);
     assert.deepEqual(history.map(activity => activity.id), ['act/0', 'act/1', 'act/2']);
   } finally {
     await square.close();

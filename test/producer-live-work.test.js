@@ -10,7 +10,6 @@ import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
 import { squarePostKey, parseSquarePostKey } from '../dist/core/delivery-key.js';
 import { nameKey } from '../dist/core/model.js';
 import { flushSquarePosts, reconcileSquareDelivery, readSquareSessions, ensureInitialDeliverySession } from '../dist/app/square-posting.js';
-import { Square as ApplicationSquare } from '../dist/app/square.js';
 import { dispatchPostedCard } from '../dist/hosts/notifications.js';
 
 test('receipt folds and owner watermarks commit atomically, replay safely and skip retained history', async t => {
@@ -94,7 +93,7 @@ test('durable departure cleanup survives interrupted suppression and fences late
     newer = (await c.artifact.read(facts => facts.seat('Bob'))).value;
     await c.artifact.transactAs({ kind: 'participant', seat: newer }, facts => facts.land({ kind: 'done', actor: 'Bob', at: Date.now() }));
   });
-  await reconcileSquareDelivery(peer.artifact, c.location, Date.now, undefined, c.ledgerLocation);
+  await reconcileSquareDelivery(peer.resource.artifact, c.location, Date.now, undefined, c.ledgerLocation);
   assert.deepEqual(await c.cards(), []);
   assert.ok(c.suppressions().includes(encodeDeliveryKey(oldKey)));
   assert.equal((await c.ledger.post({ owner: captured.owner, key: c.key(captured), text: captured.body })).status, 'suppressed');
@@ -149,7 +148,7 @@ test('internal delivery entry points refuse omitted locations before accessing s
   await assert.rejects(ensureInitialDeliverySession('owner'), /resolved absolute/);
   await assert.rejects(reconcileSquareDelivery(undefined, c.location, Date.now), /resolved absolute/);
   await assert.rejects(flushSquarePosts(undefined, c.location, Date.now, undefined, undefined, dispatchPostedCard), /resolved absolute/);
-  assert.throws(() => new ApplicationSquare(c.location, c.artifact, Date.now, c.location, undefined, dispatchPostedCard), /resolved absolute/);
+  await assert.rejects(Square.at({ path: c.location, ledgerLocation: 'relative.sqlite' }), /absolute/);
   assert.equal(open.mock.callCount(), 0);
   open.mock.restore();
   const previous = process.env.SQUARE_DELIVERY;
@@ -173,7 +172,7 @@ async function fixture(t) {
   const square = await Square.build({ path: path.join(root, 'world.square'), ledgerLocation, markdown: '', clock: () => Date.now() });
   const alice = (await square.join('Alice', { owner: 'live:alice' })).participant;
   const bob = (await square.join('Bob', { owner: 'live:bob' })).participant;
-  const artifact = square.artifact;
+  const artifact = square.resource.artifact;
   const location = await fs.realpath(square.location);
   const ledger = await DeliveryLedger.open({ location: ledgerLocation, clock: () => Date.now() });
   t.after(async () => { await ledger.close(); await square.close(); await fs.rm(root, { recursive: true, force: true }); });

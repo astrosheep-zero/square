@@ -93,7 +93,7 @@ test('rejoin does not append a second join activity', async () => {
 test('any self activity advances the actor cursor', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
-  const cursor = async () => (await square.artifact.read(facts => readCursor(facts, 'Alice'))).value;
+  const cursor = async () => (await square.resource.artifact.read(facts => readCursor(facts, 'Alice'))).value;
   assert.equal(await cursor(), 0);
   await alice.express('hello @Alice', { force: true, mentions: ['Alice'] });
   assert.equal(await cursor(), 1);
@@ -249,13 +249,13 @@ test('history remains read-only until perceive writes a delivery receipt', async
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
   const expressed = await alice.express('hello @Bob please check', { force: true, mentions: ['Bob'] });
-  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), false);
+  assert.equal(Boolean((await square.resource.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), false);
   await square.history({ limit: 100 });
   await square.history({ search: { text: 'please check', mode: 'regex' } });
-  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), false);
+  assert.equal(Boolean((await square.resource.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), false);
   const perceived = await bob.perceive();
   assert.equal(perceived.activities[0].body, 'hello @Bob please check');
-  assert.equal(Boolean((await square.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), true);
+  assert.equal(Boolean((await square.resource.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), true);
   assert.deepEqual((await bob.perceive()).activities, []);
   await closeSquare(square);
 });

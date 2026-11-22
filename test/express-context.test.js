@@ -15,16 +15,17 @@ test('express previews only five latest unseen activities, keeps Unicode intact,
 
   // Count hydration through the real artifact port while express observes its own unread feed.
   const hydrated = [];
-  const original = square.artifact.read.bind(square.artifact);
+  const artifact = square.resource.artifact;
+  const original = artifact.read.bind(artifact);
   let sent;
-  square.artifact.read = (select, signal) => original(facts => select({
+  artifact.read = (select, signal) => original(facts => select({
     ...facts,
     activities: indexes => { hydrated.push(...indexes); return facts.activities(indexes); },
   }), signal);
   try {
     sent = await alice.express('DO NOT ECHO THIS BODY', { force: true, observe: true });
   } finally {
-    square.artifact.read = original;
+    artifact.read = original;
   }
 
   const context = sent.observation.context;

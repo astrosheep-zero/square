@@ -38,10 +38,11 @@ async function fixture(t) {
 }
 async function armPerceive(c, options = { from: ['Alice'] }) {
   const waiter = await Square.at({ path: c.square.location, ledgerLocation: c.ledgerLocation, clock: c.clock });
-  const originalRevision = waiter.artifact.revision.bind(waiter.artifact), parked = deferred(), resume = deferred(), started = deferred();
+  const artifact = waiter.resource.artifact;
+  const originalRevision = artifact.revision.bind(artifact), parked = deferred(), resume = deferred(), started = deferred();
   let pause = true;
   // Pause only consumer scheduling after its real lease commit, before its first selection.
-  waiter.artifact.revision = async signal => {
+  artifact.revision = async signal => {
     if (pause) { pause = false; parked.resolve(); await resume.promise; }
     return originalRevision(signal);
   };

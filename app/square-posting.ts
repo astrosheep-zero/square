@@ -9,6 +9,9 @@ import type { CardPresentation } from '../plugins/paseo/shared/card-presentation
 import { coreDone } from '../core/decisions.js';
 import { SquareError, activityMetadataHasContent, nameKey, type DirectedNotificationRoute, type Owner, type Seat } from '../core/model.js';
 import type { SquareArtifactPort, SquarePost, SquareRead } from '../core/ports.js';
+import { readSquareHostObservations, seatMuteKey, deliverySessionsForSeats } from './square-notification-mute.js';
+import type { OperationControl } from '../core/neutral.js';
+import type { SquareObservation } from '../core/observations.js';
 import { formatActivityId } from '../core/square-core.js';
 
 /** Host dispatch capability bound once at the API composition root. */
@@ -17,6 +20,59 @@ export type DispatchPostedCard = (ledger: DeliveryLedger, owner: Owner, key: Del
   readonly track?: (result: HandoffResult) => void;
   readonly squareMention?: boolean;
 }) => Promise<void>;
+
+export interface SquareResource {
+  readonly location: string;
+  readonly artifact: SquareArtifactPort;
+  readonly clock: () => number;
+  readonly canonicalLocation: string;
+  readonly ledgerLocation: string;
+  readonly dispatch: DispatchPostedCard;
+}
+
+export const reconcile = (resource: SquareResource, signal?: AbortSignal): Promise<readonly Seat[]> =>
+  reconcileSquareDelivery(resource.artifact, resource.canonicalLocation, resource.clock, signal, resource.ledgerLocation);
+// Posting is retryable after commit; a delivery failure cannot make a landed write unsent.
+export const flush = async (resource: SquareResource, signal?: AbortSignal): Promise<void> =>
+  await flushSquarePosts(resource.artifact, resource.canonicalLocation, resource.clock, signal, resource.ledgerLocation, resource.dispatch).catch(() => undefined);
+export const observation = (resource: SquareResource, standingCount: number, participant?: string, now = resource.clock()): SquareObservation => ({
+  location: resource.location, standingCount, now, ...(participant === undefined ? {} : { participant }),
+});
+/** Host liveness and mute deadlines are read-only overlays fenced by captured seats. */
+export async function withHostPresence<T>(resource: SquareResource, select: (facts: SquareRead, deliveryAvailable: (name: string) => boolean,
+  mutes: { readonly ledgerMutedUntil?: number; readonly seat: (name: string) => number | undefined }) => T,
+control?: OperationControl, includeMutes = false): Promise<T> {
+  const seats = (await resource.artifact.read(currentSeats, control?.signal)).value;
+  const observations = includeMutes
+    ? await readSquareHostObservations(resource.canonicalLocation, seats, resource.clock, control?.signal, resource.ledgerLocation)
+    : { sessions: await readSquareSessions(seats, control?.signal, resource.ledgerLocation, resource.clock),
+      seatMutedUntil: new Map<string, number>() };
+  const captured = new Map(seats.map(seat => [nameKey(seat.participant), seat]));
+  return (await resource.artifact.read(facts => {
+    const seat = (name: string): Seat | undefined => {
+      const current = facts.seat(name);
+      if (current === undefined) return undefined;
+      const before = captured.get(nameKey(current.participant));
+      const attached = before?.owner === current.owner && before.generation === current.generation
+        && observations.sessions.get(current.owner)?.state === 'attached';
+      return { ...current, attachment: attached ? 'attached' : 'detached' };
+    };
+    const mutedUntil = (name: string): number | undefined => {
+      const current = seat(name);
+      if (current === undefined) return undefined;
+      const before = captured.get(nameKey(current.participant));
+      if (before?.owner !== current.owner || before.generation !== current.generation) return undefined;
+      return observations.seatMutedUntil.get(seatMuteKey(current));
+    };
+    return select(Object.assign({}, facts, { seat }), name => {
+      const current = seat(name);
+      return current?.attachment === 'attached' && (observations.sessions.get(current.owner)?.routes.length ?? 0) > 0;
+    }, {
+      ...(observations.ledgerMutedUntil === undefined ? {} : { ledgerMutedUntil: observations.ledgerMutedUntil }),
+      seat: mutedUntil,
+    });
+  }, control?.signal)).value;
+}
 
 function requireLedgerLocation(ledgerLocation: string): void {
   if (typeof ledgerLocation !== 'string' || !path.isAbsolute(ledgerLocation)) throw new TypeError('Expected a resolved absolute delivery ledger location');
@@ -70,11 +126,6 @@ function renderPost(location: string, post: SquarePost, replyTo?: string): { tex
     '</square-activity>'].join('\n');
   return { text, full, details: { kind: 'presentation', origin, ref, author: post.from, label: 'express',
     body: rawBody, at: post.at, reach: route, recipient: post.recipient, ...(replyTo === undefined ? {} : { replyTo }) } };
-}
-/** Local producer custody and current host attachment are different observations. */
-export async function deliverySessionsForSeats(ledger: DeliveryLedger, seats: readonly Seat[], signal?: AbortSignal): Promise<ReadonlyMap<string, DeliverySession | undefined>> {
-  const owners = [...new Set(seats.map(seat => seat.owner))];
-  return new Map(await Promise.all(owners.map(async owner => [owner, await ledger.session(owner, signal)] as const)));
 }
 /** Read-only host observations for status; callers fence them against the captured World seats. */
 export async function readSquareSessions(seats: readonly Seat[], signal: AbortSignal | undefined, ledgerLocation: string, clock: () => number = Date.now): Promise<ReadonlyMap<string, DeliverySession | undefined>> {

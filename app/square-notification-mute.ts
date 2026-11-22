@@ -2,7 +2,6 @@ import type { DeliveryKey } from '../core/delivery-key.js';
 import type { DeliveryLedger, DeliverySession } from '../ledger/delivery-ledger.js';
 import { nameKey, type Owner, type Seat } from '../core/model.js';
 import { openReadOnlyDeliveryLedger } from '../ledger/delivery-lifetime.js';
-import { deliverySessionsForSeats } from './square-posting.js';
 
 /** One captured Square seat generation, independent from every other layer. */
 export function seatMutePrefix(location: string, seat: Pick<Seat, 'participant' | 'generation'>): DeliveryKey {
@@ -67,3 +66,8 @@ export async function readSquareHostObservations(location: string, seats: readon
     };
   } finally { await ledger.close(); }
 }
+
+/** Local producer custody and current host attachment are different observations. */
+export const deliverySessionsForSeats = async (ledger: DeliveryLedger, seats: readonly Seat[], signal?: AbortSignal): Promise<ReadonlyMap<string, DeliverySession | undefined>> =>
+  new Map(await Promise.all([...new Set(seats.map(seat => seat.owner))]
+    .map(async owner => [owner, await ledger.session(owner, signal)] as const)));

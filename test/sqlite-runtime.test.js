@@ -4,11 +4,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
 
 const exec = promisify(execFile);
-const fixture = new URL('./fixtures/sqlite-runtime.mjs', import.meta.url).pathname;
+const fixture = fileURLToPath(new URL('./fixtures/sqlite-runtime.mjs', import.meta.url));
 const runtimes = [{ name: 'Node', executable: process.execPath }];
 if (process.env.SQUARE_TEST_BUN) runtimes.push({ name: 'Bun', executable: process.env.SQUARE_TEST_BUN });
 for (const runtime of runtimes) test(`${runtime.name} legacy loader and shared ledger interoperate with Node`, async t => {
