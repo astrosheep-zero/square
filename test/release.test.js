@@ -18,6 +18,13 @@ test('generated release artifacts expose the current identity and supported host
   const claudeMcp = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'claude', '.mcp.json'), 'utf8'));
   const codexPlugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', '.codex-plugin', 'plugin.json'), 'utf8'));
   const codexHooks = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', 'hooks', 'hooks.json'), 'utf8'));
+  const codexMcp = JSON.parse(fs.readFileSync(path.join(root, 'plugins', 'codex', '.mcp.json'), 'utf8'));
+  assert.equal(codexPlugin.mcpServers, './.mcp.json');
+  assert.deepEqual(codexMcp, { mcpServers: { square: {
+    command: 'square', args: ['mcp-server'], env_vars: [
+      'CODEX_HOME', 'SQUARE_CODEX_ENDPOINT', 'SQUARE_DELIVERY', 'SQUARE_HOST_LEDGER_ROOT', 'SQUARE_OWNER', 'SQUARE_TOOLS',
+    ],
+  } } });
   assert.deepEqual(Object.keys(codexHooks.hooks).sort(), ['Interrupt', 'PostToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'UserPromptSubmit']);
   for (const event of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PostToolUse']) {
     const hook = codexHooks.hooks[event][0].hooks[0];
@@ -119,6 +126,7 @@ test('packed root ships its plugin entries and SDK-free shared transports', asyn
     'dist/hosts/claude-mod.js',
     'plugins/claude/.claude-plugin/plugin.json',
     'plugins/codex/.codex-plugin/plugin.json',
+    'plugins/codex/.mcp.json',
     'plugins/codex/hooks/hooks.json',
     'dist/hosts/codex-hook.js',
     'dist/hosts/codex-watch.js',

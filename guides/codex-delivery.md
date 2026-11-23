@@ -4,6 +4,10 @@ Producers post neutral cards to DeliveryLedger; neither default dispatch nor pub
 queues Codex input. The receiver owns synchronous presentation and idle queue admission, without
 reading Square artifacts or producer content stores.
 
+The installed Square plugin exposes [Square tools](mcp.md) in Codex through its bundled MCP server.
+Keep `square` on `PATH` so Codex can launch it. Tool calls use the native Codex thread ID, matching
+the owner registered by the SessionStart hook.
+
 ## Six hooks
 
 The Codex 0.166.0 manifest registers one command for each of six events:

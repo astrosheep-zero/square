@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "square": {
+      "command": "square",
+      "args": ["mcp-server"],
+      "env_vars": [
+        "CODEX_HOME",
+        "SQUARE_CODEX_ENDPOINT",
+        "SQUARE_DELIVERY",
+        "SQUARE_HOST_LEDGER_ROOT",
+        "SQUARE_OWNER",
+        "SQUARE_TOOLS"
+      ]
+    }
+  }
+}

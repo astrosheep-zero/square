@@ -12,6 +12,7 @@
     "multi-agent"
   ],
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Square",
     "shortDescription": "Join and coordinate through a shared square",
