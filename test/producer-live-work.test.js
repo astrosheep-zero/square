@@ -9,7 +9,7 @@ import { Square } from '../dist/api/square-api.js';
 import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
 import { squarePostKey, parseSquarePostKey } from '../dist/core/delivery-key.js';
 import { nameKey } from '../dist/core/model.js';
-import { flushSquarePosts, reconcileSquareDelivery, readSquareSessions, ensureInitialDeliverySession } from '../dist/app/square-posting.js';
+import { flushSquarePosts, reconcileSquareDelivery, ensureInitialDeliverySession } from '../dist/app/square-posting.js';
 import { dispatchPostedCard } from '../dist/hosts/notifications.js';
 
 test('receipt folds and owner watermarks commit atomically, replay safely and skip retained history', async t => {
@@ -144,7 +144,6 @@ test('cap withdrawal leaves producer activity unread and available to pending an
 test('internal delivery entry points refuse omitted locations before accessing storage; public resources capture resolution once', async t => {
   const c = await fixture(t);
   const open = t.mock.method(DeliveryLedger, 'open', () => { throw new Error('must not open a ledger'); });
-  await assert.rejects(readSquareSessions([]), /resolved absolute/);
   await assert.rejects(ensureInitialDeliverySession('owner'), /resolved absolute/);
   await assert.rejects(reconcileSquareDelivery(undefined, c.location, Date.now), /resolved absolute/);
   await assert.rejects(flushSquarePosts(undefined, c.location, Date.now, undefined, undefined, dispatchPostedCard), /resolved absolute/);

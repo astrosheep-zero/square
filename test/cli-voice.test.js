@@ -31,14 +31,14 @@ test('express warns once for absent and observed away targets and resumes withou
   assert.deepEqual((await bob.perceive()).activities.map(activity => activity.body), ['@bob @BOB @Nobody @nobody']);
 });
 
-test('observed words and gestures render their own receipts', async (t) => {
+test('words and gestures render their own receipts', async (t) => {
   const square = Square.inMemory({ markdown: 'voice' });
   t.after(() => square.close());
   const alice = (await square.join('Alice', { owner: 'test:cli-voice' })).participant;
-  const words = await alice.express('a plain thought', { force: true, observe: true });
-  const gesture = await alice.express('*shrugs slowly*', { force: true, observe: true });
-  assert.match(renderExpression('memory://voice', words), /● your words land — act\/\d+/);
-  assert.match(renderExpression('memory://voice', gesture), /● your gesture lands — act\/\d+/);
+  const words = await alice.express('a plain thought', { force: true });
+  const gesture = await alice.express('*shrugs slowly*', { force: true });
+  assert.match(renderExpression(words), /● your words land — act\/\d+/);
+  assert.match(renderExpression(gesture), /● your gesture lands — act\/\d+/);
 });
 
 test('a capped express keeps the exact stdin bytes and points at done', async () => {

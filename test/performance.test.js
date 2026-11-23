@@ -4,7 +4,6 @@ import test from 'node:test';
 import { renderPerceiveOutcome } from '../dist/surfaces/perceive-presentation.js';
 import { resourceWithArtifact } from './fixtures/resource-with-artifact.js';
 import { createArtifactPort } from '../dist/artifact/artifact.js';
-import { perceivePresence } from '../dist/core/observations.js';
 
 /** Counts artifact callbacks and the activity rows/selectors each read actually asks for. */
 function instrumentCell(cell) {
@@ -86,40 +85,36 @@ test('perceive hydrates one bounded page while unseen count and selector cost st
   assert.equal(measurements[0].headReads, measurements[1].headReads, 'selector cost must not scale with unrelated history');
 });
 
-test('perceive keeps transaction-selected records and presence enrichment/rendering never rehydrates them', async t => {
+test('perceive renders its transaction-selected records without rehydrating them', async t => {
   const { cell, p0 } = await stateWithHistory(25, 1);
   const { counters, artifact } = instrumentCell(cell);
   const square = await resourceWithArtifact(t, artifact, () => 100_000);
   const measurements = () => structuredClone(counters);
   try {
     const participant = await square.participant('P0', { owner: p0.owner });
-    const outcome = await participant.perceive({ observe: true });
-    const perceived = outcome.observation;
+    const outcome = await participant.perceive();
     const perceivedIds = Array.from({ length: 10 }, (_value, index) => `act/${index + 2}`);
     assert.deepEqual(outcome.activities.map(activity => activity.id), perceivedIds);
     assert.equal(outcome.remaining, 15);
-    assert.equal(perceived.standingCount, 2);
+    assert.equal(outcome.standingCount, 2);
     assert.deepEqual(counters.ordinals, [], 'perceive does not query history ordinals');
     assert.deepEqual(counters.hydrated.flat(), perceivedIds.map((id) => Number(id.slice(4))));
 
-    const presence = (await artifact.read(facts => perceivePresence(facts, 100_000))).value;
-    assert.deepEqual(counters.hydrated.flat(), perceivedIds.map((id) => Number(id.slice(4))), 'nearby enrichment must not re-fetch the committed page');
     const beforeRender = measurements();
-    const output = renderPerceiveOutcome('memory', outcome);
+    const output = renderPerceiveOutcome(outcome);
     assert.match(output, /dispatch 0 @P0/);
     assert.doesNotMatch(output, /dispatch 24 @P0/);
-    assert.match(output, /15 matching activities remain/);
     assert.deepEqual(measurements(), beforeRender);
 
     // A valid sender filter with no matching pending activity settles empty;
     // unrelated remaining activity cannot force body hydration for that result.
     const hydrationCount = counters.hydrated.length;
-    const emptyOutcome = await participant.perceive({ from: ['P0'], observe: true });
+    const emptyOutcome = await participant.perceive({ from: ['P0'] });
     assert.deepEqual(emptyOutcome.activities, []);
-    assert.equal(emptyOutcome.observation.standingCount, 2);
+    assert.equal(emptyOutcome.standingCount, 2);
     assert.equal(counters.hydrated.length, hydrationCount, 'empty perceive must not request body hydration');
     const beforeEmptyRender = measurements();
-    const emptyOutput = renderPerceiveOutcome('memory', emptyOutcome, { from: ['P0'] });
+    const emptyOutput = renderPerceiveOutcome(emptyOutcome, { from: ['P0'] });
     assert.doesNotMatch(emptyOutput, /dispatch \d+ @P0/);
     assert.deepEqual(measurements(), beforeEmptyRender);
   } finally {
@@ -165,16 +160,15 @@ test('perceive fences selection and captures the page facts in its receipt trans
     }
     return result;
   };
-  const perceived = await bob.perceive({ limit: 1, observe: true });
+  const perceived = await bob.perceive({ limit: 1 });
   assert.equal(typeof perceived.hint, 'string', 'the first perceive carries a hint');
   assert.deepEqual(perceived.activities, [{ id: 'act/2', kind: 'say', actor: 'Alice', body: 'first for Bob', mentions: ['Bob'], at: 100, perception: 'full', via: 'mention' }]);
   assert.equal(perceived.reason, 'drained');
   assert.equal(perceived.remaining, 1);
-  assert.equal(perceived.observation.standingCount, 2);
-  assert.equal(perceived.observation.now, 100);
-  assert.equal(perceived.observation.ownActivityCount, 0);
-  assert.equal(perceived.observation.hardCap, 5);
-  assert.equal(perceived.observation.enrichmentUnavailable, true);
+  assert.equal(perceived.standingCount, 2);
+  assert.equal(perceived.now, 100);
+  assert.equal(perceived.ownActivityCount, 0);
+  assert.equal(perceived.hardCap, 5);
   assert.deepEqual((await cell.read(facts => ({
     receipt: facts.receipt('Bob', 2), remaining: facts.directedCount('Bob', { unseenOnly: true }),
     ownActivityCount: facts.participant('Bob').sayCount,
@@ -195,7 +189,9 @@ test('a capped idle perceive through the shared SDK owner hydrates no bodies and
   assert.equal(before, undefined);
   counters.hydrated = [];
   const perceived = await participant.perceive({ wait: '1ms' }, { signal: AbortSignal.timeout(2000) });
-  assert.deepEqual(perceived, { activities: [], remaining: 1, reason: 'capped' });
+  assert.equal(perceived.reason, 'capped');
+  assert.equal(perceived.remaining, 1);
+  assert.deepEqual(perceived.activities, []);
   assert.equal(counters.hydrated.flat().length, 0);
   assert.equal((await cell.read(facts => facts.receipt('P0', 2))).value, before);
 });

@@ -9,7 +9,7 @@ import { renderPresenceLines } from '../dist/surfaces/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/core/runtime.js';
 import { Square } from '../dist/api/square-api.js';
 import { createArtifactPort } from '../dist/artifact/artifact.js';
-import { perceivePresence, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/core/observations.js';
+import { selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/core/observations.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
@@ -60,9 +60,8 @@ test('participant lists share actual action and receipt times, including a fresh
   try {
     const expected = [['Newcomer', 120000], ['Returning', 90000], ['Reader', 60000]];
     const projections = [
-      (await cell.read((facts) => queryParticipants(facts, { location: 'memory', now: 180000 }))).value.participants,
-      (await cell.read((facts) => queryStatus(facts, { location: 'memory', now: 180000 }))).value.participants,
-      (await cell.read(facts => perceivePresence(facts, 180000))).value.participants,
+      (await cell.read((facts) => queryParticipants(facts, 180000))).value.participants,
+      (await cell.read((facts) => queryStatus(facts, 180000))).value.participants,
     ];
     for (const participants of projections) {
       assert.deepEqual(participants.map((p) => [p.name, p.lastActiveAt]), expected);

@@ -415,7 +415,7 @@ test('MCP resolves locations and uses explicit mentions instead of scanning the 
       const obsolete = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@bob @Eve', bell: true, force: true } });
       assert.equal(obsolete.isError, true);
       const after = await square.history();
-      assert.deepEqual(after, before);
+      assert.deepEqual(after.activities, before.activities);
       assert.deepEqual(bareActivity.mentions, []);
       assert.equal(after.activities.at(-1).body, '@Eve');
       assert.deepEqual(after.activities.at(-1).mentions, ['bob']);

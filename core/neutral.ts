@@ -99,10 +99,6 @@ export function nameKey(name: string): string {
 export interface IndexPage { readonly edge: 'oldest' | 'newest'; readonly limit: number }
 export interface FactPage<T> { readonly items: readonly T[]; readonly hasMore: boolean }
 
-/** Request extra facts for rendering, without changing operation semantics. */
-export interface ObservationOptions {
-  readonly observe?: boolean;
-}
 /** A square is addressed by an explicit artifact path or a directory to discover in. */
 export interface SquareLocation {
   readonly path?: string;

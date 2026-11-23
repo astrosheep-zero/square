@@ -35,7 +35,6 @@ test('ledger detach projects away while retaining audience and unread; attach re
   });
   const sent = result.activity;
   assert.deepEqual(result.awayRecipients, ['Bob']);
-  assert.equal(result.observation, undefined, 'away facts do not require observe');
   assert.deepEqual(result.unmatchedMentions, ['Missing']);
   assert.equal(sent.awayRecipients, undefined);
   assert.equal((await square.history({ ids: [sent.id] })).activities[0].awayRecipients, undefined);
@@ -88,12 +87,12 @@ test('a missing session remains unknown even with a stale detached seat and neve
   const peer = await Square.at({ path: location, ledgerLocation: unknownLocation });
   t.after(async () => { await peer.close(); await unknown.close(); });
   const sender = await peer.participant('Alice', { owner: 'test:alice' });
-  const result = await sender.express('@bob', { force: true, observe: true });
+  const result = await sender.express('@bob', { force: true });
   assert.equal(result.awayRecipients, undefined);
   assert.equal((await peer.participants({ local: true })).participants.find(p => p.name === 'Bob').unreadActivityCount, 1);
   assert.equal(await unknown.session('test:bob'), undefined);
   assert.equal(await unknown.session('test:alice'), undefined);
-  assert.deepEqual(renderExpression(location, result).split('\n').filter(line => line.startsWith('⚠')), []);
+  assert.deepEqual(renderExpression(result).split('\n').filter(line => line.startsWith('⚠')), []);
 });
 
 test('captured away observations cannot pass to a replaced owner or a new join generation', async t => {
@@ -141,9 +140,9 @@ test('away is a captured observation even if the recipient resumes and consumes 
     }
     return result;
   });
-  const result = await alice.express('@bob', { force: true, observe: true });
+  const result = await alice.express('@bob', { force: true });
   assert.deepEqual(result.awayRecipients, ['Bob']);
   assert.deepEqual((await bob.pending()).activities, []);
-  assert.deepEqual(renderExpression(location, result).split('\n').filter(line => line.startsWith('⚠')), ['⚠ @Bob is away.']);
+  assert.deepEqual(renderExpression(result).split('\n').filter(line => line.startsWith('⚠')), ['⚠ @Bob is away.']);
   assert.equal((await alice.express('@bob', { force: true })).awayRecipients, undefined, 'the next operation checks anew');
 });

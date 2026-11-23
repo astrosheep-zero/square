@@ -64,7 +64,7 @@ test('packed ESM and types expose the real Square and delivery ledger APIs', (t)
       return cards;
     }
     async function send(square: ReturnType<typeof Square.inMemory>): Promise<SendResult> {
-      await square.participants({local:true,observe:true});
+      await square.participants({local:true});
       return square.send({from:'sender',to:'alice',body:'notice',metadata:{job:{id:7}}});
     }
     void same; void route; void audience; void id; void name; void use; void send; void resolveAudience;

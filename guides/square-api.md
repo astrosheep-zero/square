@@ -54,7 +54,7 @@ The package root also exports the syntax Square validates with: `parseActivityId
 `NAME_GRAPHEME_SOURCE`, `PARTICIPANT_NAME_SOURCE` and `isParticipantName(name)`. They share the core
 acceptance, so adapters use them instead of copying the grammar.
 
-`Participant.mute({duration}, options?, control?)` sets a timed hold for the handle's captured
+`Participant.mute({duration}, control?)` sets a timed hold for the handle's captured
 owner, name and join generation. Pass a duration like `'30m'`, or `'off'` to release that hold.
 The Square clock sets the deadline, and a stale handle cannot affect a newer join. Independent seats,
 other squares and producer holds are untouched. No activity lands and no pending card is dispatched
@@ -72,7 +72,7 @@ daemon, and a hold never recalls custody already handed to a receiver.
 Explicit `mentions` replace the body scan; even an empty list is authoritative. When omitted, body
 `@names` can become mentions. Absent or unknown targets do not block `express`. The receipt lists them in `unmatchedMentions`; a departed reply author
 is reported in `replyAuthorNotHere`. The optional `awayRecipients` lists directed joined targets
-observed detached by the reconciliation immediately before landing, without requiring `observe: true`.
+observed detached by the reconciliation immediately before landing.
 It covers resolved mentions and a joined reply author, deduplicates canonical names and excludes the
 speaker. The landing transaction fences each observation to the same owner and join generation.
 Missing sessions, unknown observations, routes and cached attachment alone do not establish away status.
@@ -132,14 +132,16 @@ Notices use the same producer export ownership path as activity cards.
 
 ## Queries and acknowledgement
 
-`Square.participants({local: true, observe?: true}, control?)` reads only World-known participant
+`Square.participants({local: true}, control?)` reads only World-known participant
 facts, including known departure and attachment state. It needs no host ledger access and does not
 prove current host liveness; `deliveryAvailable` is false in this mode. The default query still overlays
 host attachment and route availability. Local discovery can distinguish known names before selection;
 it does not grant custody or allow fallback over a departed, foreign or detached identity.
 
 `Square.history({from, to, search, ids, after, before, context, limit, maxChars})` returns
-`{activities}` without consuming. `to` matches the landed audience. `search` is literal unless
+`activities`, lifetime say ordinals (`sayNumbers`), `presenceAnchors`, `totalMatches` and, if
+another page exists, a `continuation` cursor. It does not consume activity. `to` matches the
+landed audience. `search` is literal unless
 wrapped in `/slashes/`. The exclusive bounds accept IDs, ISO timestamps, or lookback durations
 such as `'30m'`; combine them for a range. An `after` query takes the oldest page of matches;
 otherwise the newest page is taken. Activities always return oldest first. `limit` defaults to ten and
@@ -155,9 +157,12 @@ Seen IDs and IDs not addressed to the participant match nothing. `wait` takes a 
 Pending defaults to 100 and accepts limits 1–100. Its archive filters support `at`, `from`, metadata
 `match`, `search`, and an exclusive `cursor`. A pending read does not claim work or change the read horizon.
 
-`observe: true` adds history's selected records, lifetime say ordinals, presence anchors, match counts
-and the continuation cursor. A join's entry context is the square's literal Markdown preamble; a trailing
-`---` stays part of the context.
+Snapshot facts are plain result fields. Express returns `standingCount`, `ownActivityCount`, `hardCap`
+and an unread `context` preview from before landing, all from the same write transaction. Perceive
+returns the count and cap facts from its selection snapshot. Join returns `entry` from its transaction:
+perception-aware recent activity, warmup, and the literal Markdown preamble (including a trailing `---`).
+CLI and tools read `status` separately for join and perceive's host presence and delivery availability;
+if that read fails, they omit those lines without changing the operation result.
 
 `Participant.ack(ids: readonly ActivityId[], control?)` remains the exact-ID consumption operation,
 returning `{consumed}`. All IDs must be addressed to the participant; invalid or unaddressed IDs

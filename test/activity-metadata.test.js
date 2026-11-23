@@ -34,9 +34,8 @@ test('activity metadata lands as an immutable fact through local reads and direc
     assert.notEqual(sent.activity.metadata, metadata);
     metadata.nested.ok = false;
     assert.equal(sent.activity.metadata.nested.ok, true);
-    const bodyResult = await alice.express({ body: 'ordinary words', metadata: { kind: 'body' }, force: true, observe: true });
-    assert.match(renderExpression('memory', bodyResult), /your words land/);
-    assert.doesNotMatch(renderExpression('memory', bodyResult), /structured activity lands/);
+    const bodyResult = await alice.express({ body: 'ordinary words', metadata: { kind: 'body' }, force: true });
+    assert.match(renderExpression(bodyResult), /your words land/);
 
     const metadataOnly = { event: 'wake', count: 2 };
     const directed = await alice.express({ metadata: metadataOnly, mentions: ['Bob'], force: true });
@@ -169,7 +168,7 @@ test('directed perceive renders metadata-only activities without exposing metada
     const directed = await alice.express({ metadata, mentions: ['Bob'], force: true });
     assert.deepEqual(directed.activity.metadata, metadata);
 
-    const perceived = renderPerceiveOutcome(square.location, await bob.perceive({ observe: true }), {}, undefined, 'tool');
+    const perceived = renderPerceiveOutcome(await bob.perceive(), {}, undefined, 'tool');
     assert.ok(perceived.includes(directed.activity.id));
     assert.match(perceived, /structured activity/);
     assert.doesNotMatch(perceived, /"nested"|"wake"|"values"/);

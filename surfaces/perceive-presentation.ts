@@ -1,7 +1,7 @@
 import { sameName } from '../core/model.js';
 import { participantIdentity } from '../core/square-values.js';
 import { formatDuration, parseDurationMs } from '../core/time.js';
-import type { ParticipantSummary, PerceiveOptions, PerceiveResult } from '../api/types.js';
+import type { ParticipantSummary, PerceiveOptions, PerceiveResult, StatusResult } from '../api/types.js';
 import { style } from './tty-style.js';
 import { type PresentationSurface, spellAction, spellField, renderPresenceLines, renderAmbientEventFacts, withPathOutput } from './presentation.js';
 
@@ -14,8 +14,6 @@ interface ParticipantOutputOptions {
   name: string;
   participantCount?: number;
 }
-
-
 
 interface WatchStatusOptions extends ParticipantOutputOptions {
   status: WatchStatus;
@@ -52,14 +50,11 @@ export function renderWatchReplaced(_opts: ParticipantOutputOptions): string {
 }
 
 export function renderWatchStatus(opts: WatchStatusOptions): string {
-  const others =
-    opts.presence === undefined
-      ? undefined
-      : opts.presence.participants.filter((participant) => !sameName(participant.name, opts.name));
-  const presenceLines =
-    opts.presence !== undefined && others !== undefined
-      ? ['', 'around the square', ...renderPresenceLines(others, opts.presence.now)]
-      : [];
+  const presence = opts.presence;
+  const presenceLines = presence === undefined ? [] : ['', 'around the square', ...renderPresenceLines(
+    presence.participants.filter(person => !sameName(person.name, opts.name) && (person.presence !== 'active'
+      || (person.lastActiveAt !== undefined && presence.now - person.lastActiveAt <= 8 * 60 * 60_000))), presence.now,
+  )];
   switch (opts.status) {
     case 'idle':
     case 'drained': {
@@ -91,29 +86,26 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
 
 /** Render settled perceive facts; no selection, terminal decisions, receipts or wait machinery. */
 export function renderPerceiveOutcome(
-  squarePath: string,
   data: PerceiveResult,
   options: PerceiveOptions = {},
   owner?: string,
   surface: PresentationSurface = 'cli',
+  host?: StatusResult,
 ): string {
-  const projection = data.observation;
-  if (projection === undefined) return '';
-  const location = projection.location ?? squarePath;
-  const name = projection.participant;
+  const { location, participant: name } = data;
+  const needsPerceive = host?.participants.find(person => sameName(person.name, name))?.deliveryAvailable === false;
   const stop = data.reason === 'drained' && data.activities.length > 0 ? undefined : data.reason;
-  const header = { participantCount: projection.standingCount };
+  const header = { participantCount: data.standingCount };
   const statusOptions = {
-    squarePath: location, name, owner, surface, presence: projection.presence,
-    showPerceiveHint: !projection.deliveryAvailable,
-    ownActivityCount: projection.ownActivityCount, hardCap: projection.hardCap,
+    squarePath: location, name, owner, surface, presence: host, showPerceiveHint: needsPerceive,
+    ownActivityCount: data.ownActivityCount, hardCap: data.hardCap,
   };
   if (stop === 'already-active' || stop === 'replaced') {
     return withPathOutput(location, stop === 'already-active'
       ? renderWatchAlreadyActive(statusOptions) : renderWatchReplaced(statusOptions), header);
   }
   const rendered = data.activities.map((activity) => renderAmbientEventFacts(activity, {
-    now: projection.now, perception: activity.perception, mention: options.mention ? name : undefined,
+    now: data.now, perception: activity.perception, mention: options.mention ? name : undefined,
   }).text).filter(Boolean).join('\n\n');
   const remaining = data.remaining === 0 ? ''
     : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${spellAction({ operation: 'perceive', owner,
@@ -122,7 +114,7 @@ export function renderPerceiveOutcome(
     ...statusOptions, status: stop,
     ...(stop === 'idle' && options.wait !== undefined ? { idleMs: parseDurationMs(options.wait) } : {}),
   });
-  const fallback = stop === undefined && !projection.deliveryAvailable && data.remaining === 0
+  const fallback = stop === undefined && needsPerceive && data.remaining === 0
     ? `${watchAction(statusOptions, 'perceive', { wait: '30m' })}\n  stay available for new activity` : '';
   const hint = data.hint === undefined ? '' : style('dim', `· ${data.hint}`);
   return withPathOutput(location, [terminal, rendered, hint, remaining, fallback].filter(Boolean).join('\n\n'), header);

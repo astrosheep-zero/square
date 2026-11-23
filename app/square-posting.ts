@@ -2,16 +2,15 @@ import { encodeDeliveryKey, parseSquarePostKey, squarePostKey, type DeliveryKey 
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { DeliveryLedger, type DeliveryRoute, type DeliverySession, type HandoffResult } from '../ledger/delivery-ledger.js';
+import { DeliveryLedger, type DeliveryRoute, type HandoffResult } from '../ledger/delivery-ledger.js';
 import { isProducerDispatchRoute } from '../ledger/session-lifecycle.js';
-import { openReadOnlyDeliveryLedger, retainDeliveryLedger } from '../ledger/delivery-lifetime.js';
+import { retainDeliveryLedger } from '../ledger/delivery-lifetime.js';
 import type { CardPresentation } from '../plugins/paseo/shared/card-presentation.js';
 import { coreDone } from '../core/decisions.js';
 import { SquareError, activityMetadataHasContent, nameKey, type DirectedNotificationRoute, type Owner, type Seat } from '../core/model.js';
 import type { SquareArtifactPort, SquarePost, SquareRead } from '../core/ports.js';
 import { readSquareHostObservations, seatMuteKey, deliverySessionsForSeats } from './square-notification-mute.js';
 import type { OperationControl } from '../core/neutral.js';
-import type { SquareObservation } from '../core/observations.js';
 import { formatActivityId } from '../core/square-core.js';
 import { spellAction } from '../surfaces/operations.js';
 
@@ -36,18 +35,12 @@ export const reconcile = (resource: SquareResource, signal?: AbortSignal): Promi
 // Posting is retryable after commit; a delivery failure cannot make a landed write unsent.
 export const flush = async (resource: SquareResource, signal?: AbortSignal): Promise<void> =>
   await flushSquarePosts(resource.artifact, resource.canonicalLocation, resource.clock, signal, resource.ledgerLocation, resource.dispatch).catch(() => undefined);
-export const observation = (resource: SquareResource, standingCount: number, participant?: string, now = resource.clock()): SquareObservation => ({
-  location: resource.location, standingCount, now, ...(participant === undefined ? {} : { participant }),
-});
 /** Host liveness and mute deadlines are read-only overlays fenced by captured seats. */
 export async function withHostPresence<T>(resource: SquareResource, select: (facts: SquareRead, deliveryAvailable: (name: string) => boolean,
   mutes: { readonly ledgerMutedUntil?: number; readonly seat: (name: string) => number | undefined }) => T,
-control?: OperationControl, includeMutes = false): Promise<T> {
+  control?: OperationControl): Promise<T> {
   const seats = (await resource.artifact.read(currentSeats, control?.signal)).value;
-  const observations = includeMutes
-    ? await readSquareHostObservations(resource.canonicalLocation, seats, resource.clock, control?.signal, resource.ledgerLocation)
-    : { sessions: await readSquareSessions(seats, control?.signal, resource.ledgerLocation, resource.clock),
-      seatMutedUntil: new Map<string, number>() };
+  const observations = await readSquareHostObservations(resource.canonicalLocation, seats, resource.clock, control?.signal, resource.ledgerLocation);
   const captured = new Map(seats.map(seat => [nameKey(seat.participant), seat]));
   return (await resource.artifact.read(facts => {
     const seat = (name: string): Seat | undefined => {
@@ -128,16 +121,6 @@ function renderPost(location: string, post: SquarePost, replyTo?: string): { tex
     '</square-activity>'].join('\n');
   return { text, full, details: { kind: 'presentation', origin, ref, author: post.from, label: 'express',
     body: rawBody, at: post.at, reach: route, recipient: post.recipient, ...(replyTo === undefined ? {} : { replyTo }) } };
-}
-/** Read-only host observations for status; callers fence them against the captured World seats. */
-export async function readSquareSessions(seats: readonly Seat[], signal: AbortSignal | undefined, ledgerLocation: string, clock: () => number = Date.now): Promise<ReadonlyMap<string, DeliverySession | undefined>> {
-  requireLedgerLocation(ledgerLocation);
-  requireFiniteClock(clock);
-  if (!seats.length) return new Map();
-  const ledger = await openReadOnlyDeliveryLedger(ledgerLocation, clock, signal);
-  if (ledger === undefined) return new Map();
-  try { return await deliverySessionsForSeats(ledger, seats, signal); }
-  finally { await ledger.close(); }
 }
 /** A first producer join may register an absent owner, never resume or revive one. */
 export async function ensureInitialDeliverySession(owner: Seat['owner'], route: DeliveryRoute | undefined, signal: AbortSignal | undefined, ledgerLocation: string, clock: () => number = Date.now): Promise<boolean> {

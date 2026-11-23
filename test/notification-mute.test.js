@@ -47,7 +47,7 @@ test('global and captured-seat holds are independent and repeat only their own d
   const prefix = seatMutePrefix(location, { participant: 'Alice', generation: f.alice.generation });
   const id = seatMuteId('test:alice', prefix);
 
-  assert.deepEqual(await f.alice.mute({ duration: '100ms' }), { mutedUntil: 1100 });
+  assert.deepEqual(await f.alice.mute({ duration: '100ms' }), { mutedUntil: 1100, participant: 'Alice', standingCount: 2 });
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:alice', id)).expiresAt, 1100);
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), null);
 
@@ -55,14 +55,14 @@ test('global and captured-seat holds are independent and repeat only their own d
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), 1050);
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:alice', id)).expiresAt, 1100);
 
-  assert.deepEqual(await f.alice.mute({ duration: '200ms' }), { mutedUntil: 1200 });
+  assert.equal((await f.alice.mute({ duration: '200ms' })).mutedUntil, 1200);
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), 1050);
   await f.bob.mute({ duration: '300ms' });
   const bobPrefix = seatMutePrefix(location, { participant: 'Bob', generation: f.bob.generation });
   const bobId = seatMuteId('test:bob', bobPrefix);
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:bob', bobId)).expiresAt, 1300);
 
-  assert.deepEqual(await f.alice.mute({ duration: 'off' }), { mutedUntil: null });
+  assert.equal((await f.alice.mute({ duration: 'off' })).mutedUntil, null);
   assert.equal(await suppression(f.ledgerLocation, f.clock, 'test:alice', id), undefined);
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:bob', bobId)).expiresAt, 1300);
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), 1050);
@@ -134,7 +134,7 @@ test('a seat-only configured-clock hold survives a new express and resumes that 
   const f = await fixture(t);
   const squarePath = await canonicalPath(f.file);
   const seatId = seatMuteId('test:alice', seatMutePrefix(squarePath, { participant: 'Alice', generation: f.alice.generation }));
-  assert.deepEqual(await f.alice.mute({ duration: '100ms' }), { mutedUntil: 1100 });
+  assert.equal((await f.alice.mute({ duration: '100ms' })).mutedUntil, 1100);
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), null, 'seat-only holds no global deadline');
   assert.equal((await f.bob.express('held for one seat', { mentions: ['Alice'], force: true })).activity.id, 'act/2');
   assert.equal((await f.alice.express('delivered next door', { mentions: ['Bob'], force: true })).activity.id, 'act/3');
@@ -265,7 +265,7 @@ test('status, participants and discovery expose active deadlines without creatin
   await muteDeliveryLedger({ duration: '50ms', ledgerLocation: f.ledgerLocation, clock: f.clock });
 
   const before = (await f.square.status()).participants.map(({ name, presence, deliveryAvailable }) => ({ name, presence, deliveryAvailable }));
-  const status = await f.square.status({ viewer: 'Alice', observe: true });
+  const status = await f.square.status({ viewer: 'Alice' });
   assert.deepEqual(status.participants.map(({ name, presence, deliveryAvailable }) => ({ name, presence, deliveryAvailable })), before);
   assert.equal(status.ledgerMutedUntil, 1050);
   assert.equal(status.participants.find(person => person.name === 'Alice').mutedUntil, 1100);

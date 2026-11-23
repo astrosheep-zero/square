@@ -6,9 +6,9 @@ import path from 'node:path';
 import { createArtifactPort, createSquareFile } from '../dist/artifact/artifact.js';
 import { Square } from '../dist/api/square-api.js';
 import { resolveKnownName } from '../dist/core/decisions.js';
-import { perceivePresence, entryPresentation, selectHistory, queryParticipants, recoveryObservation, queryStatus, streamProjection } from '../dist/core/observations.js';
+import { entryPresentation, selectHistory, queryParticipants, recoveryObservation, queryStatus, streamProjection } from '../dist/core/observations.js';
 
-const queryContext = { location: 'memory', now: 100_000 };
+const queryTime = 100_000;
 
 function fixture(acts, observations = {}) {
   return { hardCap: null, preamble: ['context', '---'], warmup: ['scene'], acts,
@@ -111,15 +111,15 @@ test('history filters audience, senders and search in storage before paging and 
   acts.push({ kind: 'say', actor: 'Cara', at: 209, index: 209, body: 'second needle', mentions: ['Bob'] });
   const { square, reads, cell } = measuredSquare(fixture(acts));
   try {
-    const query = { from: ['CARA'], to: 'bob', search: '/needle/', limit: 1, observe: true };
+    const query = { from: ['CARA'], to: 'bob', search: '/needle/', limit: 1 };
     const selected = (await square.artifact.read(facts => selectHistory(facts, query, 209))).value;
     assert.deepEqual(selected.activities.map((a) => a.index), [209]);
     assert.equal(selected.totalMatches, 2);
     assert.deepEqual(selected.continuation, { direction: 'before', cursor: 'act/209', limit: 1 });
     const app = await archiveSquare(t, fixture(acts));
-    const outcome = await app.history({ ...query, observe: true });
-    assert.equal(outcome.observation.sayNumbers[209], 2);
-    assert.deepEqual(outcome.observation.continuation, selected.continuation);
+    const outcome = await app.history(query);
+    assert.equal(outcome.sayNumbers[209], 2);
+    assert.deepEqual(outcome.continuation, selected.continuation);
     assert.deepEqual(outcome.activities.map((activity) => activity.id), ['act/209']);
     assert.equal(reads.directed, 1);
     assert.deepEqual(reads.batches.filter((ids) => ids.length > 0), [[209]]);
@@ -157,15 +157,15 @@ test('history pages forward with after and backward otherwise, always displaying
     { kind: 'say', actor: 'Alice', at: 6, index: 101, body: 'latest', mentions: ['Bob'] },
   ]);
   const app = await archiveSquare(t, state);
-  const recent = await app.history({ observe: true, limit: 3 });
+  const recent = await app.history({ limit: 3 });
   assert.deepEqual(recent.activities.map(a => a.id), ['act/50', 'act/80', 'act/101']);
-  assert.deepEqual(recent.observation.continuation, { direction: 'before', cursor: 'act/50', limit: 3 });
-  assert.deepEqual(recent.observation.sayNumbers, { 101: 2 });
-  assert.deepEqual(recent.observation.presenceAnchors, { 101: ['Alice'] });
-  assert.equal(recent.observation.standingCount, 2);
-  const forward = await app.history({ observe: true, after: 'act/0', before: '1970-01-01T00:00:00.006Z', limit: 3 });
+  assert.deepEqual(recent.continuation, { direction: 'before', cursor: 'act/50', limit: 3 });
+  assert.deepEqual(recent.sayNumbers, { 101: 2 });
+  assert.deepEqual(recent.presenceAnchors, { 101: ['Alice'] });
+  assert.equal(recent.standingCount, 2);
+  const forward = await app.history({ after: 'act/0', before: '1970-01-01T00:00:00.006Z', limit: 3 });
   assert.deepEqual(forward.activities.map(a => a.id), ['act/2', 'act/7', 'act/50']);
-  assert.deepEqual(forward.observation.continuation, { direction: 'after', cursor: 'act/50', limit: 3 });
+  assert.deepEqual(forward.continuation, { direction: 'after', cursor: 'act/50', limit: 3 });
 });
 
 test('history applies relative time bounds, pages matches before adding context, and clips a lone body', async t => {
@@ -199,7 +199,8 @@ test('status settles viewer perception and retains exact-spelling rejoin annotat
   ];
   const { square, reads, cell } = measuredSquare(fixture(acts));
   try {
-    const { observation: projection } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, '', true))).value;
+    const projection = (await square.artifact.read(facts => queryStatus(facts, queryTime))).value;
+    assert.equal(projection.latestActivity.id, 'act/3');
     assert.equal(projection.latestPerception, 'presence');
     assert.equal(projection.joinCount, 4);
     assert.deepEqual(projection.joins.map(({ activity, rejoined }) => [activity.id, rejoined]), [['act/5', false], ['act/6', true], ['act/7', false]]);
@@ -207,7 +208,7 @@ test('status settles viewer perception and retains exact-spelling rejoin annotat
     assert.deepEqual(reads.batches, [[3, 5, 6, 7]]);
     assert.deepEqual(reads.singles, []);
     assert.deepEqual(reads.ordinals, []);
-    const { observation: own } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'ALICE', true))).value;
+    const own = (await square.artifact.read(facts => queryStatus(facts, queryTime, 'ALICE'))).value;
     assert.equal(own.latestPerception, 'full');
     assert.equal(own.viewer, 'Alice');
     assert.deepEqual(own.attentionNames, ['Alice']);
@@ -224,44 +225,28 @@ test('status keeps one filtered roster and ignores read activities when selectin
   ]);
   state.hardCap = 7;
   state.throttlePerMinute = 3;
-  const { square, cell } = measuredSquare(state);
-  try {
-    const before = (await cell.read((facts) => ({ header: facts.header(), roster: facts.roster() }))).value;
-    const { observation: projection, ...data } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'alice', true))).value;
-    assert.deepEqual(data, {
-      hardCap: 7, throttlePerMinute: 3, now: 100_000, listening: [],
-      latestActivity: { id: 'act/3', at: 3, kind: 'done', actor: 'Gone', mentions: [] },
-      participants: [
-        { name: 'Alice', deliveryAvailable: false, listening: [], activityCount: 0, lastActiveAt: 4, presence: 'active', unreadActivityCount: 0, pendingMentionCount: 0 },
-        { name: 'Gone', deliveryAvailable: false, listening: [], activityCount: 0, lastActiveAt: 3, presence: 'done', unreadActivityCount: 0, pendingMentionCount: 0 },
-      ],
-    });
-    assert.equal(projection.knownParticipantCount, 3);
-    const app = await archiveSquare(t, state);
-    const status = await app.status({ viewer: 'alice' });
-    const observed = await app.status({ viewer: 'alice', observe: true });
-    assert.deepEqual(observed.latestActivity, status.latestActivity);
-    assert.deepEqual(projection.orderedHereNames, ['Alice']);
-    assert.equal(projection.classificationByName.Reserved, 'not-joined');
-    assert.equal(Object.hasOwn(projection, 'latestAct'), false);
-    assert.equal(Object.hasOwn(projection, 'status'), false);
-    assert.equal(Object.hasOwn(projection, 'participants'), false);
-    assert.equal(Object.hasOwn(projection, 'now'), false);
-    const roster = (await square.artifact.read((facts) => queryParticipants(facts, queryContext, true))).value;
-    assert.deepEqual(roster.participants.map((p) => p.name), ['Alice', 'Gone', 'Reserved']);
-    assert.equal(Object.hasOwn(roster.observation, 'participants'), false);
-    assert.deepEqual((await cell.read((facts) => ({ header: facts.header(), roster: facts.roster() }))).value, before);
-  } finally { await cell.close(); }
+  const app = await archiveSquare(t, state);
+  const status = await app.status({ viewer: 'alice' });
+  assert.deepEqual(status.latestActivity, { id: 'act/3', at: 3, kind: 'done', actor: 'Gone', mentions: [] });
+  assert.equal(status.latestPerception, 'full');
+  assert.deepEqual(status.participants.map(p => p.name).sort(), ['Alice', 'Gone']);
+  assert.equal(status.knownParticipantCount, 3);
+  assert.equal(status.classificationByName.Reserved, 'not-joined');
+  const roster = await app.participants({ local: true });
+  assert.deepEqual(roster.participants.map(p => p.name), ['Alice', 'Gone', 'Reserved']);
 });
 
-test('observed lifecycle renders its committed public activity and listener keeps only its target', async t => {
+test('attention and done return facts from the committed activity', async t => {
   const body = "test" + ":" + ('one');
   const square = Square.inMemory({ markdown: 'context', clock: () => 100 });
   t.after(() => square.close());
   const alice = (await square.join('Alice', { owner: body })).participant;
-  const listened = await alice.attention({ target: 'Bob', state: 'listen' }, { observe: true });
-  assert.equal(listened.observation.target, 'Bob');
-  assert.equal(Object.hasOwn(listened.observation, 'requestedTarget'), false);
+  const listened = await alice.attention({ target: 'Bob', state: 'listen' });
+  assert.equal(listened.target, 'Bob');
+  assert.equal(listened.activity.target, 'Bob');
+  const done = await alice.done();
+  assert.equal(done.activity.actor, 'Alice');
+  assert.equal(done.standingCount, 0);
 });
 
 test('recipient stream advances a raw page without bodies and retains seen pre-rejoin history', async () => {
@@ -285,7 +270,7 @@ test('recipient stream advances a raw page without bodies and retains seen pre-r
   } finally { await cell.close(); }
 });
 
-test('presence classifications and nearby watch participants are settled by projections without writes', async () => {
+test('participant and status presence classifications agree without writes', async () => {
   const now = 100_000;
   const state = fixture([
     { kind: 'join', actor: 'Old', at: now - 9 * 60 * 60_000, index: 0 },
@@ -296,21 +281,16 @@ test('presence classifications and nearby watch participants are settled by proj
     { kind: 'done', actor: 'Done', at: now - 9 * 60 * 60_000, index: 5 },
   ]);
   state.runtime.leases.Watcher = { leaseId: 'watching', heartbeatAt: now, expiresAt: now + 60_000 };
-  const { square, reads, cell } = measuredSquare(state);
+  const { square, cell } = measuredSquare(state);
   try {
     const before = (await cell.read((facts) => ({ lease: facts.lease('Watcher'), header: facts.header() }))).value;
-    const { observation: participants } = (await square.artifact.read((facts) => queryParticipants(facts, queryContext, true))).value;
-    const { observation: status } = (await square.artifact.read((facts) => queryStatus(facts, queryContext, 'Recent', true))).value;
+    const participants = (await square.artifact.read(facts => queryParticipants(facts, queryTime))).value;
+    const status = (await square.artifact.read(facts => queryStatus(facts, queryTime, 'Recent'))).value;
     assert.deepEqual(participants.classificationByName, { Old: 'lingering', Watcher: 'here', Lingering: 'lingering', Recent: 'here', Done: 'done' });
     assert.deepEqual(participants.orderedHereNames, ['Watcher', 'Recent']);
     assert.equal(participants.lingeringCount, 2);
     assert.deepEqual(status.classificationByName, participants.classificationByName);
     assert.deepEqual(status.orderedHereNames, participants.orderedHereNames);
-    const bodyReads = { batches: reads.batches.length, singles: reads.singles.length, ordinals: reads.ordinals.length };
-    const presence = (await square.artifact.read(facts => perceivePresence(facts, square.clock()))).value;
-    assert.deepEqual(new Set(presence.participants.map((participant) => participant.name)), new Set(['Watcher', 'Lingering', 'Recent', 'Done']));
-    assert.equal(presence.now, now);
-    assert.deepEqual({ batches: reads.batches.length, singles: reads.singles.length, ordinals: reads.ordinals.length }, bodyReads);
     assert.deepEqual((await cell.read((facts) => ({ lease: facts.lease('Watcher'), header: facts.header() }))).value, before);
   } finally { await cell.close(); }
 });

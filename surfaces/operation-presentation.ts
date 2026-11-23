@@ -63,52 +63,44 @@ export function renderSquareList(data: DiscoveryResult, projection: { now: numbe
 const STATUS_PARTICIPANT_PREVIEW_LIMIT = 10;
 
 /** A join receipt, rendered from the observer's own participant name. */
-export function renderJoinResult(data: JoinResult, owner?: string, surface: PresentationSurface = 'cli'): string | undefined {
-  const after = data.observation;
-  if (after === undefined) return undefined;
-  const entry = after.entry;
+export function renderJoinResult(data: JoinResult, owner?: string, surface: PresentationSurface = 'cli', deliveryAvailable?: boolean): string {
+  const { entry } = data;
   const name = data.participant.name;
-  const activities = (entry?.recentActivities ?? []).map((event) => renderAmbientEventFacts(event, {
-    now: after.now, preview: 200, perception: event.perception,
+  const activities = entry.recentActivities.map((event) => renderAmbientEventFacts(event, {
+    now: data.now, preview: 200, perception: event.perception,
   }).text).filter(Boolean).join('\n\n');
-  const fallback = after.deliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
-    '', spellAction({ operation: 'perceive', owner, args: { location: after.location, as: name, wait: '30m' } }, surface),
+  const fallback = deliveryAvailable === undefined ? [] : deliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
+    '', spellAction({ operation: 'perceive', owner, args: { location: data.location, as: name, wait: '30m' } }, surface),
     '  · stay within earshot — keep this perceive open for new activity',
   ];
   const entryLine = data.kind === 'joined' ? '● you stepped into the square'
     : data.kind === 'reconnected' ? '● you are already in the square'
       : `✓ you banished the original ${participantIdentity(name)} — the name is yours`;
   const isRejoin = data.kind !== 'joined';
-  const entryScene = isRejoin || entry === undefined ? '' : entry.joinedBefore
+  const entryScene = isRejoin ? '' : entry.joinedBefore
     ? '*the flagstones are where you left them. so is your shadow.*' : entry.scene;
-  return withPathOutput(after.location, [
+  return withPathOutput(data.location, [
     entryLine, '',
     ...(entryScene === '' ? [] : ['', entryScene]),
-    ...(isRejoin || !entry?.joinContext ? [] : ['', style('dim', 'context'), entry.joinContext]),
-    ...(after.enrichmentUnavailable ? ['  · joined; recent activity and context are unavailable right now'] : []),
+    ...(isRejoin || !entry.joinContext ? [] : ['', style('dim', 'context'), entry.joinContext]),
     ...(isRejoin || activities === '' ? [] : ['', style('dim', 'recent activity'), activities]),
     ...fallback,
-  ].join('\n'), { participantCount: after.standingCount });
+  ].join('\n'), { participantCount: data.standingCount });
 }
 
 function isGestureOnly(body: string): boolean {
   return /\*[^*]*\*/.test(body) && body.replace(/\*[^*]*\*/g, '').trim() === '';
 }
 
-export function renderExpression(squarePath: string, data: ExpressResult, owner?: string, surface: PresentationSurface = 'cli'): string | undefined {
-  const projection = data.observation;
-  if (projection === undefined) return undefined;
-  const name = projection.participant;
-  const context = projection.context;
+export function renderExpression(data: ExpressResult, owner?: string, surface: PresentationSurface = 'cli'): string {
+  const { activity, context } = data;
   const pending = context.activities.length === 0 ? '' : '\n\n' + [
     'Unread context · preview only, not consumed',
     ...context.activities.map(item => `· ${participantIdentity(item.actor)} · ${item.id}\n  ${item.preview}${item.truncated ? '… (truncated)' : ''}`),
     ...(context.remaining === 0 ? [] : [`· ${context.remaining} more unread activities`]),
-    spellAction({ operation: 'perceive', owner, args: { location: projection.location, as: name } }, surface),
+    spellAction({ operation: 'perceive', owner, args: { location: data.location, as: activity.actor } }, surface),
   ].join('\n');
-  const ownCount = projection.ownActivityCount;
-  const capCount = projection.hardCap === null ? '' : ` · ${ownCount}/${projection.hardCap}`;
-  const activity = data.activity;
+  const capCount = data.hardCap === null ? '' : ` · ${data.ownActivityCount}/${data.hardCap}`;
   const confirmation = `● ${activity.mentions.length > 0
     ? `you walk over to ${activity.mentions.map((target) => participantIdentity(target)).join(', ')}`
     : activity.metadata !== undefined && (activity.body ?? '').trim() === '' ? 'structured activity lands' : isGestureOnly(activity.body ?? '') ? 'your gesture lands' : 'your words land'} — ${activity.id}${style('dim', capCount)}`;
@@ -116,20 +108,18 @@ export function renderExpression(squarePath: string, data: ExpressResult, owner?
     .filter((name, index, names) => names.findIndex((other) => sameName(name, other)) === index);
   const reachNotice = notReached.map(name => `\n⚠ ${participantIdentity(name)} is not in this square.`).join('');
   const awayNotice = (data.awayRecipients ?? []).map(name => `\n⚠ ${participantIdentity(name)} is away.`).join('');
-  return withPathOutput(projection.location ?? squarePath,
+  return withPathOutput(data.location,
     confirmation + (data.hint ? `\n${style('dim', `· ${data.hint}`)}` : '') + reachNotice + awayNotice + pending,
-    { participantCount: projection.standingCount });
+    { participantCount: data.standingCount });
 }
 
-export function renderStatusResult(squarePath: string, data: StatusResult, options: { surface?: PresentationSurface } = {}): string | undefined {
-  const presentation = data.observation;
-  if (presentation === undefined) return undefined;
+export function renderStatusResult(squarePath: string, data: StatusResult, options: { surface?: PresentationSurface } = {}): string {
   const participantsByName = new Map(data.participants.map((participant) => [participant.name, participant]));
-  const orderedHere = presentation.orderedHereNames.map((name) => participantsByName.get(name)!);
-  const lingering = presentation.lingeringCount;
+  const orderedHere = data.orderedHereNames.map((name) => participantsByName.get(name)!);
+  const lingering = data.lingeringCount;
   const away = data.participants.filter(participant => participant.presence === 'away');
   const people: string[] = [];
-  if (presentation.standingCount === 0) {
+  if (data.standingCount === 0) {
     people.push('  ○ nobody in the square');
   } else {
     if (orderedHere.length === 0) people.push('  ○ nobody here right now');
@@ -142,7 +132,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
         : participant.activityCount > 0
           ? `is nearby · ${formatRelativeTime(participant.lastActiveAt ?? data.now, data.now)}`
           : `is nearby · quiet · ${participant.lastActiveAt === undefined ? 'just now' : formatRelativeTime(participant.lastActiveAt, data.now)}`;
-      const showAttention = presentation.attentionNames.includes(participant.name);
+      const showAttention = data.attentionNames.includes(participant.name);
       const attention = !showAttention
         ? ''
         : participant.pendingMentionCount > 0
@@ -166,7 +156,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
     : renderAmbientEventFacts(data.latestActivity, {
         now: data.now,
         preview: 200,
-        perception: presentation.latestPerception,
+        perception: data.latestPerception,
       });
   const latest = visible.text === ''
     ? [data.latestActivity === undefined
@@ -175,10 +165,10 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
     : [`  ${visible.text.replace(/\n/g, '\n  ')}`];
   // Presence events after the latest public act: otherwise the roster can say someone is
   // here while the latest line shows them leaving, with nothing to reconcile the two.
-  for (const { activity, rejoined } of presentation.joins) {
+  for (const { activity, rejoined } of data.joins) {
     latest.push(style('dim', `  → ${participantIdentity(activity.actor)} ${rejoined ? 'stepped back in' : 'stepped in'} · ${formatRelativeTime(activity.at, data.now)}`));
   }
-  if (presentation.joinCount > 3) latest.push(style('dim', `  → … ${presentation.joinCount - 3} more stepped in`));
+  if (data.joinCount > 3) latest.push(style('dim', `  → … ${data.joinCount - 3} more stepped in`));
   if (visible.bodyClipped && data.latestActivity !== undefined) {
     latest.push(spellAction({ operation: 'history', args: { location: squarePath, ids: [data.latestActivity.id], context: 2, maxChars: [...(data.latestActivity.body ?? '')].length } }, options.surface));
   }
@@ -199,14 +189,12 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
       ...(data.listening.length === 0 ? ['  ○ not turned toward anyone'] : data.listening.map((name) => `  · ${participantIdentity(name)}`)),
     ]),
   ].join('\n');
-  return withPathOutput(squarePath, output, { participantCount: presentation.standingCount });
+  return withPathOutput(squarePath, output, { participantCount: data.standingCount });
 }
 
-export function renderListenerChange(squarePath: string, state: AttentionInput['state'], data: ListenerChangeResult): string | undefined {
-  const projection = data.observation;
-  if (projection?.participant === undefined) return undefined;
-  const actor = participantIdentity(projection.participant);
-  const target = participantIdentity(projection.target);
+export function renderListenerChange(squarePath: string, state: AttentionInput['state'], data: ListenerChangeResult): string {
+  const actor = participantIdentity(data.participant);
+  const target = participantIdentity(data.target);
   const action = data.activity !== null
     ? state === 'listen' ? `${actor} turns an ear toward ${target}`
       : state === 'ignore' ? `${actor} turns away from ${target}`
@@ -215,25 +203,23 @@ export function renderListenerChange(squarePath: string, state: AttentionInput['
       : state === 'ignore' ? `${actor} already ignores ${target}`
         : `${actor} already hears only direct attention from ${target}`;
   return withPathOutput(squarePath, `${data.activity === null ? '○' : '·'} ${action}`, {
-    participantCount: projection.standingCount,
+    participantCount: data.standingCount,
   });
 }
 
-export function renderMuteResult(squarePath: string | undefined, data: MuteResult): string {
-  const name = data.observation?.participant;
+export function renderMuteResult(squarePath: string | undefined, data: MuteResult | Pick<MuteResult, 'mutedUntil'>): string {
+  const name = 'participant' in data ? data.participant : undefined;
   const until = data.mutedUntil === null ? '' : ` until ${formatTimestamp(data.mutedUntil)}`;
   const line = data.mutedUntil !== null
     ? name === undefined ? `○ notifications pause${until}` : `○ ${participantIdentity(name)} steps back from notifications${until}`
     : name === undefined ? '● the notification hold ends' : `● ${participantIdentity(name)} ends their notification hold`;
   return squarePath === undefined ? `${line}\n`
-    : withPathOutput(squarePath, line, { participantCount: data.observation?.standingCount });
+    : withPathOutput(squarePath, line, { participantCount: 'standingCount' in data ? data.standingCount : undefined });
 }
 
-export function renderLifecycleResult(squarePath: string, data: LifecycleResult): string | undefined {
-  const projection = data.observation;
-  if (projection === undefined) return undefined;
-  return withPathOutput(projection.location ?? squarePath, `○ you stepped out — your footsteps fade · ${data.activity.id}`, {
-    participantCount: projection.standingCount,
+export function renderLifecycleResult(data: LifecycleResult): string {
+  return withPathOutput(data.location, `○ you stepped out — your footsteps fade · ${data.activity.id}`, {
+    participantCount: data.standingCount,
   });
 }
 

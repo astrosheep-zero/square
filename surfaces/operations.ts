@@ -6,7 +6,7 @@ import { parseActivityId, PAGE_CAP, ACTIVITY_ID_PATTERN, DEFAULT_LIST_DEPTH, DEF
 import { parseDurationMs, parseTimeOrRelative } from '../core/time.js';
 import { compileSearchPattern, historySearch } from '../core/search.js';
 import { SquareError, parseParticipantList, type ActivityMetadata, type Owner, type WakeAddress } from '../core/model.js';
-import type { Square, Participant } from '../api/square-api.js';
+import type { Square } from '../api/square-api.js';
 import type { DiscoveryResult, ExpressResult, HistoryResult, JoinResult, LifecycleResult, ListenerChangeResult, MuteResult, OperationControl, PerceiveResult, StatusResult } from '../api/types.js';
 
 export type PresentationSurface = 'cli' | 'tool';
@@ -15,14 +15,14 @@ export interface Suggestion { operation: string; args?: Input; owner?: string; h
 interface Scene { surface?: PresentationSurface }
 interface OperationText {
   list(result: DiscoveryResult, projection: Scene & { now: number; depth: number; limit: number }): string;
-  join(result: JoinResult, owner?: Owner, surface?: PresentationSurface): string | undefined;
-  express(location: string, result: ExpressResult, owner?: Owner, surface?: PresentationSurface): string | undefined;
-  perceive(location: string, result: PerceiveResult, options: PerceiveOptions, owner?: Owner, surface?: PresentationSurface): string;
+  join(result: JoinResult, owner?: Owner, surface?: PresentationSurface, deliveryAvailable?: boolean): string;
+  express(result: ExpressResult, owner?: Owner, surface?: PresentationSurface): string;
+  perceive(result: PerceiveResult, options: PerceiveOptions, owner?: Owner, surface?: PresentationSurface, host?: StatusResult): string;
   history(location: string, result: HistoryResult, options: Scene & { query: HistoryQuery }): string | undefined;
   attention(location: string, state: AttentionInput['state'], result: ListenerChangeResult): string | undefined;
-  done(location: string, result: LifecycleResult): string | undefined;
-  status(location: string, result: StatusResult, options: Scene): string | undefined;
-  mute(location: string | undefined, result: MuteResult): string;
+  done(result: LifecycleResult): string;
+  status(location: string, result: StatusResult, options: Scene): string;
+  mute(location: string | undefined, result: MuteResult | Pick<MuteResult, 'mutedUntil'>): string;
   perceiveProgress(replaced: boolean): string;
   perceiveStopped(location: string): string;
 }
@@ -78,8 +78,6 @@ const from = z.array(z.string()).optional().describe('Only what these participan
 const fromHint = { split: parseParticipantList, bare: true, value: 'names' };
 const body = z.string().describe('What you say or do. Markdown works; *asterisks* mark an action.');
 const bodyHint = { positional: true, value: 'body | -' };
-const observe = { observe: true } as const;
-const observation = { observe: z.boolean().optional() };
 const ids = z.array(activityId).optional().describe('Only these activity IDs, like ["act/12"].');
 const idHint = { value: 'activity-ids', bare: true };
 const pageLimit = z.number().int().min(1).max(PAGE_CAP).optional();
@@ -134,14 +132,13 @@ const muteShape = {
 };
 const sdkSchemas = {
   list: z.strictObject({ ...listShape, owner: z.custom<Owner>().optional(), ledgerLocation: z.string().optional(), clock: z.custom<() => number>().optional() }),
-  status: z.strictObject({ viewer, ...observation }),
-  done: z.strictObject({ body: doneBody, ...observation }),
-  observation: z.strictObject(observation),
-  join: z.strictObject({ ...joinShape, ...observation, owner: z.custom<Owner>(), wakeAddress: z.custom<WakeAddress>().optional() }),
-  express: z.strictObject({ ...expressShape, body: body.optional(), metadata: z.custom<ActivityMetadata>().optional(), ...observation }),
-  perceive: z.strictObject({ ...perceiveShape, ...observation }).superRefine((input, ctx) =>
+  status: z.strictObject({ viewer }),
+  done: z.strictObject({ body: doneBody }),
+  join: z.strictObject({ ...joinShape, owner: z.custom<Owner>(), wakeAddress: z.custom<WakeAddress>().optional() }),
+  express: z.strictObject({ ...expressShape, body: body.optional(), metadata: z.custom<ActivityMetadata>().optional() }),
+  perceive: z.strictObject(perceiveShape).superRefine((input, ctx) =>
     checkReplace(input, (field, message) => ctx.addIssue({ code: 'custom', path: [field], message }))),
-  history: z.strictObject({ ...historyShape, ...observation }),
+  history: z.strictObject(historyShape),
   attention: z.strictObject(attentionShape),
   mute: z.strictObject(muteShape),
 };
@@ -221,10 +218,6 @@ function cliExpression(binding: OperationBinding, input: ExpressionInput, invali
   return binding.expressFromCli!(control => open(binding, input.location, control), input, binding.identity, binding.ownerFlag, invalidReply);
 }
 
-export function sendExpression(participant: Participant, body: string | undefined, options: ExpressOptions, control: OperationControl) {
-  return participant.express(body, { ...options, ...observe }, control);
-}
-
 export const OPERATIONS: readonly Operation[] = [
   operation('list', 'Find nearby squares, including your joined names and what is waiting for them.', listShape,
   { location: false, group: 'host', aliases: ['ls'], fields: { after: { once: true, value: 'path' } } }, async (binding, options, control) => {
@@ -239,7 +232,10 @@ export const OPERATIONS: readonly Operation[] = [
   { as: requiredParticipant }, (binding, { as, location, ...options }, control) =>
     inSquare(binding, { location }, control, async square => {
       const identity = binding.identity();
-      return binding.text.join(await square.join(binding.api.requireJoinName(as), { ...identity, owner: binding.api.requireOwner(identity.owner), ...options, ...observe }, control), binding.ownerFlag, binding.surface);
+      const result = await square.join(binding.api.requireJoinName(as), { ...identity, owner: binding.api.requireOwner(identity.owner), ...options }, control);
+      const host = await square.status({}, control).catch(() => undefined);
+      const available = host?.participants.find(person => person.name === result.participant.name)?.deliveryAvailable;
+      return binding.text.join(result, binding.ownerFlag, binding.surface, available);
     })),
   operation('express', 'Speak or act in the square. Plain words, half-formed ideas and *actions* all belong here. Said to no one in particular, your words reach those who listen to you.', expressShape,
   { as: participant, fields: { body: bodyHint, mentions: { flag: '--mention', repeat: true, value: 'name', split: name => name === '' ? [] : [name] }, reply: { value: 'activity-id' }, force: { short: '-f' }, metadata: { value: 'json' } },
@@ -253,16 +249,16 @@ export const OPERATIONS: readonly Operation[] = [
   }, (binding, input, control) => {
     if (binding.surface === 'cli') return cliExpression(binding, input);
     const { body, as, location, metadata: _metadata, ...options } = input;
-    return inSquare(binding, { location }, control, async (square, location) => binding.text.express(location,
-      await sendExpression(await binding.api.selectOwnSeat(square, binding.identity().owner, as), body, options, control), binding.ownerFlag, binding.surface));
+    return inSquare(binding, { location }, control, async square => binding.text.express(
+      await (await binding.api.selectOwnSeat(square, binding.identity().owner, as)).express(body, options, control), binding.ownerFlag, binding.surface));
   }),
   operation('perceive', 'Take in what reached you since you last looked: mentions, replies, and words from those you listen to.', perceiveShape,
   { as: participant, fields: { ids: idHint, from: fromHint, wait: { bare: true, value: 'duration' } }, check: checkReplace,
     interrupted: (location, text) => text.perceiveStopped(location),
   }, (binding, { location, as, ...args }, control) => {
     const options = { ...args, limit: args.limit ?? PERCEIVE_DEFAULT_LIMIT };
-    return inSquare(binding, { location }, control, async (square, location) => {
-      const result = await (await binding.api.selectOwnSeat(square, binding.identity().owner, as)).perceive({ ...options, ...observe }, {
+    return inSquare(binding, { location }, control, async square => {
+      const result = await (await binding.api.selectOwnSeat(square, binding.identity().owner, as)).perceive(options, {
         ...control, onProgress(progress) {
           control.onProgress?.(progress);
           if (progress.kind === 'perceive-started' && progress.replacementRequested)
@@ -270,33 +266,34 @@ export const OPERATIONS: readonly Operation[] = [
         },
       });
       binding.exit?.(result.reason === 'already-active' || result.reason === 'capped' ? 1 : 0);
-      return binding.text.perceive(location, result, options, binding.ownerFlag, binding.surface);
+      const host = await square.status({}, control).catch(() => undefined);
+      return binding.text.perceive(result, options, binding.ownerFlag, binding.surface, host);
     });
   }),
   operation('history', 'Look back at what was said without taking anything in.', historyShape,
   { fields: { ids: idHint, context: { short: '-C', preferShort: true }, from: { ...fromHint, bare: false },
     after: { value: 'id-or-time' }, before: { value: 'id-or-time' }, to: { value: 'name' } } },
   (binding, { location, as: _as, ...query }, control) => inSquare(binding, { location }, control, async (square, location) =>
-    binding.text.history(location, await square.history({ ...query, ...observe }, control), { query, surface: binding.surface }))),
+    binding.text.history(location, await square.history(query, control), { query, surface: binding.surface }))),
   operation('attention', 'Turn toward someone or away from them: listen, ignore, or return to neutral.', attentionShape,
   { as: participant, fields: { target: { positional: true, value: 'participant' } }, projections: [
     { name: 'listen', fixed: { state: 'listen' }, summary: "Turn an ear toward one participant's future activity." },
     { name: 'unlisten', fixed: { state: 'neutral' }, summary: "Return to direct attention from one participant." },
     { name: 'ignore', fixed: { state: 'ignore' }, summary: "Stop hearing one participant's future activity." },
   ] }, (binding, { location, as, ...input }, control) => inSquare(binding, { location }, control, async (square, location) =>
-    binding.text.attention(location, input.state, await (await binding.api.selectOwnSeat(square, binding.identity().owner, as)).attention(input, observe, control)))),
+    binding.text.attention(location, input.state, await (await binding.api.selectOwnSeat(square, binding.identity().owner, as)).attention(input, control)))),
   operation('done', 'Step out of the square.', {}, {
     as: participant, cliShape: { body: z.string().optional().describe('Leave with these parting words.') }, fields: { body: bodyHint },
   }, async (binding, { location, as, body }, control) => {
     if (binding.stdin && (body === '-' || (!body && !binding.stdin.tty))) body = await binding.stdin.read();
-    return inSquare(binding, { location }, control, async (square, location) =>
-      binding.text.done(location, await (await binding.api.selectOwnSeat(square, binding.identity().owner, as)).done(body, observe, control)));
+    return inSquare(binding, { location }, control, async square =>
+      binding.text.done(await (await binding.api.selectOwnSeat(square, binding.identity().owner, as)).done(body, control)));
   }),
   operation('status', 'Look around the square: who is here, the latest activity, and who you listen to.', {}, {
     as: viewer,
   }, (binding, { location, as }, control) => inSquare(binding, { location }, control, async (square, location) => {
     const viewer = (await binding.api.selectOwnSeat(square, binding.identity().owner, as, { optional: true }))?.name;
-    return binding.text.status(location, await square.status({ viewer, ...observe }, control), { surface: binding.surface });
+    return binding.text.status(location, await square.status({ viewer }, control), { surface: binding.surface });
   })),
   operation('mute', 'Pause or resume automatic notifications. Whatever reaches you stays waiting for perceive.', muteShape,
   { location: 'Path to the .square file. Omit to set the hold for the entire ledger.', as: participant,
@@ -306,7 +303,7 @@ export const OPERATIONS: readonly Operation[] = [
     if (location === undefined) return binding.text.mute(undefined,
       await binding.api.muteDeliveryLedger({ duration, ledgerLocation: binding.ledgerLocation, clock: binding.clock }, control));
     return inSquare(binding, { location }, control, async (square, location) => binding.text.mute(location,
-      await (await binding.api.selectOwnSeat(square, binding.identity().owner, as)).mute({ duration }, observe, control)), false);
+      await (await binding.api.selectOwnSeat(square, binding.identity().owner, as)).mute({ duration }, control)), false);
   }),
 ];
 

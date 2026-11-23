@@ -19,10 +19,8 @@ test('one identity-free memory resource carries explicit current seats for multi
   const aliceBody = body('alice'), bobBody = body('bob');
   assert.equal(Object.hasOwn(square, 'body'), false);
 
-  const alice = await square.join('Alice', { owner: aliceBody, observe: true });
-  const bob = await square.join('Bob', { owner: bobBody, wakeAddress: wakeAddress('bob'), observe: true });
-  assert.equal(alice.observation.deliveryAvailable, false);
-  assert.equal(bob.observation.deliveryAvailable, true);
+  const alice = await square.join('Alice', { owner: aliceBody });
+  await square.join('Bob', { owner: bobBody, wakeAddress: wakeAddress('bob') });
   const aliceSeat = (await square.seatsOf(aliceBody))[0];
   assert.equal(aliceSeat.name, 'Alice');
   assert.match(aliceSeat.generation, /^endpoint\/[0-9a-f-]{36}$/);
@@ -37,8 +35,7 @@ test('one identity-free memory resource carries explicit current seats for multi
   assert.deepEqual(status.participants.map(person => [person.name, person.deliveryAvailable]).sort(), [['Alice', false], ['Bob', true]]);
   assert.equal((await square.status({ viewer: 'Alice' })).listening.length, 0);
   await square.join('Alice', { owner: aliceBody, wakeAddress: wakeAddress('alice') });
-  assert.equal((await alice.participant.perceive({ observe: true })).observation.deliveryAvailable, true,
-    'existing handles observe the current seat wake readiness, not their acquisition snapshot');
+  assert.equal((await square.status()).participants.find(person => person.name === 'Alice').deliveryAvailable, true);
 
   const stale = alice.participant;
   await stale.done();

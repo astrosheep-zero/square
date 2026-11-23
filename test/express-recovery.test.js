@@ -285,7 +285,7 @@ test('selected artifact corruption never advertises a safely unsent activity', a
   database.close();
   const square = await Square.at({ path: file });
   try {
-    const writer = (await square.join('Writer', { owner })).participant;
+    const writer = await square.participant('Writer', { owner });
     await assert.rejects(writer.express('reply', { force: true, reply: 'act/1' }),
       (error) => error.code === 'invalid_args' && error.facts?.activityUnsent !== true);
   } finally { await square.close(); }

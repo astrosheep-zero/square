@@ -3,17 +3,17 @@ import path from 'node:path';
 import { createArtifactPort, createSquare, diagnoseSquareFile, prepareSquareBuild } from '../artifact/artifact.js';
 import { coreDone, decideJoin } from '../core/decisions.js';
 import { InternalSquareError, SquareError, validateName, type Owner, type Seat } from '../core/model.js';
-import { checkControl, failure, squareLocation, type ObservationOptions, type OperationControl, type SquareLocation, type UnreadActivitySummary } from '../core/neutral.js';
+import { checkControl, failure, squareLocation, type OperationControl, type SquareLocation, type UnreadActivitySummary } from '../core/neutral.js';
 import type { SendInput, SendResult } from '../core/ports.js';
 import { inSquareCount, presenceAnchor, requireJoinName, requireOwner } from '../core/runtime.js';
 import { participantIdentity } from '../core/square-values.js';
 import { entryPresentation, queryParticipants, queryStatus,
-  recoveryObservation, selectHistory, toPublicActivity, type Activity, type EntryPresentation, type HistoryObservation,
-  type ParticipantsResult, type PerceivedActivity, type SquareObservation, type StatusResult } from '../core/observations.js';
+  recoveryObservation, selectHistory, toPublicActivity, type Activity, type EntryPresentation, type HistoryContinuation,
+  type ParticipantsResult, type PerceivedActivity, type StatusResult } from '../core/observations.js';
 import { deliveryLedgerLocation } from '../ledger/delivery-ledger.js';
 import { canonicalPath } from '../storage/canonical-path.js';
 import { SeatedParticipant, type Participant } from './participant.js';
-import { ensureInitialDeliverySession, flush, observation, reconcile, withHostPresence, type DispatchPostedCard, type SquareResource } from './square-posting.js';
+import { ensureInitialDeliverySession, flush, reconcile, withHostPresence, type DispatchPostedCard, type SquareResource } from './square-posting.js';
 import { streamSquare, type StreamOptions, type StreamRecord } from './stream.js';
 import { parseOperation, type HistoryQuery, type JoinOptions, type StatusOptions } from '../surfaces/operations.js';
 
@@ -34,7 +34,10 @@ export interface JoinResult {
   readonly participant: Participant;
   readonly activity: Activity | null;
   readonly kind: 'joined' | 'reconnected' | 'taken-over';
-  readonly observation?: JoinObservation;
+  readonly location: string;
+  readonly now: number;
+  readonly standingCount: number;
+  readonly entry: EntryPresentation;
 }
 export interface RecoveryResult {
   readonly participant?: string;
@@ -45,13 +48,12 @@ export interface RecoveryResult {
 }
 export interface HistoryResult {
   readonly activities: readonly Activity[];
-  readonly observation?: HistoryObservation;
-}
-export interface JoinObservation extends SquareObservation {
-  readonly deliveryAvailable: boolean;
-  readonly entry?: EntryPresentation;
-  /** The receipt succeeded, but optional recent-history/context enrichment was unavailable. */
-  readonly enrichmentUnavailable?: true;
+  readonly now: number;
+  readonly standingCount: number;
+  readonly sayNumbers: Readonly<Record<number, number>>;
+  readonly presenceAnchors: Readonly<Record<number, readonly string[]>>;
+  readonly totalMatches: number;
+  readonly continuation?: HistoryContinuation;
 }
 /** Resolve once at the resource entry; internal operations never choose a ledger. */
 function resolveLedgerLocation(input: { readonly ledgerLocation?: string }): string {
@@ -96,7 +98,7 @@ export class Square {
     return new Square({ location, artifact: createArtifactPort(':memory:', prepareSquareBuild(input, input.markdown)), clock, canonicalLocation: location, ledgerLocation, dispatch });
   }
   /** Join establishes membership and local producer custody in one transaction. */
-  private async joinSeat(name: string, options: JoinOptions, control?: OperationControl): Promise<{ readonly seat: Seat; readonly kind: JoinResult['kind']; readonly activity: Activity | null; readonly observation?: JoinObservation }> {
+  private async joinSeat(name: string, options: JoinOptions, control?: OperationControl): Promise<JoinResult> {
     checkControl(control);
     const owner = requireOwner(options?.owner), now = this.resource.clock();
     const initial = !options.takeover ? undefined : (await this.resource.artifact.read(facts => facts.participant(name)?.joined ? facts.seat(name) : undefined, control?.signal)).value;
@@ -123,9 +125,8 @@ export class Square {
       }
       const seat = facts.seat(participant);
       if (seat === undefined) throw new SquareError('invalid_args', 'The join activity did not establish participant custody.');
-      return { seat, activity, kind,
-        ...(!options.observe ? {} : { observation: { ...observation(this.resource, inSquareCount(facts), seat.participant, now),
-          deliveryAvailable: false } }) };
+      return { participant: new SeatedParticipant(seat, this.resource), activity, kind,
+        location: this.location, now, standingCount: inSquareCount(facts), entry: entryPresentation(facts, seat.participant) };
     }, control?.signal)).value;
   }
   async participant(name: string, { owner }: { readonly owner: Owner }): Promise<Participant> {
@@ -166,45 +167,29 @@ export class Square {
       await reconcile(this.resource, control?.signal);
       const committed = await this.joinSeat(name, options, control);
       await flush(this.resource, control?.signal);
-      const participant = new SeatedParticipant(committed.seat, this.resource);
-      const result = { participant, activity: committed.activity, kind: committed.kind,
-        ...(committed.observation === undefined ? {} : { observation: committed.observation }) };
-      if (!options.observe) return result;
-      let entry, deliveryAvailable = false;
-      try {
-        const observed = await withHostPresence(this.resource, (facts, available) => ({
-          entry: entryPresentation(facts, participant.name),
-          deliveryAvailable: available(participant.name),
-        }), control);
-        entry = observed.entry;
-        deliveryAvailable = observed.deliveryAvailable;
-      } catch { /* Keep the committed join even when optional history is unavailable. */ }
-      return { ...result, observation: { ...committed.observation!, deliveryAvailable,
-        ...(entry === undefined ? { enrichmentUnavailable: true as const } : { entry }) } };
+      return committed;
     } catch (error) {
       throw failure(error, { operation: 'join', subject: 'caller', participant: name });
     }
   }
   async history(query: HistoryQuery = {}, control?: OperationControl): Promise<HistoryResult> {
     query = parseOperation('history', query);
-    const now = this.resource.clock();
     return (await this.resource.artifact.read(facts => {
-      const selected = selectHistory(facts, query, now);
-      const activities = selected.activities.map(toPublicActivity);
-      if (!query.observe) return { activities };
-      const indexes = selected.activities.map(activity => activity.index), presenceAnchors: Record<number, string[]> = {};
+      const now = this.resource.clock();
+      const { activities, ...page } = selectHistory(facts, query, now);
+      const indexes = activities.map(activity => activity.index), presenceAnchors: Record<number, string[]> = {};
       for (const participant of facts.roster()) {
         const anchor = presenceAnchor(facts, participant.name);
         if (indexes.includes(anchor)) (presenceAnchors[anchor] ??= []).push(participant.name);
       }
-      return { activities, observation: { ...observation(this.resource, inSquareCount(facts)), ...selected,
-        sayNumbers: facts.sayOrdinals(indexes), presenceAnchors } };
+      return { ...page, activities: activities.map(toPublicActivity), now, standingCount: inSquareCount(facts),
+        sayNumbers: facts.sayOrdinals(indexes), presenceAnchors };
     }, control?.signal)).value;
   }
   async status(options: StatusOptions = {}, control?: OperationControl): Promise<StatusResult> {
     options = parseOperation('status', options);
     return withHostPresence(this.resource, (facts, available, mutes) => {
-      const result = queryStatus(facts, { location: this.location, now: this.resource.clock() }, options.viewer, options.observe === true);
+      const result = queryStatus(facts, this.resource.clock(), options.viewer);
       return {
         ...result,
         ...(mutes.ledgerMutedUntil === undefined ? {} : { ledgerMutedUntil: mutes.ledgerMutedUntil }),
@@ -213,25 +198,25 @@ export class Square {
           return { ...person, deliveryAvailable: available(person.name), ...(mutedUntil === undefined ? {} : { mutedUntil }) };
         }),
       };
-    }, control, true);
+    }, control);
   }
   /** Local mode reads only World-known facts; it does not verify host attachment. */
-  async participants(options: ObservationOptions & { readonly local?: boolean } = {}, control?: OperationControl): Promise<ParticipantsResult> {
+  async participants(options: { readonly local?: boolean } = {}, control?: OperationControl): Promise<ParticipantsResult> {
     if (options.local) return (await this.resource.artifact.read(facts => {
-      const result = queryParticipants(facts, { location: this.location, now: this.resource.clock() }, options.observe === true);
+      const result = queryParticipants(facts, this.resource.clock());
       return { ...result, participants: result.participants.map(person => ({ ...person, deliveryAvailable: false })) };
     }, control?.signal)).value;
     return withHostPresence(this.resource, (facts, available, mutes) => {
-      const result = queryParticipants(facts, { location: this.location, now: this.resource.clock() }, options.observe === true);
+      const result = queryParticipants(facts, this.resource.clock());
       return { ...result, participants: result.participants.map(person => {
         const mutedUntil = mutes.seat(person.name);
         return { ...person, deliveryAvailable: available(person.name), ...(mutedUntil === undefined ? {} : { mutedUntil }) };
       }) };
-    }, control, true);
+    }, control);
   }
   async recovery(requested?: string, control?: OperationControl): Promise<RecoveryResult> {
     const facts = requested === undefined ? undefined : (await this.resource.artifact.read(facts => recoveryObservation(facts, requested, this.resource.clock()), control?.signal).catch(() => undefined))?.value;
-    return facts ?? (await this.resource.artifact.read(facts => observation(this.resource, inSquareCount(facts), requested), control?.signal)).value;
+    return facts ?? (await this.resource.artifact.read(facts => ({ participant: requested, standingCount: inSquareCount(facts) }), control?.signal)).value;
   }
   stream(options: StreamOptions & { readonly recipient: string }, control?: OperationControl): AsyncIterable<PerceivedActivity>;
   stream(options: StreamOptions & { readonly recipient?: undefined }, control?: OperationControl): AsyncIterable<Activity>;

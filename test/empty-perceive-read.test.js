@@ -40,10 +40,9 @@ test('an empty filtered perceive returns its snapshot without bodies, a writer, 
   const revision = await cell.revision();
   artifact.read = (select, signal) => cell.read(facts => select(withoutBodies(facts)), signal);
   artifact.transactAs = noParticipantWriter(cell);
-  const result = await bob.perceive({ from: ['Alice'], mention: true, limit: 1, observe: true });
-  assert.deepEqual({ ...result, observation: undefined }, { activities: [], remaining: 0, reason: 'capped', observation: undefined });
-  const { observation } = result;
-  assert.deepEqual([observation.participant, observation.standingCount, observation.now, observation.ownActivityCount, observation.hardCap], ['Bob', 3, 100, 1, 1]);
+  const { location: _location, ...result } = await bob.perceive({ from: ['Alice'], mention: true, limit: 1 });
+  assert.deepEqual(result, { activities: [], remaining: 0, reason: 'capped', participant: 'Bob',
+    standingCount: 3, now: 100, ownActivityCount: 1, hardCap: 1 });
   assert.equal(await cell.revision(), revision);
   assert.equal((await cell.read(facts => facts.receipt('Bob', 3))).value, undefined);
 });
@@ -72,7 +71,7 @@ test('a nonempty probe records nothing; the writer reselects, hydrates once, and
     if (authority.kind === 'participant') writes++;
     return cell.transactAs(authority, facts => change({ ...facts, activities(indexes) { if (authority.kind === 'participant') hydrated.push([...indexes]); return facts.activities(indexes); } }), signal);
   };
-  const perceived = await bob.perceive({ from: ['alice'], mention: true, limit: 1, observe: true });
+  const perceived = await bob.perceive({ from: ['alice'], mention: true, limit: 1 });
   assert.deepEqual(perceived.activities.map(({ id, body }) => ({ id, body })), [{ id: 'act/3', body: 'selected by writer' }]);
   assert.equal(perceived.remaining, 1);
   assert.equal(perceived.reason, 'drained');
@@ -92,7 +91,7 @@ test('empty perceive validates caller, filters, limits, and semantic time withou
   for (const at of [NaN, Infinity, '100', -0.5]) {
     const resource = await resourceWithArtifact(t, artifact, () => at);
     const participant = await resource.participant('Bob', { owner: bodyFor('Bob') });
-    if (at === -0.5) assert.equal((await participant.perceive({ observe: true })).observation.now, at);
+    if (at === -0.5) assert.equal((await participant.perceive()).now, at);
     else await assert.rejects(participant.perceive(), { code: 'invalid_args' });
   }
   assert.equal((await cell.read(facts => facts.receipt('Bob', 2))).value, undefined);

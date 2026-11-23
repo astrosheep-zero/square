@@ -332,13 +332,13 @@ test('legacy SDK bell options refuse both express call forms before landing', as
   t.after(() => square.close());
   const { participant: alice } = await square.join('Alice', { owner: squareBody });
   await square.join('Bob', { owner: squareBody });
-  const before = await square.history();
+  const { activities } = await square.history();
   for (const legacy of [{ reach: 'bell' }, { bell: true }]) {
     const refusal = { code: 'invalid_args', operation: { operation: 'express', participant: 'Alice', subject: 'caller', expressEffect: 'unsent' } };
     await assert.rejects(alice.express('obsolete', legacy), refusal);
     await assert.rejects(alice.express({ body: 'obsolete', ...legacy }), refusal);
   }
-  assert.deepEqual(await square.history(), before);
+  assert.deepEqual((await square.history()).activities, activities);
 });
 
 test('express reply preserves one causal activity reference', async () => {

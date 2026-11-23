@@ -9,7 +9,7 @@ import { selectOwnSeat, type Square } from '../api/square-api.js';
 import type { ActivityId, OperationError, OperationControl, ExpressOptions, Owner } from '../api/types.js';
 import { formatRefusal, spellAction, quoteShell, withPathOutput } from '../surfaces/presentation.js';
 import { isExpressGate, renderExpression, renderFailureLines } from '../surfaces/operation-presentation.js';
-import { sendExpression, type ExpressFromCli } from '../surfaces/operations.js';
+import type { ExpressFromCli } from '../surfaces/operations.js';
 import { readStdin } from './context.js';
 
 export interface ActivityOptions extends Omit<ExpressOptions, 'reply'> {
@@ -64,7 +64,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     name = participant.name;
     attempted = true;
     const { metadataJson: _metadataJson, bodyProvided: _bodyProvided, recoveryOwner: _owner, reply, ...expressOptions } = opts;
-    const outcome = await sendExpression(participant, rawInput?.replace(/\r\n/g, '\n').trim(), {
+    const outcome = await participant.express(rawInput?.replace(/\r\n/g, '\n').trim(), {
       ...expressOptions, reply: reply as ActivityId | undefined,
     }, {
       signal: controller.signal,
@@ -75,8 +75,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
       },
     });
     landedId = outcome.activity.id;
-    name = outcome.observation?.participant ?? name;
-    return renderExpression(squarePath, outcome, opts.recoveryOwner) ?? '';
+    return renderExpression(outcome, opts.recoveryOwner);
   } catch (error) {
     const detail = (error as OperationError | undefined)?.operation;
     name = detail?.participant ?? name ?? 'participant';

@@ -71,7 +71,7 @@ agent-delivery must not import Square.
 Implementation taste:
 - CLI and tool surfaces expose the same concepts under the same names (flag = kebab-case of field); only output formatting is CLI-only.
 - SDK, CLI, MCP and Pi use the same real `Square`/`Participant` API in `api/square-api.ts`, which binds host dispatch into `app/square.ts`. `square.ts` is only the CLI entrypoint. There is no separate operation dispatcher or generic data/projection envelope. See `guides/square-api.md` for resource lifetimes and concrete results.
-- Optional `observe: true` facts are captured by that same operation only when requested. Commit-time counts and timestamps come from the mutation transaction; optional enrichment never converts a committed success into an unsent retry.
+- Operations always return their snapshot facts as plain fields. Counts and other commit-time facts come from the mutation transaction. Surfaces read supplementary host facts separately; a failed read never turns a committed success into an unsent retry.
 - Cross-square discovery/inbox and path-based diagnose remain standalone exports, not extra methods on a synthetic resource.
 - Stable textual activity ids use `act/<index>`; square-core owns their formatting and parsing.
 - Keep one clear internal representation for the square's state and events.

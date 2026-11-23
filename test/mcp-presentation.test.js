@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { Square, discover } from '../dist/api/square-api.js';
+import { Square as ApplicationSquare } from '../dist/app/square.js';
 import { renderFailureLines } from '../dist/surfaces/operation-presentation.js';
 import { spellAction } from '../dist/surfaces/presentation.js';
 import { createSquareMcpServer } from '../dist/surfaces/mcp.js';
@@ -111,6 +112,27 @@ test('every participant command reaches its MCP operation and shares its validat
     if (name === 'list') await assert.rejects(discover({ cwd: path.dirname(toolSquare) }, { after: args.after }),
       { code: 'invalid_args', message: refusal });
   }
+});
+
+test('join and perceive keep their receipts when the surface status read fails', async (t) => {
+  const squarePath = await buildSquare(t);
+  const status = t.mock.method(ApplicationSquare.prototype, 'status', async () => { throw new Error('host unavailable'); });
+  const call = await openMcp(t, squarePath);
+  const joined = await call('join', { as: 'Bob' });
+  assert.equal(joined.isError, undefined);
+  assert.match(joined.content[0].text, /you stepped into the square/);
+  await seed(squarePath, async (square, owner) => {
+    const { participant } = await square.join('Alice', { owner });
+    await participant.express('for Bob', { mentions: ['Bob'] });
+  });
+  const perceived = await call('perceive', { as: 'Bob' });
+  assert.equal(perceived.isError, undefined);
+  assert.match(perceived.content[0].text, /for Bob/);
+  assert.equal(status.mock.callCount(), 2);
+  await seed(squarePath, async (square, owner) => {
+    const bob = await square.participant('Bob', { owner });
+    assert.deepEqual((await bob.pending()).activities, []);
+  });
 });
 
 test('a missing seat reports a tool-shaped join action', async (t) => {

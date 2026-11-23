@@ -59,9 +59,11 @@ test('Pi pulls ledger cards and records receipts only after message_end, preserv
   const square = await Square.build({ path: path.join(f.ctx.cwd, 'availability.square'), markdown: '' });
   t.after(() => square.close());
   const nativeOnly = harnessOwner({ channel: 'pi', session: 'native-only' });
-  assert.equal((await square.join('live', { owner: nativeOnly, observe: true })).observation.deliveryAvailable, false);
+  await square.join('live', { owner: nativeOnly });
+  const available = async () => (await square.status()).participants.find(person => person.name === 'live')?.deliveryAvailable;
+  assert.equal(await available(), false);
   await f.handlers.get('session_start')({}, { cwd: f.ctx.cwd, sessionManager: { getSessionId: () => 'native-only' } });
-  assert.equal((await square.join('live', { owner: nativeOnly, observe: true })).observation.deliveryAvailable, true);
+  assert.equal(await available(), true);
   await f.handlers.get('session_shutdown')({}, { cwd: f.ctx.cwd, sessionManager: { getSessionId: () => 'native-only' } });
   assert.equal((await square.participants()).participants.find(person => person.name === 'live')?.deliveryAvailable, false);
 });

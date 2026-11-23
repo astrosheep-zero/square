@@ -23,9 +23,9 @@ async function tempDirectory(prefix) {
 
 test('pre-aborted lifecycle operations do not mutate the artifact', async () => {
   const square = Square.inMemory({ markdown: 'context' });
-  const before = await square.history();
+  const { activities } = await square.history();
   await assert.rejects(() => square.join('Alice', { owner: body('memory') }, { signal: aborted().signal }), /cancelled/);
-  assert.deepEqual(await square.history(), before);
+  assert.deepEqual((await square.history()).activities, activities);
   await square.close();
 });
 
@@ -203,9 +203,8 @@ test('post-commit perceive preserves its receipt and result before return cancel
     if (authority.kind === 'participant' && marked) controller.abort(new Error('response discarded'));
     return result;
   };
-  const result = await bob.perceive({ observe: true }, { signal: controller.signal });
+  const result = await bob.perceive({}, { signal: controller.signal });
   assert.equal(result.activities[0].body, 'boundary perceive');
-  assert.equal(result.observation.enrichmentUnavailable, true);
   assert.deepEqual((await bob.perceive()).activities, []);
 });
 

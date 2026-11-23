@@ -2,7 +2,8 @@
 
 > **Historical evidence, superseded API.** The factory/outcome shapes and split SDK defaults
 > below describe the earlier implementation, not current instructions. Use the real
-> [Square/Participant API](square-api.md); the independent factory and its design guide are deleted.
+> [Square/Participant API](square-api.md). Operations now always return snapshot facts; the
+> presentation-demand option and its SDK successor have been removed.
 
 
 ## Design

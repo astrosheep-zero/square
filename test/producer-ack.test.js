@@ -108,11 +108,10 @@ test('World-local discovery preserves known identities without probing host deli
   let sandbox;
   try {
     sandbox = await Square.at({ ...c.input, ledgerLocation: deniedLedger });
-    const local = await sandbox.participants({ local: true, observe: true });
+    const local = await sandbox.participants({ local: true });
     assert.equal(local.participants.find(person => person.name === 'observer').presence, 'active', 'local attachment has not reconciled host detach');
     assert.equal(local.participants.find(person => person.name === 'departed').presence, 'done');
     assert.equal(local.participants.find(person => person.name === 'foreign').presence, 'active');
-    assert.ok(local.observation);
     assert.ok(local.participants.every(person => person.deliveryAvailable === false));
     await assert.rejects(() => sandbox.participants());
     await assert.rejects(() => sandbox.participant('foreign', { owner: c.owner }));
