@@ -189,7 +189,7 @@ export const SQUARE_TOOLS: readonly ToolDefinition[] = [
     from: stringArray.optional().describe('Only what these participants said.'),
     mention: z.boolean().optional().describe('Only what was addressed to you.'),
     limit: z.number().int().min(1).max(PERCEIVE_MAX_LIMIT).optional().describe('At most this many at once (default 10).'),
-    takeover: z.boolean().optional().describe('Take over from another active idle perceive for this participant.'),
+    takeover: z.boolean().optional().describe('Take over from another perceive already waiting for this participant.'),
   }, async (square, { as, wait, ...args }, control, binding) => {
     const options: PerceiveOptions = { ...args, ...(wait === undefined ? {} : { wait: parseDurationMs(wait, 'wait') }) };
     const result = await (await selectOwnSeat(square, binding.identity.owner, as)).perceive({ ...options, observe: true }, control);
