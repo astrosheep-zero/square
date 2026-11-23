@@ -91,11 +91,11 @@ test('MCP tools validate JSON arguments and return only CLI text', async () => {
     assert.deepEqual(client.getServerVersion(), { name: 'square', version: packageVersion });
     const tools = (await client.listTools()).tools;
     assert.deepEqual(tools.map((tool) => tool.name), [
-      'list', 'join', 'express', 'perceive', 'history', 'attention', 'done', 'status', 'mute', 'unmute',
+      'list', 'join', 'express', 'perceive', 'history', 'attention', 'done', 'status', 'mute',
     ]);
     for (const tool of tools) {
       assert.equal(tool.outputSchema, undefined);
-      const locationRequired = !['list', 'mute', 'unmute'].includes(tool.name);
+      const locationRequired = !['list', 'mute'].includes(tool.name);
       assert.equal(tool.inputSchema.required?.includes('location') ?? false, locationRequired);
       assert.equal('location' in tool.inputSchema.properties, tool.name !== 'list');
     }
@@ -203,10 +203,10 @@ test('one MCP server accepts per-call participants without a configured default'
     } finally { await square.close(); }
     assert.match(history.content[0].text, /alice speaks/);
     assert.match(history.content[0].text, /bob speaks/);
-    await client.callTool({ name: 'attention', arguments: { location: squarePath, as: 'alice', action: 'listen', target: 'bob' } });
+    await client.callTool({ name: 'attention', arguments: { location: squarePath, as: 'alice', state: 'listen', target: 'bob' } });
     const listening = await client.callTool({ name: 'status', arguments: { location: squarePath, as: 'alice' } });
     assert.match(listening.content[0].text, /you listen to\n  · @bob/);
-    await client.callTool({ name: 'attention', arguments: { location: squarePath, as: 'alice', action: 'ignore', target: 'bob' } });
+    await client.callTool({ name: 'attention', arguments: { location: squarePath, as: 'alice', state: 'ignore', target: 'bob' } });
     assert.match((await client.callTool({ name: 'status', arguments: { location: squarePath, as: 'alice' } })).content[0].text, /not turned toward anyone/);
     for (const [name, args] of [['perceive', {}], ['done', {}]]) {
       const result = await client.callTool({ name, arguments: { location: squarePath, as: 'alice', ...args } });
@@ -388,14 +388,14 @@ test('MCP tool schemas reject unknown fields and malformed activity ids', async 
   } finally { await close(); }
 });
 
-test('MCP shares location and noMention parameters with native tools', async (t) => {
+test('MCP resolves locations and uses explicit mentions instead of scanning the body', async (t) => {
   const { cwd, squarePath, env, server } = await fixture('rei');
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const { client, close } = await connectedClient(server);
   try {
     await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'rei' } });
     await client.callTool({ name: 'join', arguments: { location: squarePath, as: 'bob' } });
-    const bare = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: 'literal @bob', noMention: true, force: true } });
+    const bare = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: 'literal @bob', mentions: [], force: true } });
     assert.match(bare.content[0].text, /your words land/);
     const other = await Square.build({ path: path.join(cwd, 'other.square'), markdown: 'Other square' });
     await other.close();
@@ -406,7 +406,7 @@ test('MCP shares location and noMention parameters with native tools', async (t)
     const square = await Square.at({ path: squarePath });
     try {
       const bareActivity = (await square.history()).activities.at(-1);
-      const directed = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@Eve', noMention: true, mentions: ['bob'], reply: bareActivity.id, force: true } });
+      const directed = await client.callTool({ name: 'express', arguments: { location: squarePath, as: 'rei', body: '@Eve', mentions: ['bob'], reply: bareActivity.id, force: true } });
       assert.match(directed.content[0].text, /you walk over to @bob/);
       assert.doesNotMatch(directed.content[0].text, /is not in this square/);
       const { tools } = await client.listTools();

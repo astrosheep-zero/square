@@ -15,7 +15,7 @@ test('one memory resource shares activity without sharing seat authority', async
   await assert.rejects(square.participant('Alice', { owner: b }), { code: 'already_joined' });
   await square.join('Alice', { owner: b, takeover: true });
   await assert.rejects(alice.express('stale'), { code: 'already_joined' });
-  assert.equal((await square.history({ limit: null })).activities.some(act => act.body === 'hello'), true);
+  assert.equal((await square.history()).activities.some(act => act.body === 'hello'), true);
   await square.close();
   await assert.rejects(bob.perceive());
 });

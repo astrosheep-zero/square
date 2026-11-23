@@ -4,24 +4,13 @@ import { squareLocation, type OperationControl, type SquareLocation } from '../c
 import { deliveryLedgerLocation } from '../ledger/delivery-ledger.js';
 
 import { createArtifactPort } from '../artifact/artifact.js';
-import { nameKey, SquareError, type Owner, type Seat } from '../core/model.js';
+import { nameKey, type Seat } from '../core/model.js';
 import { listPresentation } from '../core/observations.js';
+import { DEFAULT_LIST_DEPTH, DEFAULT_LIST_LIMIT } from '../core/square-core.js';
 import { canonicalPath } from '../storage/canonical-path.js';
+import { parseOperation, type DiscoveryOptions } from '../surfaces/operations.js';
 import { readLedgerMutedUntil, readSquareSeatMutes, seatMuteKey } from './square-notification-mute.js';
 
-export const DEFAULT_LIST_DEPTH = 4;
-export const MAX_LIST_DEPTH = 16;
-export const DEFAULT_LIST_LIMIT = 20;
-export const MAX_LIST_LIMIT = 100;
-export interface DiscoveryOptions {
-  readonly owner?: Owner;
-  readonly depth?: number;
-  readonly limit?: number;
-  readonly after?: string;
-  /** Explicit host ledger for mute enrichment; adapters resolve their own configured location. */
-  readonly ledgerLocation?: string;
-  readonly clock?: () => number;
-}
 export interface SquareListItem {
   readonly joined?: readonly { readonly name: string; readonly pending: number; readonly mutedUntil?: number }[];
   readonly path: string;
@@ -85,11 +74,6 @@ async function readSquareListItem(filePath: string, root: string, options: Disco
 export async function discoverSquares(root: string, options: DiscoveryOptions = {}, control?: OperationControl): Promise<DiscoveryResult> {
   const depth = options.depth ?? DEFAULT_LIST_DEPTH;
   const limit = options.limit ?? DEFAULT_LIST_LIMIT;
-  if (!Number.isSafeInteger(depth) || depth < 0 || depth > MAX_LIST_DEPTH
-    || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT
-    || (options.after !== undefined && (options.after.length === 0 || path.isAbsolute(options.after)))) {
-    throw new SquareError('invalid_args', 'Invalid discovery depth, limit or relative cursor');
-  }
   const items: SquareListItem[] = [];
   let examined = 0;
   let stopped = false;
@@ -127,7 +111,8 @@ export async function discoverSquares(root: string, options: DiscoveryOptions = 
     ...(ledgerMutedUntil === undefined ? {} : { ledgerMutedUntil }) };
 }
 
-export function discover(input: SquareLocation, options: DiscoveryOptions = {}, control?: OperationControl) {
+export async function discover(input: SquareLocation, options: DiscoveryOptions = {}, control?: OperationControl) {
+  options = parseOperation('list', options);
   if (input.path !== undefined) squareLocation(input);
   return discoverSquares(input.cwd ?? process.cwd(), {
     ...options,

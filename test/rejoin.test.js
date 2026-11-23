@@ -12,7 +12,7 @@ test('a departed participant steps back in before speaking, and only the return 
   });
 
   // A completed seat cannot speak for its old body: the draft is kept, nothing lands.
-  const refused = run(withName(file, 'Bob', ['express', '--no-mention', 'i am back']));
+  const refused = run(withName(file, 'Bob', ['express', 'i am back']));
   const refusal = refused.stdout + refused.stderr;
   assert.equal(refused.status, 2, refusal);
   assert.match(refusal, /Bob needs to join first/);
@@ -25,12 +25,12 @@ test('a departed participant steps back in before speaking, and only the return 
   assert.match(returned.stdout, /● you stepped into the square/);
   assert.match(returned.stdout, /@Bob stepped out of the square — done/);
 
-  const speaking = run(withName(file, 'Bob', ['express', '--no-mention', 'i am back']));
+  const speaking = run(withName(file, 'Bob', ['express', 'i am back']));
   assert.equal(speaking.status, 0, speaking.stderr);
   assert.match(speaking.stdout, /your words land/);
   assert.doesNotMatch(speaking.stdout, /stepped (back )?in/);
 
-  const standing = run(withName(file, 'Alice', ['express', '--no-mention', 'still here']));
+  const standing = run(withName(file, 'Alice', ['express', 'still here']));
   assert.equal(standing.status, 0, standing.stderr);
   assert.doesNotMatch(standing.stdout, /stepped back into the square/);
 });

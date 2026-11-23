@@ -1,37 +1,27 @@
 import crypto from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { activityQueryFilter, type ActivityQuery } from '../core/activity-query.js';
-import { attentionChange, coreDone, coreListening, decideAct, resolveKnownName, validateDoneBody } from '../core/decisions.js';
+import { attentionChange, coreDone, coreListening, decideAct, resolveKnownName } from '../core/decisions.js';
 import { validateMetadataMatch } from '../core/delivery-deferral.js';
 import { expressHint } from '../core/hints.js';
-import { SquareError, isSquareError, nameKey, validateName, type ActivityMetadata, type Seat, type WatchOptions } from '../core/model.js';
+import { SquareError, isSquareError, nameKey, validateName, type Seat, type WatchOptions } from '../core/model.js';
 import { checkControl, failure, type ObservationOptions, type OperationControl } from '../core/neutral.js';
-import { decidePerceive, observePerceiveSelection, perceiveLimit, selectPerceivePage, type PerceiveOptions, type PerceiveReason, type PerceiveSelection } from '../core/perceive-decisions.js';
+import { decidePerceive, observePerceiveSelection, perceiveFilter, selectPerceivePage, type PerceiveReason, type PerceiveSelection } from '../core/perceive-decisions.js';
 import type { FutureAck, SquareRead } from '../core/ports.js';
 import { WATCH_HEARTBEAT_MS, asSeatRef, inSquareCount, participantAuthority } from '../core/runtime.js';
-import { formatActivityId, type ActivityId } from '../core/square-core.js';
+import { formatActivityId, parseActivityId, PAGE_CAP, type ActivityId } from '../core/square-core.js';
 import { assertCurrentSeat } from '../core/square-domain.js';
 import { participantIdentity } from '../core/square-values.js';
 import { parseRequiredActivityId, perceivePresence, toPerceivedActivity, toPublicActivity,
   type Activity, type PerceivePresence, type PerceivedActivity, type SquareObservation } from '../core/observations.js';
-import { muteDeadline } from '../core/time.js';
+import { muteDeadline, parseDurationMs } from '../core/time.js';
+import { parseOperation, type AttentionInput, type ExpressInput, type ExpressOptions, type MuteInput, type PerceiveOptions } from '../surfaces/operations.js';
 import { DeliveryLedger } from '../ledger/delivery-ledger.js';
 import { seatMuteId, seatMutePrefix } from './square-notification-mute.js';
 import { flush, observation, reconcile, withHostPresence, type SquareResource } from './square-posting.js';
 import { acquireWatchLease, ownsWatchLease, pulseWatchLease, releaseWatchLease } from '../core/wakes.js';
 
 export interface AckResult { readonly consumed: number }
-export interface ExpressOptions extends ObservationOptions {
-  readonly metadata?: ActivityMetadata;
-  readonly force?: boolean;
-  readonly mentions?: readonly string[];
-  readonly reply?: ActivityId;
-  readonly noMention?: boolean;
-  readonly noWait?: boolean;
-}
-export interface ExpressInput extends ExpressOptions {
-  readonly body?: string;
-}
 export interface ExpressResult {
   readonly activity: Activity;
   /** The replied-to author was not standing when the reply landed. */
@@ -83,12 +73,9 @@ export interface Participant {
   readonly generation: string;
   express(body: string | undefined, options?: ExpressOptions, control?: OperationControl): Promise<ExpressResult>;
   express(input: ExpressInput, control?: OperationControl): Promise<ExpressResult>;
-  listen(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
-  ignore(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
-  unlisten(target: string, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
+  attention(input: AttentionInput, options?: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult>;
   listening(options?: ObservationOptions, control?: OperationControl): Promise<ListeningResult>;
-  mute(input: { readonly durationMs: number }, options?: ObservationOptions, control?: OperationControl): Promise<MuteResult>;
-  unmute(options?: ObservationOptions, control?: OperationControl): Promise<MuteResult>;
+  mute(input: MuteInput, options?: ObservationOptions, control?: OperationControl): Promise<MuteResult>;
   perceive(options?: PerceiveOptions, control?: OperationControl): Promise<PerceiveResult>;
   pending(options?: PendingOptions, control?: OperationControl): Promise<PendingResult>;
   /** Local custody only: ledger-only detach/delete is observed on privileged reconciliation. */
@@ -151,15 +138,13 @@ export class SeatedParticipant implements Participant {
 
   async express(bodyOrInput: string | undefined | ExpressInput, optionsOrControl: ExpressOptions | OperationControl = {}, operationControl?: OperationControl): Promise<ExpressResult> {
     const input = typeof bodyOrInput === 'object' && bodyOrInput !== null ? bodyOrInput : undefined;
-    const body: string | undefined = typeof bodyOrInput === 'string' || bodyOrInput === undefined ? bodyOrInput : bodyOrInput.body;
-    const options = (input ?? optionsOrControl) as ExpressOptions;
     const control = input === undefined ? operationControl : optionsOrControl as OperationControl;
     let name = this.name, effect: 'unsent' | 'unknown' | 'landed' = 'unsent';
     let landedId: ExpressResult['activity']['id'] | undefined;
     try {
       checkControl(control);
-      if ('reach' in options || 'bell' in options)
-        throw new SquareError('invalid_args', 'Express no longer accepts bell reach. Use named mentions instead.', { activityUnsent: true });
+      const { body, ...options } = parseOperation('express', input ?? { ...optionsOrControl, body: bodyOrInput });
+      const reply = options.reply === undefined ? undefined : parseActivityId(options.reply);
       await reconcile(this.resource, control?.signal);
       name = (await this.resource.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
       const seat = this.seat;
@@ -171,17 +156,10 @@ export class SeatedParticipant implements Participant {
           const awayByName = new Map((await reconcile(this.resource, control?.signal)).map(seat => [nameKey(seat.participant), seat]));
           effect = 'unknown';
           const now = this.resource.clock();
-          const reply = rejectUnsentActivity(() => {
-            try { return options.reply === undefined ? undefined : parseRequiredActivityId(options.reply); }
-            catch (error) {
-              if (isSquareError(error)) error.facts = { ...error.facts, reason: 'invalid_reply', activityId: options.reply };
-              throw error;
-            }
-          });
+
           const committed = (await this.resource.artifact.transactAs(participantAuthority(seat), facts => {
             // Decoding selected rows is storage work, not proof of safe admission refusal.
-            const proposed = decideAct(facts, { name, body, force: options.force ?? false, metadata: options.metadata, now, mentions: options.mentions,
-              noMention: options.noMention, reply });
+            const proposed = decideAct(facts, { name, body, force: options.force ?? false, metadata: options.metadata, now, mentions: options.mentions, reply });
             const decision = rejectUnsentActivity(() => {
               if (proposed.type === 'blocked') throw new SquareError('behind', `${participantIdentity(name)} has pending activity`, { activitySummaries: proposed.activitySummaries });
               if (proposed.type === 'capped') throw new SquareError('capped', `${participantIdentity(name)} reached the activity cap`, { spoken: facts.participant(name)!.sayCount, ...(facts.header().hardCap == null ? {} : { hardCap: facts.header().hardCap! }) });
@@ -229,13 +207,15 @@ export class SeatedParticipant implements Participant {
     }
   }
 
-  private async listener(verb: 'listen' | 'ignore' | 'unlisten', target: string, options: ObservationOptions, control?: OperationControl): Promise<ListenerChangeResult> {
+  async attention(input: AttentionInput, options: ObservationOptions = {}, control?: OperationControl): Promise<ListenerChangeResult> {
     checkControl(control);
+    const { state, target } = parseOperation('attention', input);
+    options = parseOperation('observation', options);
     await reconcile(this.resource, control?.signal);
     const name = (await this.resource.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
     const seat = this.seat, now = this.resource.clock();
     const result = (await this.resource.artifact.transactAs(participantAuthority(seat), facts => {
-      const act = attentionChange(facts, verb, name, target, now);
+      const act = attentionChange(facts, state === 'neutral' ? 'unlisten' : state, name, target, now);
       const activity = act === undefined ? null : toPublicActivity(facts.land(act));
       return { activity, ...(!options.observe ? {} : { observation: {
         ...observation(this.resource, inSquareCount(facts), name, now), participant: name,
@@ -245,9 +225,6 @@ export class SeatedParticipant implements Participant {
     await flush(this.resource, control?.signal);
     return result;
   }
-  listen(target: string, options: ObservationOptions = {}, control?: OperationControl) { return this.listener('listen', target, options, control); }
-  ignore(target: string, options: ObservationOptions = {}, control?: OperationControl) { return this.listener('ignore', target, options, control); }
-  unlisten(target: string, options: ObservationOptions = {}, control?: OperationControl) { return this.listener('unlisten', target, options, control); }
   async listening(options: ObservationOptions = {}, control?: OperationControl): Promise<ListeningResult> {
     return (await this.resource.artifact.read(facts => {
       const name = resolveKnownName(facts, this.name);
@@ -255,11 +232,13 @@ export class SeatedParticipant implements Participant {
     }, control?.signal)).value;
   }
   /** Install or release only this captured seat generation's named hold. */
-  private async changeSeatMute(verb: 'mute' | 'unmute', durationMs: number | undefined, options: ObservationOptions, control?: OperationControl): Promise<MuteResult> {
+  async mute(input: MuteInput, options: ObservationOptions = {}, control?: OperationControl): Promise<MuteResult> {
     const seat = this.seat;
     checkControl(control);
+    const { duration } = parseOperation('mute', input);
+    options = parseOperation('observation', options);
     const now = this.resource.clock();
-    const expiresAt = verb === 'mute' ? muteDeadline(now, durationMs!) : undefined;
+    const expiresAt = duration === 'off' ? undefined : muteDeadline(now, parseDurationMs(duration)!);
     const prefix = seatMutePrefix(this.resource.canonicalLocation, seat);
     const id = seatMuteId(seat.owner, prefix);
     const assertCaptured = async (): Promise<void> => {
@@ -272,11 +251,11 @@ export class SeatedParticipant implements Participant {
     await assertCaptured();
     const ledger = await DeliveryLedger.open({ location: this.resource.ledgerLocation, clock: this.resource.clock, signal: control?.signal });
     try {
-      if (verb === 'mute') await ledger.setSuppression({ owner: seat.owner, id, key: prefix, scope: 'prefix', expiresAt: expiresAt! }, control?.signal);
+      if (expiresAt !== undefined) await ledger.setSuppression({ owner: seat.owner, id, key: prefix, scope: 'prefix', expiresAt }, control?.signal);
       else await ledger.releaseSuppression({ owner: seat.owner, id }, control?.signal);
       try { await assertCaptured(); }
       catch (error) {
-        if (verb === 'mute' && isSquareError(error) && error.code === 'already_joined')
+        if (expiresAt !== undefined && isSquareError(error) && error.code === 'already_joined')
           await ledger.releaseSuppression({ owner: seat.owner, id }, control?.signal).catch(() => undefined);
         throw error;
       }
@@ -287,13 +266,7 @@ export class SeatedParticipant implements Participant {
         observed = (await this.resource.artifact.read(facts => observation(this.resource, inSquareCount(facts), seat.participant, now), control?.signal)).value;
       } catch { /* The hold is committed; optional facts cannot turn it into a retry. */ }
     }
-    return { mutedUntil: verb === 'mute' ? expiresAt! : null, ...(observed === undefined ? {} : { observation: observed }) };
-  }
-  mute(input: { readonly durationMs: number }, options: ObservationOptions = {}, control?: OperationControl): Promise<MuteResult> {
-    return this.changeSeatMute('mute', input?.durationMs, options, control);
-  }
-  unmute(options: ObservationOptions = {}, control?: OperationControl): Promise<MuteResult> {
-    return this.changeSeatMute('unmute', undefined, options, control);
+    return { mutedUntil: expiresAt ?? null, ...(observed === undefined ? {} : { observation: observed }) };
   }
 
   /** Receipt selection rechecks the lease inside the writer, not at its last heartbeat. */
@@ -307,11 +280,9 @@ export class SeatedParticipant implements Participant {
     let name = this.name, subject: 'caller' | 'filter' = 'caller';
     let leaseId: string | undefined, seat: Seat | undefined;
     let selection = options;
-    const wait = options.wait ?? 0;
     const complete = async (perceived: PerceiveSelection | undefined, reason: PerceiveReason = 'drained'): Promise<PerceiveResult> => {
-      const view = perceived ?? (await this.resource.artifact.read(facts => observePerceiveSelection(facts, name, [], {
-        unseenOnly: true, senders: selection.from, ...(selection.mention === true ? { attentionOnly: true } : {}),
-      }, this.resource.clock()))).value;
+      const view = perceived ?? (await this.resource.artifact.read(facts =>
+        observePerceiveSelection(facts, name, [], perceiveFilter(selection), this.resource.clock()))).value;
       if (reason === 'drained') reason = view.terminalStatus ?? reason;
       await flush(this.resource, control?.signal);
       if (leaseId !== undefined) {
@@ -340,13 +311,10 @@ export class SeatedParticipant implements Participant {
     };
     try {
       checkControl(control);
+      options = parseOperation('perceive', options);
+      const wait = options.wait === undefined ? 0 : parseDurationMs(options.wait)!;
       await reconcile(this.resource, control?.signal);
       validateName(name);
-      if (!Number.isFinite(wait) || wait < 0) throw new SquareError('invalid_args', 'Perceive wait duration must be a non-negative number');
-      if (options.id !== undefined && ['wait', 'from', 'mention', 'limit', 'takeover'].some(key => Object.hasOwn(options, key)))
-        throw new SquareError('invalid_args', 'Perceive id cannot be combined with wait, from, mention, limit or takeover');
-      if (Object.hasOwn(options, 'takeover') && wait === 0) throw new SquareError('invalid_args', 'Perceive takeover requires a positive wait duration');
-      perceiveLimit(options.limit);
       const probe = (await this.resource.artifact.read(facts => {
         name = resolveKnownName(facts, this.name);
         seat = this.seat;
@@ -355,7 +323,7 @@ export class SeatedParticipant implements Participant {
         const from = options.from?.map(target => resolveKnownName(facts, target));
         selection = { ...options, ...(from === undefined ? {} : { from }) };
         subject = 'caller';
-        if (wait !== 0 || options.id !== undefined) return undefined;
+        if (wait !== 0) return undefined;
         const page = selectPerceivePage(facts, name, selection);
         return page.indexes.length === 0 ? observePerceiveSelection(facts, page.participant, [], page.filter, this.resource.clock()) : undefined;
       }, control?.signal)).value;
@@ -364,13 +332,13 @@ export class SeatedParticipant implements Participant {
         return await complete(data);
       }
       const watch: WatchOptions = {
-        ...(selection.from === undefined ? {} : { participants: [...selection.from] }), ...(options.mention ? { mention: name } : {}),
-        ...(options.takeover === undefined ? {} : { takeover: options.takeover }),
+        // The stored lease can reserve by sender, not by ID. Do not reserve unrelated deliveries.
+        participants: selection.ids === undefined ? selection.from : [], mention: options.mention ? name : undefined, replace: options.replace,
       };
       const start = await acquireWatchLease(this.resource.artifact, seat!, this.resource.clock(), crypto.randomUUID(), watch, control?.signal);
       if (start.type === 'active') return await complete(undefined, 'already-active');
       leaseId = start.leaseId;
-      control?.onProgress?.({ kind: 'perceive-started', participant: name, waitMs: wait, replacementRequested: options.takeover ?? false, replaced: start.replaced });
+      control?.onProgress?.({ kind: 'perceive-started', participant: name, waitMs: wait, replacementRequested: options.replace ?? false, replaced: start.replaced });
       const quietSince = this.resource.clock();
       let nextHeartbeat = start.heartbeatAt + WATCH_HEARTBEAT_MS;
       while (true) {
@@ -401,9 +369,9 @@ export class SeatedParticipant implements Participant {
   }
   async pending(options: PendingOptions = {}, control?: OperationControl): Promise<PendingResult> {
     checkControl(control);
-    const limit = options.limit === undefined ? 100 : options.limit;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
-      throw new SquareError('invalid_args', 'Pending limit must be a positive integer no greater than 100.');
+    const limit = options.limit ?? PAGE_CAP;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > PAGE_CAP)
+      throw new SquareError('invalid_args', `Pending limit must be a positive integer no greater than ${PAGE_CAP}.`);
     // Pending follows the shared archive cursor: act/N with before/after.
     const shared = activityQueryFilter(options);
     const filter = { kinds: ['say'] as const, unseenOnly: true as const,
@@ -433,25 +401,23 @@ export class SeatedParticipant implements Participant {
       }
       const indexes: number[] = [];
       for (const id of input) {
-        const activity = facts.activity(parseRequiredActivityId(id));
-        if (activity?.kind !== 'say')
-          throw new SquareError('invalid_args', `${id} is not addressed to you.`, { reason: 'not_addressed', activityId: id });
-        const head = facts.directed(this.name, { indexes: [activity.index], kinds: ['say'] }, { edge: 'oldest', limit: 1 }).items[0];
-        if (head === undefined) throw new SquareError('invalid_args', `${id} is not addressed to you.`, { reason: 'not_addressed', activityId: id });
-        indexes.push(activity.index);
+        const index = parseRequiredActivityId(id);
+        if (facts.activity(index)?.kind !== 'say' || facts.directedAt(this.name, index) === undefined)
+          throw new SquareError('invalid_args', `${id} is not addressed to you.`);
+        indexes.push(index);
       }
       return { consumed: facts.markSeen(this.name, indexes, this.resource.clock()) };
     }, control?.signal).then(result => result.value);
   }
   async done(body?: string, options: ObservationOptions = {}, control?: OperationControl): Promise<LifecycleResult> {
-    validateDoneBody(body);
+    const { observe } = parseOperation('done', { ...options, body });
     checkControl(control);
     await reconcile(this.resource, control?.signal);
     const name = (await this.resource.artifact.read(facts => resolveKnownName(facts, this.name), control?.signal)).value;
     const seat = this.seat, now = this.resource.clock();
     const result = (await this.resource.artifact.transactAs(participantAuthority(seat), facts => {
-      const stored = facts.land(coreDone(facts, name, body ?? '', now));
-      return { activity: toPublicActivity(stored), ...(!options.observe ? {} : { observation:
+      const stored = facts.land(coreDone(facts, name, now));
+      return { activity: toPublicActivity(stored), ...(!observe ? {} : { observation:
         observation(this.resource, inSquareCount(facts), name, now),
       }) };
     }, control?.signal)).value;

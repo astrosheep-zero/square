@@ -61,9 +61,9 @@ export interface WatchLease {
 export type DirectedNotificationRoute = import('./attention.js').AudienceRoute;
 
 export interface WatchOptions {
-  participants?: string[];
+  participants?: readonly string[];
   mention?: string;
-  takeover?: boolean;
+  replace?: boolean;
 }
 
 export function formatHardCap(hardCap: HardCap): string {

@@ -1,4 +1,4 @@
-import { Square } from '@astrosheep/square';
+import { PAGE_CAP, Square } from '@astrosheep/square';
 import type { Activity, StreamRecord } from '@astrosheep/square';
 import type { BridgeSettings } from './config.js';
 import { Directory } from './directory.js';
@@ -15,7 +15,6 @@ export interface BridgeOptions {
   readonly pollIntervalMs?: number;
 }
 
-const PAGE = 100;
 const STOP_GRACE_MS = 2000;
 const HANDLED_SUBTYPES = new Set(['thread_broadcast', 'file_share']);
 
@@ -62,7 +61,7 @@ export class Bridge {
     const square = options.square ?? await Square.at({ path: options.settings.square });
     if (loaded.fresh) {
       // A first start begins at the current end of the archive; old history is not replayed.
-      store.state.cursor = (await square.history({ limit: 1, order: 'desc' })).activities[0]?.id ?? null;
+      store.state.cursor = (await square.history({ limit: 1 })).activities[0]?.id ?? null;
       await store.save();
     }
     return new Bridge(options, square, store, directory, options.square === undefined);
@@ -121,12 +120,10 @@ export class Bridge {
   /** Post every square activity after the cursor that Slack has not seen yet. */
   async drainOutbound(): Promise<void> {
     for (;;) {
-      const cursor = asActivityId(this.state.cursor);
-      const page = await this.square.history(cursor === undefined
-        ? { limit: null }
-        : { cursor: { id: cursor, direction: 'after' }, limit: PAGE });
+      const after = asActivityId(this.state.cursor) ?? 'act/0';
+      const page = await this.square.history({ after, limit: PAGE_CAP, maxChars: Number.MAX_SAFE_INTEGER });
       for (const activity of page.activities) await this.mirror(activity);
-      if (cursor === undefined || page.activities.length < PAGE) return;
+      if (page.activities.length < PAGE_CAP) return;
     }
   }
 

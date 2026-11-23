@@ -7,12 +7,13 @@ export type { Owner, WakeAddress, ActivityMetadata, JsonValue, DirectedNotificat
 export type { ActivityCursor, ActivityQuery } from '../core/activity-query.js';
 export type { ParticipantPresence, ParticipantSummary } from '../core/decisions.js';
 export type { ArchiveRecord, Activity, PerceivedActivity, SquareObservation, EntryPresentation, PresenceClassification, PerceivePresence,
-  StatusOptions, StatusResult, ParticipantsResult, HistoryQuery, HistoryContinuation, HistoryObservation, StatusObservation, ParticipantsObservation } from '../core/observations.js';
-export type { PerceiveOptions, PerceiveReason } from '../core/perceive-decisions.js';
-export type { AckResult, ExpressOptions, ExpressInput, ExpressResult, ListenerChangeResult, ListeningResult, MuteResult, LifecycleResult,
+  StatusResult, ParticipantsResult, HistoryContinuation, HistoryObservation, StatusObservation, ParticipantsObservation } from '../core/observations.js';
+export type { PerceiveReason } from '../core/perceive-decisions.js';
+export type { AttentionInput, DiscoveryOptions, ExpressOptions, ExpressInput, HistoryQuery, JoinOptions, MuteInput, PerceiveOptions, StatusOptions } from '../surfaces/operations.js';
+export type { AckResult, ExpressResult, ListenerChangeResult, ListeningResult, MuteResult, LifecycleResult,
   PendingOptions, PendingResult, PerceiveResult, Participant, ExpressionObservation, ExpressContext, ExpressObservation, PerceiveObservation, ListenerObservation } from '../app/participant.js';
-export type { HeldSeat, OpenOptions, SquareAtInput, SquareBuildInput, JoinOptions, JoinResult, RecoveryResult,
+export type { HeldSeat, OpenOptions, SquareAtInput, SquareBuildInput, JoinResult, RecoveryResult,
   HistoryResult, JoinObservation } from '../app/square.js';
 export type { StreamStart, StreamOptions, StreamRecord } from '../app/stream.js';
-export type { DiscoveryOptions, SquareListItem, DiscoveryResult } from '../app/list.js';
+export type { SquareListItem, DiscoveryResult } from '../app/list.js';
 export type { InboxOptions, InboxMembershipSummary, InboxResult } from '../app/inbox.js';

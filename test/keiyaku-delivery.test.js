@@ -60,7 +60,11 @@ test('only landed Square mentions can admit a Tell and leave unread activity acr
   // Flush the pending mention after restoring the optional SDK. Bare activity is not a Tell source.
   const question = await recipient.express('question', { force: true });
   const tell = (target, as, id) => ({ ...target, options: { wait: false },
-    prompt: `A Square mention reached you. Use Square perceive with ${JSON.stringify({ location: first.location, as, id })}.` });
+    prompt: ['A Square mention reached you. Take it in if unread:',
+      `perceive ${JSON.stringify({ location: first.location, as, ids: [id] })}`,
+      'To reread the full activity:',
+      `history ${JSON.stringify({ location: first.location, ids: [id], maxChars: Number.MAX_SAFE_INTEGER })}`,
+    ].join('\n') });
   const mentionTell = tell(actor, 'alpha', mention.activity.id);
   assert.deepEqual(await readTells(), [mentionTell], 'directed mention only wakes alpha');
   const many = await sender.express('for both named participants', { mentions: ['alpha', 'beta', 'beta'], force: true });
@@ -68,14 +72,14 @@ test('only landed Square mentions can admit a Tell and leave unread activity acr
   assert.deepEqual((await readTells()).sort(byPromptAndActor), expected.sort(byPromptAndActor),
     'each named seat wakes once; the unrelated stable owner does not wake');
   for (const seat of [recipient, other]) {
-    assert.equal((await seat.perceive({ id: many.activity.id })).activities[0].body, 'for both named participants');
+    assert.equal((await seat.perceive({ ids: [many.activity.id] })).activities[0].body, 'for both named participants');
   }
   assert.deepEqual((await observer.pending()).activities, []);
   await recipient.express('a literal self-address @alpha', { force: true });
   await first.send({ from: 'akuma-outcome', to: 'alpha', body: '@alpha synthetic report' });
   await postAndDispatch(ledger, { owner: identity.owner, key: ['keiyaku', actor.akuId, 'turn', '42'],
     text: 'an outcome returning to its author' });
-  await recipient.listen('sender');
+  await recipient.attention({ target: 'sender', state: 'listen' });
   await sender.express('not directed', { force: true });
   await sender.express('reply, not mention', { reply: question.activity.id, force: true });
   await postAndDispatch(ledger, { owner: identity.owner, key: ['square', first.location, 'recipient', 'alpha', 'join', recipient.generation, 'act', '999'],
@@ -85,7 +89,7 @@ test('only landed Square mentions can admit a Tell and leave unread activity acr
   assert.deepEqual(await ledger.receipts(identity.owner), [], 'admission is never presentation');
   const selected = await first.participant('alpha', { owner: akumaDeliveryOwner(actor) });
   assert.equal(selected.generation, recipient.generation);
-  assert.equal((await selected.perceive({ id: mention.activity.id })).activities[0].body, 'nonce-body-must-not-be-in-Tell');
+  assert.equal((await selected.perceive({ ids: [mention.activity.id] })).activities[0].body, 'nonce-body-must-not-be-in-Tell');
   await selected.done();
 
   const sender2 = (await second.join('sender', { owner: 'test:sender' })).participant;

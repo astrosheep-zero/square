@@ -34,8 +34,8 @@ export interface SquareErrorFacts {
   /** Express admission rejected before any activity was committed. */
   activityUnsent?: true;
   /** Refusal reason, including absent participants, conflicting reach, and inaccessible activities. */
-  reason?: 'never_joined' | 'not_standing' | 'not_addressed' | 'invalid_reply' | 'invalid_done_body' | 'needs_seat';
-  /** The activity id a `perceive --id` refusal named. */
+  reason?: 'never_joined' | 'not_standing' | 'invalid_reply' | 'invalid_done_body' | 'needs_seat';
+  /** The activity ID a reply refusal named. */
   activityId?: string;
   /** Requested recipient spellings, without parsing presentation copy. */
   targets?: readonly string[];
@@ -67,7 +67,6 @@ export interface OperationFailureDetail {
   readonly participant?: string;
   readonly expressEffect?: 'unsent' | 'landed' | 'unknown';
   readonly landedId?: string;
-  readonly historyBounds?: { readonly maxLimit: number; readonly totalMatches: number };
 }
 export interface OperationError extends Error {
   readonly operation?: OperationFailureDetail;

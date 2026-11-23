@@ -1,77 +1,18 @@
 import { sameName } from '../core/model.js';
-import fs from 'node:fs';
-import path from 'node:path';
 import { truncateChars } from '../core/neutral.js';
 import { participantIdentity } from '../core/square-values.js';
 import { MAX_IDENTITY_SET_SIZE, type Perception } from '../core/square-core.js';
 import { formatRelativeTime } from '../core/time.js';
 import type { Activity, UnreadActivitySummary, ParticipantSummary } from '../api/types.js';
 import { style } from './tty-style.js';
-import { CLI_OPERATIONS, fieldFlag, type PresentationSurface, type Suggestion } from './operations.js';
+import { displayPath } from './operations.js';
 
-export type { PresentationSurface } from './operations.js';
-
-export function spellField(operation: string, field: string, surface: PresentationSurface = 'cli'): string {
-  return surface === 'tool' ? field
-    : CLI_OPERATIONS.find(cli => cli.operation.name === operation)?.fields.find(option => option.key === field)?.flag ?? fieldFlag(field);
-}
-
-export function spellAction({ operation, args, owner, help }: Suggestion, surface: PresentationSurface = 'cli'): string {
-  const { location, as, ...options } = args ?? {};
-  if (surface === 'tool') {
-    if (help) return ''; // Tools expose their help in the schema, not as an invocation.
-    const clean = { location: typeof location === 'string' ? displayPath(location) : undefined, as, ...options };
-    return Object.values(clean).every(value => value === undefined) ? operation : `${operation} ${JSON.stringify(clean)}`;
-  }
-  const cli = CLI_OPERATIONS.find(cli => (cli.operation.name === operation || cli.names.includes(operation))
-    && Object.entries(cli.fixed ?? {}).every(([key, value]) => options[key] === value));
-  const prefix = ['square'];
-  if (typeof location === 'string') {
-    const resolve = as !== undefined && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(location);
-    prefix.push(fieldFlag('location'), quoteShell(resolve ? path.resolve(location) : location));
-  }
-  if (typeof as === 'string') prefix.push(fieldFlag('as'), quoteShell(as));
-  if (owner !== undefined) prefix.push('--owner', quoteShell(owner));
-  const flags: string[] = help ? ['--help'] : [];
-  const positional: string[] = [];
-  for (const [key, value] of Object.entries(options)) {
-    if (value === undefined || value === false || Object.hasOwn(cli?.fixed ?? {}, key)) continue;
-    const field = cli?.fields.find(option => option.key === key);
-    const flag = (field?.preferShort ? field.short : field?.flag) ?? fieldFlag(key);
-    if (value === true) { flags.push(flag); continue; }
-    const values = Array.isArray(value) && field?.repeat ? value : [value];
-    for (const entry of values) {
-      const text = String(entry);
-      const quoted = typeof entry === 'number' || text === '-' || /^(act\/\d+|\d+)$/.test(text)
-        || field?.bare && /^[\p{L}\p{M}\p{N}_.,/@-]+$/u.test(text) ? text : quoteShell(text);
-      const looksLikeFlag = text.startsWith('--') || text === '-h' || cli?.fields.some(option => text === option.short);
-      if (field?.positional) positional.push(...looksLikeFlag ? ['--', quoted] : [quoted]);
-      else flags.push(...looksLikeFlag ? [`${flag}=${quoted}`] : [flag, quoted]);
-    }
-  }
-  const command = cli === undefined || cli.names.includes(operation) ? operation : cli.name;
-  return [...prefix, command, ...flags, ...positional].join(' ');
-}
+export { displayPath, quoteShell, spellAction, spellField, type PresentationSurface } from './operations.js';
 
 interface HeaderOptions {
   participantCount?: number;
   /** Refusal bodies go to stderr, which stays literal even when it is a TTY. */
   plain?: boolean;
-}
-
-export function displayPath(squarePath: string, cwd = process.cwd()): string {
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath)) return squarePath;
-  if (!path.isAbsolute(squarePath)) return squarePath.split(path.sep).join('/');
-  const comparableCwd = fs.realpathSync.native(cwd);
-  let comparableSquarePath = squarePath;
-  try {
-    comparableSquarePath = fs.realpathSync.native(squarePath);
-  } catch {
-    // Some error outputs name a path before it exists; lexical comparison remains useful there.
-  }
-  const relative = path.relative(comparableCwd, comparableSquarePath);
-  const displayed = relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) ? relative : squarePath;
-  return displayed.split(path.sep).join('/');
 }
 
 export function withPathOutput(squarePath: string, body = '', opts: HeaderOptions = {}): string {
@@ -90,10 +31,6 @@ export function formatRefusal(
   // A refusal with no known count stays bare rather than claiming "0 in the square".
   if (opts.participantCount === undefined) return body === '' ? '' : `${body}\n`;
   return withPathOutput(squarePath, body, { ...opts, plain: true });
-}
-
-export function quoteShell(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function formatAge(ms: number | undefined): string {
@@ -158,6 +95,8 @@ function renderEventCliFacts(
   const now = opts.now;
   const maxBody = opts.preview;
   switch (event.kind) {
+    case 'read':
+      return { text: `· ${participantIdentity(event.actor)} looked through ${event.through} · ${event.id}`, bodyClipped: false };
     case 'join':
     case 'listen':
     case 'ignore':
@@ -167,7 +106,7 @@ function renderEventCliFacts(
       const action = event.kind === 'join' ? 'stepped into the square'
         : event.kind === 'listen' ? `turned an ear toward ${participantIdentity(event.target ?? 'someone')}`
           : event.kind === 'ignore' ? `turned away from ${participantIdentity(event.target ?? 'someone')}`
-            : `stopped listening to ${participantIdentity(event.target ?? 'someone')}`;
+            : `returned to direct attention from ${participantIdentity(event.target ?? 'someone')}`;
       return { text: `· ${identity} ${action}`, bodyClipped: false };
     }
     case 'say': {

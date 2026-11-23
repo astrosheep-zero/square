@@ -24,8 +24,8 @@ test('active perceive calls explain the existing lease and point to replacement'
   const output = renderWatchAlreadyActive({ squarePath: '.square/PUBLIC.square', name: 'codex-155777a843b6' });
   assert.match(output, /you are already perceiving/);
   assert.match(output, /active perceive is already running for @codex-155777a843b6/);
-  assert.match(output, /--takeover lets a new perceive take over/);
-  assert.match(output, /perceive --wait 30m --takeover$/);
+  assert.match(output, /--replace lets a new perceive take over/);
+  assert.match(output, /perceive --wait 30m --replace$/);
 });
 
 test('quiet graduates with the idle length', () => {

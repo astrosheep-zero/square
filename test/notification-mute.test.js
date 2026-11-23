@@ -6,7 +6,7 @@ import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
-  Square, deliveryLedgerMutedUntil, discover, muteDeliveryLedger, unmuteDeliveryLedger,
+  Square, deliveryLedgerMutedUntil, discover, muteDeliveryLedger,
 } from '../dist/api/square-api.js';
 import { DeliveryLedger } from '../dist/ledger/delivery-ledger.js';
 import { canonicalPath } from '../dist/storage/canonical-path.js';
@@ -47,34 +47,32 @@ test('global and captured-seat holds are independent and repeat only their own d
   const prefix = seatMutePrefix(location, { participant: 'Alice', generation: f.alice.generation });
   const id = seatMuteId('test:alice', prefix);
 
-  assert.deepEqual(await f.alice.mute({ durationMs: 100 }), { mutedUntil: 1100 });
+  assert.deepEqual(await f.alice.mute({ duration: '100ms' }), { mutedUntil: 1100 });
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:alice', id)).expiresAt, 1100);
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), null);
 
-  assert.deepEqual(await muteDeliveryLedger({ durationMs: 50, ledgerLocation: f.ledgerLocation, clock: f.clock }), { mutedUntil: 1050 });
+  assert.deepEqual(await muteDeliveryLedger({ duration: '50ms', ledgerLocation: f.ledgerLocation, clock: f.clock }), { mutedUntil: 1050 });
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), 1050);
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:alice', id)).expiresAt, 1100);
 
-  assert.deepEqual(await f.alice.mute({ durationMs: 200 }), { mutedUntil: 1200 });
+  assert.deepEqual(await f.alice.mute({ duration: '200ms' }), { mutedUntil: 1200 });
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), 1050);
-  await f.bob.mute({ durationMs: 300 });
+  await f.bob.mute({ duration: '300ms' });
   const bobPrefix = seatMutePrefix(location, { participant: 'Bob', generation: f.bob.generation });
   const bobId = seatMuteId('test:bob', bobPrefix);
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:bob', bobId)).expiresAt, 1300);
 
-  assert.deepEqual(await f.alice.unmute(), { mutedUntil: null });
-  assert.deepEqual(await f.alice.unmute(), { mutedUntil: null });
+  assert.deepEqual(await f.alice.mute({ duration: 'off' }), { mutedUntil: null });
   assert.equal(await suppression(f.ledgerLocation, f.clock, 'test:alice', id), undefined);
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:bob', bobId)).expiresAt, 1300);
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), 1050);
 
-  assert.deepEqual(await unmuteDeliveryLedger({ ledgerLocation: f.ledgerLocation, clock: f.clock }), { mutedUntil: null });
-  assert.deepEqual(await unmuteDeliveryLedger({ ledgerLocation: f.ledgerLocation, clock: f.clock }), { mutedUntil: null });
+  assert.deepEqual(await muteDeliveryLedger({ duration: 'off', ledgerLocation: f.ledgerLocation, clock: f.clock }), { mutedUntil: null });
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), null);
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:bob', bobId)).expiresAt, 1300);
 });
 
-test('independent exact, prefix and permanent holds survive both unmute layers', async (t) => {
+test('independent exact, prefix and permanent holds survive resuming both scopes', async (t) => {
   const f = await fixture(t);
   const ledger = await DeliveryLedger.open({ location: f.ledgerLocation, clock: f.clock });
   t.after(() => ledger.close());
@@ -82,10 +80,10 @@ test('independent exact, prefix and permanent holds survive both unmute layers',
   const prefix = await ledger.suppress({ owner: 'test:alice', key: ['kept'], scope: 'prefix', expiresAt: 5000 });
   const permanent = await ledger.suppress({ owner: 'test:bob', key: ['gone'], scope: 'exact' });
 
-  await f.alice.mute({ durationMs: 100 });
-  await muteDeliveryLedger({ durationMs: 100, ledgerLocation: f.ledgerLocation, clock: f.clock });
-  await f.alice.unmute();
-  await unmuteDeliveryLedger({ ledgerLocation: f.ledgerLocation, clock: f.clock });
+  await f.alice.mute({ duration: '100ms' });
+  await muteDeliveryLedger({ duration: '100ms', ledgerLocation: f.ledgerLocation, clock: f.clock });
+  await f.alice.mute({ duration: 'off' });
+  await muteDeliveryLedger({ duration: 'off', ledgerLocation: f.ledgerLocation, clock: f.clock });
 
   assert.ok(await ledger.suppression({ owner: 'test:alice', id: exact.id }));
   assert.ok(await ledger.suppression({ owner: 'test:alice', id: prefix.id }));
@@ -94,7 +92,7 @@ test('independent exact, prefix and permanent holds survive both unmute layers',
 
 test('one ledger hold blocks every owner and resumes retained work after expiry without GC or another write', async (t) => {
   const f = await fixture(t);
-  await muteDeliveryLedger({ durationMs: 100, ledgerLocation: f.ledgerLocation, clock: f.clock });
+  await muteDeliveryLedger({ duration: '100ms', ledgerLocation: f.ledgerLocation, clock: f.clock });
   const ledger = await DeliveryLedger.open({ location: f.ledgerLocation, clock: f.clock });
   t.after(() => ledger.close());
   const aliceSession = await ledger.session('test:alice'), bobSession = await ledger.session('test:bob');
@@ -114,7 +112,7 @@ test('one ledger hold blocks every owner and resumes retained work after expiry 
 test('a global-only configured-clock hold survives a new express and resumes its retained card at the deadline', async (t) => {
   const f = await fixture(t);
   const squarePath = await canonicalPath(f.file);
-  assert.deepEqual(await muteDeliveryLedger({ durationMs: 100, ledgerLocation: f.ledgerLocation, clock: f.clock }), { mutedUntil: 1100 });
+  assert.deepEqual(await muteDeliveryLedger({ duration: '100ms', ledgerLocation: f.ledgerLocation, clock: f.clock }), { mutedUntil: 1100 });
   assert.equal((await f.bob.express('held by the square', { mentions: ['Alice'], force: true })).activity.id, 'act/2');
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), 1100, 'a new write does not renew or drop the global hold');
   assert.equal(globalHoldCount(f.ledgerLocation), 1);
@@ -136,7 +134,7 @@ test('a seat-only configured-clock hold survives a new express and resumes that 
   const f = await fixture(t);
   const squarePath = await canonicalPath(f.file);
   const seatId = seatMuteId('test:alice', seatMutePrefix(squarePath, { participant: 'Alice', generation: f.alice.generation }));
-  assert.deepEqual(await f.alice.mute({ durationMs: 100 }), { mutedUntil: 1100 });
+  assert.deepEqual(await f.alice.mute({ duration: '100ms' }), { mutedUntil: 1100 });
   assert.equal(await deliveryLedgerMutedUntil({ ledgerLocation: f.ledgerLocation, clock: f.clock }), null, 'seat-only holds no global deadline');
   assert.equal((await f.bob.express('held for one seat', { mentions: ['Alice'], force: true })).activity.id, 'act/2');
   assert.equal((await f.alice.express('delivered next door', { mentions: ['Bob'], force: true })).activity.id, 'act/3');
@@ -170,7 +168,7 @@ test('a seat replacement during hold installation releases only the obsolete gen
     }
     return original.call(this, input, signal);
   });
-  await assert.rejects(f.alice.mute({ durationMs: 100 }), /seat has been replaced/);
+  await assert.rejects(f.alice.mute({ duration: '100ms' }), /seat has been replaced/);
   assert.equal(await suppression(f.ledgerLocation, f.clock, 'test:alice', oldId), undefined, 'the obsolete generation hold is released');
   const newId = seatMuteId('test:alice', seatMutePrefix(squarePath, { participant: 'Alice', generation: replaced.generation }));
   assert.notEqual(newId, oldId);
@@ -185,7 +183,7 @@ test('a seat hold scopes exactly one captured join while other seats and squares
   const otherAlice = (await other.join('Alice', { owner: 'test:alice' })).participant;
   const secondBob = (await f.square.join('Bob2', { owner: 'test:bob' })).participant;
 
-  await f.alice.mute({ durationMs: 100 });
+  await f.alice.mute({ duration: '100ms' });
   const prefix = seatMutePrefix(await canonicalPath(f.file), { participant: 'Alice', generation: f.alice.generation });
   assert.ok(await suppression(f.ledgerLocation, f.clock, 'test:alice', seatMuteId('test:alice', prefix)));
   const otherPrefix = seatMutePrefix(await canonicalPath(otherFile), { participant: 'Alice', generation: otherAlice.generation });
@@ -203,7 +201,7 @@ test('a seat hold suppresses only its captured recipient card, not a same-owner 
   const otherAlice = (await other.join('Alice', { owner: 'test:alice' })).participant;
   const otherBob = (await other.join('OtherBob', { owner: 'test:bob' })).participant;
 
-  await f.alice.mute({ durationMs: 60_000 });
+  await f.alice.mute({ duration: '60s' });
   await f.bob.express('for both seats', { mentions: ['Alice', 'Alice2'], force: true });
   await otherBob.express('elsewhere for Alice', { mentions: ['Alice'], force: true });
 
@@ -219,7 +217,7 @@ test('a seat hold suppresses only its captured recipient card, not a same-owner 
   assert.deepEqual(claim.cards.filter(card => card.key[1] === location).map(card => card.key[3]), ['alice2']);
   await claim.settle('released');
 
-  await f.alice.unmute();
+  await f.alice.mute({ duration: 'off' });
   const resumed = await ledger.pending('test:alice', { generation: session.generation });
   assert.equal(resumed.some(card => card.key[1] === location && card.key[3] === 'alice'), true, 'the suppressed card was retained');
   assert.equal(alice2.name, 'Alice2');
@@ -231,7 +229,7 @@ test('manual pending, ACK and perceive stay usable under a global hold without c
   const first = (await f.bob.express('one for Alice', { mentions: ['Alice'], force: true })).activity;
   const second = (await f.bob.express('two for Alice', { mentions: ['Alice'], force: true })).activity;
   const before = (await f.square.status()).participants.map(({ name, presence, deliveryAvailable }) => ({ name, presence, deliveryAvailable }));
-  await muteDeliveryLedger({ durationMs: 60_000, ledgerLocation: f.ledgerLocation, clock: f.clock });
+  await muteDeliveryLedger({ duration: '60s', ledgerLocation: f.ledgerLocation, clock: f.clock });
 
   assert.deepEqual((await f.alice.pending()).activities.map(activity => activity.id), [first.id, second.id]);
   assert.deepEqual(await f.alice.ack([second.id]), { consumed: 1 });
@@ -243,28 +241,28 @@ test('manual pending, ACK and perceive stay usable under a global hold without c
   assert.equal(after.find(person => person.name === 'Bob').presence, 'active');
 });
 
-test('a stale handle cannot mute or unmute a newer join generation', async (t) => {
+test('a stale handle cannot change a newer join generation’s hold', async (t) => {
   const f = await fixture(t);
   const location = await canonicalPath(f.file);
   const oldPrefix = seatMutePrefix(location, { participant: 'Alice', generation: f.alice.generation });
   const oldId = seatMuteId('test:alice', oldPrefix);
-  await f.alice.mute({ durationMs: 100 });
+  await f.alice.mute({ duration: '100ms' });
   await f.alice.done();
   const current = (await f.square.join('Alice', { owner: 'test:alice' })).participant;
-  await assert.rejects(f.alice.mute({ durationMs: 50 }), error => error.code === 'already_joined');
-  await current.mute({ durationMs: 70 });
+  await assert.rejects(f.alice.mute({ duration: '50ms' }), error => error.code === 'already_joined');
+  await current.mute({ duration: '70ms' });
   const currentPrefix = seatMutePrefix(location, { participant: 'Alice', generation: current.generation });
   const currentId = seatMuteId('test:alice', currentPrefix);
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:alice', currentId)).expiresAt, 1070);
-  await assert.rejects(f.alice.unmute(), error => error.code === 'already_joined');
+  await assert.rejects(f.alice.mute({ duration: 'off' }), error => error.code === 'already_joined');
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:alice', currentId)).expiresAt, 1070);
   assert.equal((await suppression(f.ledgerLocation, f.clock, 'test:alice', oldId)).expiresAt, 1100);
 });
 
 test('status, participants and discovery expose active deadlines without creating an absent ledger', async (t) => {
   const f = await fixture(t);
-  await f.alice.mute({ durationMs: 100 });
-  await muteDeliveryLedger({ durationMs: 50, ledgerLocation: f.ledgerLocation, clock: f.clock });
+  await f.alice.mute({ duration: '100ms' });
+  await muteDeliveryLedger({ duration: '50ms', ledgerLocation: f.ledgerLocation, clock: f.clock });
 
   const before = (await f.square.status()).participants.map(({ name, presence, deliveryAvailable }) => ({ name, presence, deliveryAvailable }));
   const status = await f.square.status({ viewer: 'Alice', observe: true });
@@ -304,7 +302,7 @@ test('status, participants and discovery expose active deadlines without creatin
   assert.equal(fs.existsSync(absent), false);
 });
 
-test('CLI mute and unmute cover local and ledger-wide modes and no-location refusal', async (t) => {
+test('CLI mute sets and clears holds in either scope', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-mute-cli-'));
   const file = path.join(root, 'CLI.square');
   const ledger = path.join(root, 'delivery.sqlite');
@@ -323,10 +321,10 @@ test('CLI mute and unmute cover local and ledger-wide modes and no-location refu
   assert.match(globalText.stdout, /notifications pause until/);
 
   assert.match(run(withName(file, 'Alice', ['status']), { cwd: root, env }).stdout, /muted until/);
-  const unmutedLocal = run(withName(file, 'Alice', ['unmute']), { cwd: root, env });
+  const unmutedLocal = run(withName(file, 'Alice', ['mute', 'off']), { cwd: root, env });
   assert.equal(unmutedLocal.status, 0, unmutedLocal.stderr);
   assert.match(unmutedLocal.stdout, /@Alice ends their notification hold/);
-  const unmutedGlobal = run(['unmute'], { cwd: root, env });
+  const unmutedGlobal = run(['mute', 'off'], { cwd: root, env });
   assert.equal(unmutedGlobal.status, 0, unmutedGlobal.stderr);
   assert.match(unmutedGlobal.stdout, /the notification hold ends/);
 
@@ -337,18 +335,16 @@ test('CLI mute and unmute cover local and ledger-wide modes and no-location refu
   assert.equal(fs.existsSync(missing), false);
   const help = run(['mute', '--help'], { cwd: root });
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /Step back from notifications for a while\. Whatever reaches you stays waiting for perceive\./);
-  assert.match(help.stdout, /Omit to mute the entire ledger\./);
+  assert.match(help.stdout, /Pause or resume automatic notifications/);
+  assert.match(help.stdout, /Omit to set the hold for the entire ledger\./);
 });
 
 test('invalid global mutes refuse before creating a ledger', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-mute-invalid-'));
   const location = path.join(root, 'must-stay-absent.sqlite');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  for (const input of [
-    { durationMs: 0, clock: () => 100 },
-    { durationMs: Number.MAX_SAFE_INTEGER, clock: () => 1 },
-  ]) await assert.rejects(muteDeliveryLedger({ ...input, ledgerLocation: location }), RangeError);
+  await assert.rejects(muteDeliveryLedger({ duration: '0ms', ledgerLocation: location }), { code: 'invalid_args' });
+  await assert.rejects(muteDeliveryLedger({ duration: `${Number.MAX_SAFE_INTEGER}ms`, ledgerLocation: location, clock: () => 1 }), RangeError);
   assert.equal(fs.existsSync(location), false);
 });
 

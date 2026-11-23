@@ -77,7 +77,7 @@ commit order even when timestamps do not. Square reads after its artifact-owned 
 attached seat owner, then folds eligible receipts and advances that watermark in one artifact transaction.
 The watermark advances past unrelated producer receipts too; concurrent reconciliation cannot lower it.
 Only unconsumed full cards matching the current joined seat can fold; a shortened activity card points
-to `square_perceive` and cannot consume the full activity. Resetting a watermark to zero reproduces the
+to `history` by ID and cannot consume the full activity. Resetting a watermark to zero reproduces the
 retained full scan. Producers never delete ledger receipts.
 Perceive suppresses corresponding live ledger cards where possible. Withdrawal uses owner/key ranges
 for current seat owners and outstanding departure intents, plus in-window export claims that could still

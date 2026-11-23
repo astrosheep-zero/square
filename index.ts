@@ -1,4 +1,4 @@
-export { Square, squareLocation, discover, inbox, diagnoseSquare, migrateSquare, muteDeliveryLedger, unmuteDeliveryLedger, deliveryLedgerMutedUntil, type DeliveryMuteOptions, type MigrateSquareResult } from './api/square-api.js';
+export { Square, squareLocation, discover, inbox, diagnoseSquare, migrateSquare, muteDeliveryLedger, deliveryLedgerMutedUntil, type DeliveryMuteOptions, type MigrateSquareResult } from './api/square-api.js';
 export { SquareError, ACTIVITY_METADATA_MAX_BYTES } from './core/model.js';
 export { selectOwnSeat, requireOwner, requireJoinName, localUserOwner, harnessOwner, decodeHarnessOwner } from './api/square-api.js';
 export { akumaDeliveryOwner, type AkumaActor } from './core/owner.js';
@@ -11,5 +11,5 @@ export type { CardPresentation } from './plugins/paseo/shared/card-presentation.
 // Public operation contracts; no alternate runtime surface.
 export type * from './api/types.js';
 // Participant-name and activity-id syntax shared with adapters.
-export { parseActivityId } from './core/square-core.js';
+export { PAGE_CAP, parseActivityId } from './core/square-core.js';
 export { NAME_GRAPHEME_SOURCE, PARTICIPANT_NAME_SOURCE, isParticipantName } from './core/square-values.js';

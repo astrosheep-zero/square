@@ -7,7 +7,7 @@ import { isSquareError } from '../core/model.js';
 import { truncateChars } from '../core/neutral.js';
 import type { ActivityId, StreamStart } from '../api/types.js';
 import { quoteShell, spellAction } from '../surfaces/presentation.js';
-import { inbox, formatActivityId, parseActivityId } from '../api/square-api.js';
+import { inbox, PAGE_CAP, formatActivityId, parseActivityId } from '../api/square-api.js';
 import { type CommandSpec, withSquare, squareInput, fail, parseBoundedLimit, parseNonNegativeInteger, readStdin, requireSquarePath, requireValue, usage } from './context.js';
 
 interface StreamIntent { ndjson: boolean; forName?: string; start: StreamStart; }
@@ -27,7 +27,7 @@ export const streamCommand: CommandSpec<StreamIntent> = {
       } else if (argv[index] === '--last') {
         if (after !== undefined) fail('Invalid stream options: --last and --after cannot be combined.');
         last = parseNonNegativeInteger(requireValue(argv, index, argv[index]), '--last');
-        if (last > 100) fail('Invalid --last: maximum is 100.');
+        if (last > PAGE_CAP) fail(`Invalid --last: maximum is ${PAGE_CAP}.`);
         hasLast = true;
         index += 1;
       } else if (argv[index] === '--after') {
@@ -69,7 +69,6 @@ export const streamCommand: CommandSpec<StreamIntent> = {
 };
 
 const INBOX_DEFAULT_LIMIT = 20;
-const INBOX_MAX_LIMIT = 100;
 const INBOX_DISPLAY_CHARS = 160;
 
 function inboxDisplay(value: string): string {
@@ -95,9 +94,9 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
       else usage(context.command);
     }
     if (!owner) fail('inbox requires --for-owner <owner>.');
-    const retry = spellAction({ operation: 'inbox', args: { forOwner: owner, limit: INBOX_MAX_LIMIT } });
+    const retry = spellAction({ operation: 'inbox', args: { forOwner: owner, limit: PAGE_CAP } });
     if (duplicateLimit) fail(`✕ inbox accepts one --limit\n${retry}`);
-    const limit = hasLimit ? parseBoundedLimit(limitValue, '--limit', INBOX_MAX_LIMIT, retry) : INBOX_DEFAULT_LIMIT;
+    const limit = hasLimit ? parseBoundedLimit(limitValue, '--limit', PAGE_CAP, retry) : INBOX_DEFAULT_LIMIT;
     return { owner, limit };
   },
   async execute(intent, context) {

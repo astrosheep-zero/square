@@ -3,6 +3,11 @@ export type Reach = 'bell';
 export type ActivityId = `act/${number}`;
 export type Perception = 'full' | 'presence';
 export const MAX_IDENTITY_SET_SIZE = 10;
+export const PAGE_CAP = 100;
+export const DEFAULT_LIST_DEPTH = 4;
+export const MAX_LIST_DEPTH = 16;
+export const DEFAULT_LIST_LIMIT = 20;
+export const PERCEIVE_DEFAULT_LIMIT = 10;
 
 export function formatActivityId(index: number): ActivityId {
   if (!Number.isSafeInteger(index) || index < 0) throw new Error(`Invalid activity index: ${index}`);

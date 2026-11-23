@@ -138,7 +138,7 @@ test('cap withdrawal leaves producer activity unread and available to pending an
   for (let i = 0; i < 200; i++) await c.ledger.post({ owner: c.session.owner, key: [`other:${i}`], text: 'newer notification' });
   assert.deepEqual(await c.cards(), []);
   assert.deepEqual((await c.bob.pending()).activities.map(item => item.id), [activity.id]);
-  assert.deepEqual((await c.bob.perceive({ id: activity.id })).activities.map(item => item.id), [activity.id]);
+  assert.deepEqual((await c.bob.perceive({ ids: [activity.id] })).activities.map(item => item.id), [activity.id]);
 });
 
 test('internal delivery entry points refuse omitted locations before accessing storage; public resources capture resolution once', async t => {
@@ -211,7 +211,7 @@ test('gone consumed cards do not recreate suppressions after ledger retention', 
   const c = await fixture(t);
   const sent = (await c.alice.express('consume this card', { mentions: ['Bob'], force: true })).activity;
   const key = (await c.cards())[0].key;
-  await c.bob.perceive({ id: sent.id });
+  await c.bob.perceive({ ids: [sent.id] });
   assert.deepEqual(await c.cards(), []);
   assert.ok(c.suppressions().includes(encodeDeliveryKey(key)));
   const future = Date.now() + 31 * DAY;
@@ -403,7 +403,7 @@ test('perceive maintenance is driven by live ledger evidence, not consumed or un
   });
   t.mock.method(c.artifact, 'read', (select, signal) => read(facts => select(observe(facts)), signal));
   t.mock.method(c.artifact, 'transactAs', (authority, change, signal) => transact(authority, facts => change(observe(facts)), signal));
-  await c.bob.perceive({ id: `act/${target}` });
+  await c.bob.perceive({ ids: [`act/${target}`] });
   assert.ok(receiptCalls.length > 0);
   assert.ok(receiptCalls.every(call => call.options?.keys === undefined), 'receipt reads never carry historical artifact key lists');
   const bobReceipts = receiptCalls.find(call => call.owner === c.session.owner).keys;

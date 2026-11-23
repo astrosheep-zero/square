@@ -35,7 +35,7 @@ export function saveActivityDraft(squarePath: string, name: string, body: string
 
 export function activityRetryCommand(squarePath: string, name: string, opts: ActivityOptions): string {
   return spellAction({ operation: 'express', owner: opts.recoveryOwner, args: { location: squarePath, as: name,
-    force: opts.force, noWait: opts.noWait, mentions: opts.mentions, noMention: opts.noMention, metadata: opts.metadataJson,
+    force: opts.force, noWait: opts.noWait, mentions: opts.mentions, metadata: opts.metadataJson,
     reply: opts.reply, body: opts.bodyProvided === false ? undefined : '-' } });
 }
 
@@ -147,7 +147,7 @@ export function renderActivityUncertain(opts: { squarePath: string; name: string
     style('dim', `· draft kept: ${opts.draftPath}`),
     '  · the draft is a saved copy; sending it again could repeat your activity',
     spellAction({ operation: 'history', args: { location: opts.squarePath,
-      ...(opts.landedId === undefined ? { limit: 10 } : { at: [opts.landedId] }), full: true } }),
+      ...(opts.landedId === undefined ? { limit: 10 } : { ids: [opts.landedId] }) } }),
   ], opts);
 }
 

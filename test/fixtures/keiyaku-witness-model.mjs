@@ -21,13 +21,14 @@ const server = createServer(async (req, res) => {
     const start = messages.findLastIndex(message => message.role === 'user');
     const input = start === -1 ? '' : text(messages[start]);
     const isJoin = input.includes(`Square witness join ${seat}`);
-    let id;
+    let args = { location: square, as: seat };
     if (!isJoin) {
-      const awareness = input.match(/A Square mention reached you\. Use Square perceive with (\{[^\n]*\})\./u);
+      const awareness = input.match(/^perceive (\{[^\n]*\})$/mu);
       const coords = awareness && JSON.parse(awareness[1]);
-      if (!coords || coords.location !== square || coords.as !== seat || typeof coords.id !== 'string' || !/^act\/(0|[1-9]\d*)$/u.test(coords.id))
+      if (!input.includes('A Square mention reached you.') || !coords || coords.location !== square || coords.as !== seat ||
+          !Array.isArray(coords.ids) || coords.ids.length !== 1 || typeof coords.ids[0] !== 'string' || !/^act\/(0|[1-9]\d*)$/u.test(coords.ids[0]))
         throw new Error('Unexpected fixture input or mention coordinates');
-      id = coords.id;
+      args = coords;
     }
     const operation = isJoin ? 'join' : 'perceive';
     const result = messages.slice(start + 1).findLast(message => message.role === 'tool');
@@ -38,7 +39,6 @@ const server = createServer(async (req, res) => {
       finish = 'stop';
     } else {
       const names = tools.flatMap(tool => tool.function?.name ?? tool.custom?.name ?? []);
-      const args = { location: square, as: seat, ...(id === undefined ? {} : { id }) };
       const pi = model !== 'witness-mcp';
       const name = pi ? 'codemode' : names.find(candidate => candidate === `square_${operation}`);
       if (!names.includes(name)) throw new Error(`Missing fixture tool ${name ?? operation}; available: ${names.join(', ')}`);

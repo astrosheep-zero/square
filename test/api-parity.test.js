@@ -14,7 +14,7 @@ async function memory(t) {
   return square;
 }
 
-test('history defaults to ten, explicit null reads all, and archiving leaves pending untouched', async (t) => {
+test('history defaults to ten, accepts a larger page, and leaves pending untouched', async (t) => {
   const square = await memory(t);
   const alice = (await square.join('Alice', { owner })).participant;
   const bob = (await square.join('Bob', { owner })).participant;
@@ -28,7 +28,7 @@ test('history defaults to ten, explicit null reads all, and archiving leaves pen
     Array.from({ length: 10 }, (_value, index) => `act/${index + 5}`));
   const observed = await square.history({ observe: true });
   assert.deepEqual(observed.observation.continuation, { direction: 'before', cursor: 'act/5', limit: 10 });
-  assert.equal((await square.history({ limit: null })).activities.length, 15);
+  assert.equal((await square.history({ limit: 20 })).activities.length, 15);
   assert.deepEqual(await alice.pending(), pending);
 });
 
@@ -45,15 +45,15 @@ test('a stale participant handle cannot speak after done or rejoin', async (t) =
 test('join refuses an omitted or blank name without adding history', async (t) => {
   const square = Square.inMemory({ markdown: 'explicit-name' });
   t.after(() => square.close());
-  const before = (await square.history({ limit: null })).activities.length;
+  const before = (await square.history()).activities.length;
   await assert.rejects(square.join(undefined, { owner }), { code: 'invalid_args' });
   await assert.rejects(square.join('', { owner }), { code: 'invalid_name' });
   await assert.rejects(square.join('   ', { owner }), { code: 'invalid_name' });
-  assert.equal((await square.history({ limit: null })).activities.length, before);
+  assert.equal((await square.history()).activities.length, before);
   assert.equal((await square.join('Defaulted', { owner })).kind, 'joined');
   assert.equal((await selectOwnSeat(square, owner)).name, 'Defaulted');
   await assert.rejects(square.join(undefined, { owner }), { code: 'invalid_args' });
-  assert.equal((await square.history({ limit: null })).activities.filter((activity) => activity.kind === 'join').length, 1);
+  assert.equal((await square.history()).activities.filter((activity) => activity.kind === 'join').length, 1);
 });
 
 test('perceive resolves caller and filters in one typed failure', async (t) => {

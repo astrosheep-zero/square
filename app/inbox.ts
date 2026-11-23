@@ -4,7 +4,8 @@ import { nameKey, SquareError, type Owner } from '../core/model.js';
 import { checkControl, type OperationControl, type SquareLocation } from '../core/neutral.js';
 import { requireOwner } from '../core/runtime.js';
 import { canonicalPath } from '../storage/canonical-path.js';
-import { discoverSquares, MAX_LIST_LIMIT } from './list.js';
+import { discoverSquares } from './list.js';
+import { PAGE_CAP } from '../core/square-core.js';
 
 export interface InboxOptions {
   readonly limit?: number;
@@ -26,7 +27,7 @@ export async function sessionInboxCounts(input: { readonly owner: Owner; readonl
   let after: string | undefined;
   do {
     signal?.throwIfAborted();
-    const page = await discoverSquares(root, { limit: MAX_LIST_LIMIT, ...(after === undefined ? {} : { after }) }, { signal });
+    const page = await discoverSquares(root, { limit: PAGE_CAP, ...(after === undefined ? {} : { after }) }, { signal });
     for (const item of page.items) {
       signal?.throwIfAborted();
       const location = await canonicalPath(path.resolve(root, item.path));
@@ -50,7 +51,7 @@ export async function inbox(input: SquareLocation, owner: Owner, options: InboxO
   checkControl(control);
   requireOwner(owner);
   const limit = options.limit ?? 20;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new SquareError('invalid_args', 'Inbox limit must be between 1 and 100');
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > PAGE_CAP) throw new SquareError('invalid_args', `Inbox limit must be between 1 and ${PAGE_CAP}`);
   const rows = await sessionInboxCounts({ owner, cwd: input.cwd }, control?.signal);
   checkControl(control);
   const compare = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;

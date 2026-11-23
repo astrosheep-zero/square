@@ -1,4 +1,4 @@
-// Shared case-insensitive search semantics for storage filtering and presentation.
+// Case-insensitive archive search.
 // Regex mode intentionally uses JavaScript's built-in engine, without a ReDoS
 // timeout. Callers should use literal mode for plain text and avoid untrusted regexes.
 
@@ -14,44 +14,7 @@ export function compileSearchPattern(pattern: string, fixed: boolean): RegExp {
   }
 }
 
-export interface GrepSnippet {
-  before: string;
-  match: string;
-  after: string;
-  beforeOmitted: number;
-  afterOmitted: number;
-}
-
-function compactWhitespace(text: string): string {
-  return text.replace(/\s+/g, ' ');
-}
-
-export function grepSnippet(body: string, pattern: string, maxChars: number, fixed = false): GrepSnippet | undefined {
-  const found = compileSearchPattern(pattern, fixed).exec(body);
-  if (found === null) return undefined;
-
-  const beforeAll = [...body.slice(0, found.index)];
-  const matchAll = [...found[0]];
-  const afterAll = [...body.slice(found.index + found[0].length)];
-  const shownMatch = matchAll.slice(0, maxChars);
-  let remaining = Math.max(0, maxChars - shownMatch.length);
-  let beforeTake = Math.min(beforeAll.length, Math.floor(remaining / 2));
-  let afterTake = Math.min(afterAll.length, remaining - beforeTake);
-
-  // Give unused context budget to whichever side still has text.
-  remaining -= beforeTake + afterTake;
-  if (remaining > 0) {
-    const extraBefore = Math.min(remaining, beforeAll.length - beforeTake);
-    beforeTake += extraBefore;
-    remaining -= extraBefore;
-  }
-  if (remaining > 0) afterTake += Math.min(remaining, afterAll.length - afterTake);
-
-  return {
-    before: compactWhitespace(beforeAll.slice(-beforeTake).join('')),
-    match: compactWhitespace(shownMatch.join('')),
-    after: compactWhitespace(afterAll.slice(0, afterTake).join('')),
-    beforeOmitted: beforeAll.length - beforeTake,
-    afterOmitted: afterAll.length - afterTake + Math.max(0, matchAll.length - shownMatch.length),
-  };
+export function historySearch(search: string) {
+  return search.length > 1 && search.startsWith('/') && search.endsWith('/')
+    ? { text: search.slice(1, -1), mode: 'regex' as const } : { text: search, mode: 'literal' as const };
 }

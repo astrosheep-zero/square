@@ -1,7 +1,8 @@
 # Square and Participant API
 
 `Square` is the concrete resource shared by SDK, CLI, MCP and Pi; `square.ts` is the CLI
-entrypoint. `api/types.ts` declares public operation types, not a second execution path. See
+entrypoint. `surfaces/operations.ts` declares and validates the shared operation inputs; `api/types.ts`
+exports the SDK types. See
 [attention-primitive.md](attention-primitive.md) for audience computation and
 [delivery-primitives.md](delivery-primitives.md) for the host delivery ledger.
 
@@ -43,8 +44,9 @@ this discovery and its rendered text.
 16 KiB). Mentions, replies, listening and ignores determine the landed audience. Activity IDs
 are `act/N`. Historical bell activities retain their original audience, body and ID. `Square.history` is
 the read-only archive; `Participant.perceive` consumes directed activity,
-and `Participant.pending` reads addressed unconsumed says without consuming them. `listen`, `unlisten`,
-`ignore`, `listening` and `done` operate on the participant. History, status and participants are
+and `Participant.pending` reads addressed unconsumed activity without consuming it.
+`Participant.attention({target, state})` replaces a relation with `listen`, `ignore`, or `neutral`.
+Neutral clears either state. `listening` and `done` also operate on the participant. History, status and participants are
 Square operations. `OperationControl` can carry cancellation; a committed mutation is not undone by
 later cancellation.
 
@@ -52,15 +54,14 @@ The package root also exports the syntax Square validates with: `parseActivityId
 `NAME_GRAPHEME_SOURCE`, `PARTICIPANT_NAME_SOURCE` and `isParticipantName(name)`. They share the core
 acceptance, so adapters use them instead of copying the grammar.
 
-`Participant.mute({durationMs}, options?, control?)` installs one timed hold for the handle's captured
-owner, name and join generation; `Participant.unmute` releases only that named seat hold. Duration is a
-positive safe integer in milliseconds. The Square clock sets the deadline, a stale handle cannot affect a
-newer join, and repeat mute replaces only its own deadline. Independent seats, other squares and producer
-holds are untouched. No activity lands and no pending card is dispatched by installing a hold.
+`Participant.mute({duration}, options?, control?)` sets a timed hold for the handle's captured
+owner, name and join generation. Pass a duration like `'30m'`, or `'off'` to release that hold.
+The Square clock sets the deadline, and a stale handle cannot affect a newer join. Independent seats,
+other squares and producer holds are untouched. No activity lands and no pending card is dispatched
+by installing a hold.
 
-The standalone global helpers `muteDeliveryLedger({durationMs, ledgerLocation?, clock?}, control?)`,
-`unmuteDeliveryLedger(...)` and `deliveryLedgerMutedUntil(...)` operate on the resolved host delivery
-ledger and need no owner or `.square` file. They use exactly the null-owner `ledger-mute` row; global and
+`muteDeliveryLedger({duration, ledgerLocation?, clock?}, control?)` and `deliveryLedgerMutedUntil(...)`
+operate on the resolved host delivery ledger and need no owner or `.square` file. They use exactly the null-owner `ledger-mute` row; global and
 seat holds never release one another. `StatusResult.ledgerMutedUntil` and `DiscoveryResult.ledgerMutedUntil`
 carry an active global deadline, and `ParticipantSummary.mutedUntil` / each owner-held
 `SquareListItem.joined[].mutedUntil` carry an active captured-seat deadline. Expired rows are omitted by
@@ -68,8 +69,8 @@ the configured clock. Read-only status/list enrichment opens an existing ledger 
 `participants({local: true})` stays artifact-only. Callers own polling and timers: expiry has no event or
 daemon, and a hold never recalls custody already handed to a receiver.
 
-Explicit mentions and body `@name` candidates share soft recipient resolution: absent or unknown
-targets do not block `express`. The receipt lists them in `unmatchedMentions`; a departed reply author
+Explicit `mentions` replace the body scan; even an empty list is authoritative. When omitted, body
+`@names` can become mentions. Absent or unknown targets do not block `express`. The receipt lists them in `unmatchedMentions`; a departed reply author
 is reported in `replyAuthorNotHere`. The optional `awayRecipients` lists directed joined targets
 observed detached by the reconciliation immediately before landing, without requiring `observe: true`.
 It covers resolved mentions and a joined reply author, deduplicates canonical names and excludes the
@@ -86,8 +87,8 @@ and unconsumed activity while away; they can perceive after resume without joini
 controls audience, so an away warning for an ignored sender's target does not imply unread activity.
 Rejoining later never adds an absent recipient to an earlier activity's frozen audience.
 
-A live idle perceive owns matching activity notifications before producer export ownership is acquired.
-Matching compares its filters with the activity's landed delivery route at the recipient: the sender
+A live idle perceive without an ID filter owns matching activity notifications before producer export
+ownership is acquired. Matching compares its filters with the activity's landed delivery route at the recipient: the sender
 filter must name the landing actor, and the attention filter must be absent, accept a historical `bell`,
 or name the landed recipient of a `mention`/`reply`. Listener `attention` never matches a mention-only
 filter. Other activities and direct notices remain eligible. Release or expiry permits still-unconsumed
@@ -102,7 +103,8 @@ the same captured coordinates. A later mutating operation retries unposted, unco
 joined seats idempotently, and retries dispatch of their existing pending ledger cards when their host
 has a producer-dispatchable route. No-route and native-receiver-only hosts still receive exported ledger
 cards; producer dispatch skips their pending enumeration. Directed
-activity cards bound the body to 200 characters and point to `square_perceive` when shortened. Square records which cards contain
+activity cards bound the body to 200 characters and point to `history` by ID when shortened, with a
+body limit large enough to read it in full. Square records which cards contain
 the full activity. Unread means after the read horizon, not perceived, and without a ledger receipt for
 a full card. Square folds retained receipts lazily during privileged producer operations: it reads after
 each current attached owner's artifact watermark, then folds eligible exact records and advances that
@@ -136,19 +138,25 @@ prove current host liveness; `deliveryAvailable` is false in this mode. The defa
 host attachment and route availability. Local discovery can distinguish known names before selection;
 it does not grant custody or allow fallback over a departed, foreign or detached identity.
 
-`Square.history` returns `{activities}` without consuming; its public records omit only `read`
-bookkeeping. `listen`, `ignore` and `unlisten` changes remain public records, while narrated rendering
-shows the `join`, `say` and `done` subset. Activity queries support exact IDs, senders, metadata
-matches, search and exclusive `act/N` cursors. Filters combine with AND. History defaults to ten
-records; `limit: null` requests the complete archive.
+`Square.history({from, to, search, ids, after, before, context, limit, maxChars})` returns
+`{activities}` without consuming. `to` matches the landed audience. `search` is literal unless
+wrapped in `/slashes/`. The exclusive bounds accept IDs, ISO timestamps, or lookback durations
+such as `'30m'`; combine them for a range. An `after` query takes the oldest page of matches;
+otherwise the newest page is taken. Activities always return oldest first. `limit` defaults to ten and
+caps at 100. `context` adds neighbors to each paged match. Queries with `ids` are unpaged and can
+include historical read events. Bodies are clipped at `maxChars` (default 1000) with their total length
+on a closing line. To read a longer body, raise `maxChars` for its ID.
+
+`Participant.perceive({ids, from, mention, limit, wait, replace})` consumes a filtered unread page.
+Seen IDs and IDs not addressed to the participant match nothing. `wait` takes a duration string;
+`replace` requires `wait`. Use `history` to reread.
 
 `Participant.pending` returns `{activities, remaining}` for addressed unconsumed says, oldest first.
-Pending defaults to 100 and accepts limits 1–100. A pending read does not claim work or change the
-read horizon.
+Pending defaults to 100 and accepts limits 1–100. Its archive filters support `at`, `from`, metadata
+`match`, `search`, and an exclusive `cursor`. A pending read does not claim work or change the read horizon.
 
-`observe: true` adds the same operation's selected raw records (including a historical `read` inside
-time and context windows), lifetime say ordinals, presence anchors, match counts and the narrated
-continuation cursor. A join's entry context is the square's literal Markdown preamble; a trailing
+`observe: true` adds history's selected records, lifetime say ordinals, presence anchors, match counts
+and the continuation cursor. A join's entry context is the square's literal Markdown preamble; a trailing
 `---` stays part of the context.
 
 `Participant.ack(ids: readonly ActivityId[], control?)` remains the exact-ID consumption operation,

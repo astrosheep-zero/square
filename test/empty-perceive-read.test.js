@@ -82,18 +82,6 @@ test('a nonempty probe records nothing; the writer reselects, hydrates once, and
   assert.deepEqual((await cell.read(facts => [facts.receipt('Bob', 2), facts.receipt('Bob', 3), facts.receipt('Bob', 4)])).value, [{ at: 50 }, { at: 100 }, undefined]);
 });
 
-test('exact-ID perceive calls retain their repeatable receipt transaction and never use the empty probe', async t => {
-  const { cell, artifact, bob } = await fixture(t, [{ kind: 'say', actor: 'Alice', at: 2, body: 'exact', mentions: ['Bob'] }]);
-  const marked = [];
-  artifact.read = (select, signal) => cell.read(facts => select({ ...facts, directed() { assert.fail('ID perceive must not probe a directed page'); } }), signal);
-  artifact.transactAs = (authority, change, signal) => cell.transactAs(authority, facts => change({
-    ...facts, markSeen(name, indexes, at) { marked.push([...indexes]); return facts.markSeen(name, indexes, at); },
-  }), signal);
-  const first = await bob.perceive({ id: 'act/2' });
-  assert.deepEqual(await bob.perceive({ id: 'act/2' }), first);
-  assert.deepEqual(marked, [[2], [2]]);
-});
-
 test('empty perceive validates caller, filters, limits, and semantic time without a writer', async t => {
   const { cell, artifact, square } = await fixture(t);
   await assert.rejects(square.participant('Missing', { owner: bodyFor('Bob') }), { code: 'already_joined' });

@@ -13,6 +13,7 @@ import { readSquareHostObservations, seatMuteKey, deliverySessionsForSeats } fro
 import type { OperationControl } from '../core/neutral.js';
 import type { SquareObservation } from '../core/observations.js';
 import { formatActivityId } from '../core/square-core.js';
+import { spellAction } from '../surfaces/operations.js';
 
 /** Host dispatch capability bound once at the API composition root. */
 export type DispatchPostedCard = (ledger: DeliveryLedger, owner: Owner, key: DeliveryKey, options: {
@@ -122,7 +123,8 @@ function renderPost(location: string, post: SquarePost, replyTo?: string): { tex
     ...(remaining > 0 ? [`truncated="${remaining} more chars"`] : []),
   ];
   const text = [`<square-activity ${attributes.join(' ')}>`, `${activityDescription(post.from, route)}.`, '', escapeSquareTags(preview),
-    ...(full ? [] : ['', escapeSquareTags(`Use square_perceive with location=${JSON.stringify(location)}, as=${JSON.stringify(post.recipient)}, id=${JSON.stringify(ref)} for the full activity.`)]),
+    ...(full ? [] : ['', 'Find the activity in history:', spellAction({ operation: 'history', absoluteLocation: true,
+      args: { location, ids: [ref], maxChars: rawBody.length } }, 'tool').replaceAll('<', '\\u003c')]),
     '</square-activity>'].join('\n');
   return { text, full, details: { kind: 'presentation', origin, ref, author: post.from, label: 'express',
     body: rawBody, at: post.at, reach: route, recipient: post.recipient, ...(replyTo === undefined ? {} : { replyTo }) } };
@@ -169,7 +171,7 @@ export async function reconcileSquareDelivery(artifact: SquareArtifactPort, loca
         await artifact.transactAs({ kind: 'host-cleanup', seat }, facts => {
           const current = facts.seat(seat.participant);
           if (current?.owner === seat.owner && current.generation === seat.generation && facts.participant(seat.participant)?.joined)
-            facts.land(coreDone(facts, seat.participant, '', clock()));
+            facts.land(coreDone(facts, seat.participant, clock()));
         }, signal);
       } else if (seat.attachment !== session.state) {
         const attachment = session.state;

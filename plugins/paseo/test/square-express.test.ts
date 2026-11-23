@@ -4,7 +4,7 @@ import { outgoingActivityLabel, parseSquareExpress } from "../shared/square-expr
 import { squareMessageSchema } from "../shared/message.ts";
 
 const input = { location: "/work/design.square", as: "rei", body: "**hello** @aoi",
-  mentions: ["aoi", "kei"], reply: "act/14", force: true, noMention: true, noWait: true };
+  mentions: ["aoi", "kei"], reply: "act/14", force: true, noWait: true };
 const row = (name = "square_express", status = "running") => ({
   type: "tool_call", name, status,
   detail: { type: "unknown", input, output: "act/999, failed, or any other output" },

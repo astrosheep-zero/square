@@ -3,13 +3,10 @@ export interface Item<K extends string | number, D> { readonly key: K; readonly 
 export interface Address<V> { readonly recipient: string; readonly via: V }
 export interface ReceivedHead<K extends string | number, V> { readonly key: K; readonly via: V }
 export interface ReceiptRef<K extends string | number> { readonly recipient: string; readonly item: K }
-export type Selection<K extends string | number, Q> =
-  | { readonly kind: 'page'; readonly query: Q; readonly limit: number }
-  | { readonly kind: 'exact'; readonly key: K; readonly remainingQuery: Q };
+export type PageQuery<Q> = { readonly query: Q; readonly limit: number };
 
 export interface ReceiveRead<K extends string | number, D, V, Q> {
   heads(recipient: string, query: Q, options: { readonly unconsumed: boolean; readonly limit: number }): readonly ReceivedHead<K, V>[];
-  addressed(recipient: string, item: K): ReceivedHead<K, V> | undefined;
   load(keys: readonly K[]): ReadonlyMap<K, D>;
   count(recipient: string, query: Q, unconsumed: boolean): number;
   receipt(ref: ReceiptRef<K>): { readonly at: number } | undefined;
@@ -22,7 +19,7 @@ export interface ReceiveWrite<K extends string | number, D, V, Q> extends Receiv
 }
 
 export class ReceiveError<K extends string | number = string | number> extends Error {
-  constructor(readonly code: 'not_addressed' | 'missing_item', readonly key: K) {
+  constructor(readonly code: 'missing_item', readonly key: K) {
     super(`${code}: ${String(key)}`);
     this.name = 'ReceiveError';
   }
@@ -37,19 +34,13 @@ export function receive<K extends string | number, D, V>(
   input.audience.forEach((address, order) => tx.insertAddress(input.item.key, address, order));
 }
 
-/** Queries filter before limiting. Exact selection ignores consumption, not addressing. */
+/** Queries filter before limiting. */
 export function selectReceivedHeads<K extends string | number, V, Q>(
-  tx: Pick<ReceiveRead<K, unknown, V, Q>, 'heads' | 'addressed'>,
-  recipient: string, selection: Selection<K, Q>,
+  tx: Pick<ReceiveRead<K, unknown, V, Q>, 'heads'>, recipient: string, { query, limit }: PageQuery<Q>,
 ): readonly ReceivedHead<K, V>[] {
-  if (selection.kind === 'page') {
-    if (typeof selection.limit !== 'number') throw new TypeError('Receive limit must be a number.');
-    if (!Number.isSafeInteger(selection.limit) || selection.limit < 1) throw new RangeError('Receive limit must be a positive safe integer.');
-    return tx.heads(recipient, selection.query, { unconsumed: true, limit: selection.limit });
-  }
-  const head = tx.addressed(recipient, selection.key);
-  if (head === undefined) throw new ReceiveError('not_addressed', selection.key);
-  return [head];
+  if (typeof limit !== 'number') throw new TypeError('Receive limit must be a number.');
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError('Receive limit must be a positive safe integer.');
+  return tx.heads(recipient, query, { unconsumed: true, limit });
 }
 
 /** Record captured coordinates without reselecting or checking their current eligibility. */
@@ -66,16 +57,16 @@ export function recordConsumed<K extends string | number>(
 
 /** Selection, hydration, receipts and remaining count must share the caller's transaction. */
 export function consumeReceived<K extends string | number, D, V, Q>(
-  tx: Pick<ReceiveWrite<K, D, V, Q>, 'heads' | 'addressed' | 'load' | 'insertReceipt' | 'count'>,
-  recipient: string, selection: Selection<K, Q>, at: number,
+  tx: Pick<ReceiveWrite<K, D, V, Q>, 'heads' | 'load' | 'insertReceipt' | 'count'>,
+  recipient: string, page: PageQuery<Q>, at: number,
 ): { readonly items: readonly (Item<K, D> & { readonly via: V })[]; readonly newlyConsumed: number; readonly remaining: number } {
-  const heads = selectReceivedHeads(tx, recipient, selection);
+  const heads = selectReceivedHeads(tx, recipient, page);
   const data = tx.load(heads.map(head => head.key));
   const items = heads.map(head => {
     if (!data.has(head.key)) throw new ReceiveError('missing_item', head.key);
     return { key: head.key, data: data.get(head.key)!, via: head.via };
   });
   const newlyConsumed = recordConsumed(tx, heads.map(head => ({ recipient, item: head.key })), at);
-  const remaining = tx.count(recipient, selection.kind === 'page' ? selection.query : selection.remainingQuery, true);
+  const remaining = tx.count(recipient, page.query, true);
   return { items, newlyConsumed, remaining };
 }

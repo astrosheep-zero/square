@@ -93,12 +93,6 @@ test('decideAct keeps unmatched text without backing off to a shorter roster pre
   assert.deepEqual(decision.act.mentions, []);
 });
 
-test('body @names union with --mention and dedupe case-insensitively', async () => {
-  const decision = await decide(standingState(), { name: 'Alice', body: '@Bob and @cara', force: true, now: 10, mentions: ['Cara'] });
-  assert.equal(decision.type, 'sent');
-  assert.deepEqual(decision.act.mentions, ['Cara', 'Bob']);
-});
-
 test('unknown and departed targets share soft resolution for explicit mentions and body @names', async () => {
   const state = makeState({
     acts: [
@@ -116,10 +110,6 @@ test('unknown and departed targets share soft resolution for explicit mentions a
     assert.deepEqual(decision.act.mentions, ['Cara']);
     assert.deepEqual(decision.unmatchedMentions, ['Bob', 'Eve']);
   }
-  const literal = await decide(state, { name: 'Alice', body: '@Bob @Eve', mentions: ['Bob', 'Eve'], noMention: true, force: true, now: 11 });
-  assert.equal(literal.type, 'sent');
-  assert.equal(literal.act.body, '@Bob @Eve');
-  assert.deepEqual(literal.act.mentions, []);
 });
 
 test('bare activity is valid without a recipient and remains available to listeners', async () => {
@@ -129,27 +119,12 @@ test('bare activity is valid without a recipient and remains available to listen
   assert.deepEqual(decision.act.mentions, []);
 });
 
-test('noMention disables only body scanning, not explicit mentions or reply', async () => {
-  const decision = await decide(standingState(), { name: 'Alice', body: 'hey @Bob @Eve', force: true, now: 10, noMention: true, mentions: ['cara'], reply: 1 });
+test('explicit mentions replace the body scan and still combine with a reply', async () => {
+  const decision = await decide(standingState(), { name: 'Alice', body: 'hey @Bob @Eve', force: true, now: 10, mentions: ['cara'], reply: 1 });
   assert.equal(decision.type, 'sent');
   assert.deepEqual(decision.act.mentions, ['Cara']);
   assert.equal(decision.act.reply, 1);
   assert.equal(decision.unmatchedMentions, undefined);
-});
-
-test('body @names share the mention limit with --mention', async () => {
-  const acts = [
-    { kind: 'join', actor: 'Alice', at: 0 },
-    ...Array.from({ length: 10 }, (_, index) => ({ kind: 'join', actor: `P${index + 1}`, at: index + 1 })),
-    { kind: 'join', actor: 'Bob', at: 12 },
-  ];
-  await assert.rejects(
-    () => decide(makeState({ acts }), {
-      name: 'Alice', body: 'and @Bob', force: true, now: 20,
-      mentions: Array.from({ length: 10 }, (_, index) => `P${index + 1}`),
-    }),
-    (error) => /at most 10 participants/.test(error.message),
-  );
 });
 
 test('express through the library stores derived mention metadata', async () => {
@@ -162,11 +137,11 @@ test('express through the library stores derived mention metadata', async () => 
     assert.deepEqual(directed.activity.mentions, ['Bob']);
     assert.deepEqual(directed.unmatchedMentions, ['Unknown']);
     assert.equal(directed.activity.unmatchedMentions, undefined);
-    assert.equal(((await square.history({ limit: null })).activities).at(-1).unmatchedMentions, undefined);
+    assert.equal(((await square.history()).activities).at(-1).unmatchedMentions, undefined);
     assert.equal(directed.activity.body, 'hey @Bob and @Unknown');
     const literal = await alice.express('hey @Unknown', { force: true });
     assert.deepEqual(literal.activity.mentions, []);
-    const bare = await alice.express('hey @Bob', { force: true, noMention: true });
+    const bare = await alice.express('hey @Bob', { force: true, mentions: [] });
     assert.deepEqual(bare.activity.mentions, []);
     const perceived = await bob.perceive();
     assert.deepEqual(perceived.activities.map((activity) => activity.id), [directed.activity.id]);
@@ -194,7 +169,7 @@ test('departed mentions and replies land, reach standing targets, and never back
   assert.equal(sent.activity.reply, question.activity.id);
   assert.deepEqual((await cara.perceive()).activities.map(activity => activity.id), [sent.activity.id]);
 
-  const bare = await alice.express('all targets absent', { mentions: ['Bob', 'Eve'], noMention: true, force: true });
+  const bare = await alice.express('all targets absent', { mentions: ['Bob', 'Eve'], force: true });
   assert.deepEqual(bare.activity.mentions, []);
   assert.deepEqual(bare.unmatchedMentions, ['Bob', 'Eve']);
   assert.equal((await square.history()).activities.at(-1).id, bare.activity.id);
@@ -205,10 +180,6 @@ test('departed mentions and replies land, reach standing targets, and never back
   assert.deepEqual((await newcomer.perceive()).activities, []);
 });
 
-test('activityRetryCommand preserves the caller reach instead of forcing --no-mention', () => {
-  assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { noMention: true }), / --no-mention /);
-  assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { mentions: ['Cara'], noMention: true }), / --mention 'Cara' --no-mention /);
-  const derived = activityRetryCommand('/tmp/x.square', 'Alice', {});
-  assert.doesNotMatch(derived, /--no-mention|--mention/);
-  assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { mentions: ['Bob'] }), / --mention 'Bob'/);
+test('express repair preserves an explicitly empty mention list', () => {
+  assert.match(activityRetryCommand('/tmp/x.square', 'Alice', { mentions: [] }), / --mention '' /);
 });

@@ -14,7 +14,7 @@ store.transaction(tx => receive(tx, {
   audience: [{ recipient: 'east:bob', via: 'link' }],
 }));
 const page = store.transaction(tx => consumeReceived(tx, 'east:bob', {
-  kind: 'page', query: { sender: 'west:alice' }, limit: 10,
+  query: { sender: 'west:alice' }, limit: 10,
 }, Date.now()));
 // { items: [{ key, data, via }], newlyConsumed, remaining }
 ```
@@ -35,7 +35,6 @@ identity and eligibility. Item and address keys must be unique in storage.
   overwrite or silently deduplicate. Roll back the whole admission on failure.
 - `heads(recipient,query,{unconsumed,limit})` applies the query and consumption
   predicate **before** limiting, returning ordered `{key,via}` heads.
-  `addressed(recipient,key)` ignores receipt state, but checks addressedness.
 - `load(keys)` hydrates the selected keys once as a `ReadonlyMap<K,D>`.
   Missing keys are errors; an explicitly stored `undefined` value is not missing.
   `count(recipient,query,unconsumed)` counts the same selection without a limit.
@@ -52,23 +51,20 @@ Its atomicity depends on this caller obligation.
 
 ## Selection and receipts
 
-`selectReceivedHeads(tx,recipient,selection)` never hydrates or writes. A page is
-`{kind:'page',query,limit}` and always selects unconsumed heads; `limit` must be a
-positive safe integer, with no policy maximum. An exact selection is
-`{kind:'exact',key,remainingQuery}` and remains repeatable after consumption.
+`selectReceivedHeads(tx,recipient,page)` never hydrates or writes. A page is
+`{query,limit}` and always selects unconsumed heads; `limit` must be a
+positive safe integer, with no policy maximum.
 
 `consumeReceived` selects inside the supplied transaction, hydrates all selected
 keys before any receipt insertion, preserves head order, records the captured
-coordinates and counts matching unconsumed items. Exact remaining uses
-`remainingQuery`; page remaining uses `query`. Repeating exact consumption returns
-the same item with `newlyConsumed: 0`, not a second receipt.
+coordinates and counts matching unconsumed items using the same `query`.
 
 `recordConsumed(tx,refs,at)` only needs `insertReceipt`. It records captured
 coordinates without reselecting, loading or checking eligibility. Duplicate refs
 are idempotent through storage and cannot change the first timestamp. Timestamps
 must be finite numbers (negative/fractional timestamps are allowed). Nonnumber
 limits/timestamps throw `TypeError`; out-of-range numbers throw `RangeError`.
-`ReceiveError` exposes `code: 'not_addressed' | 'missing_item'` and the opaque `key`.
+`ReceiveError` exposes `code: 'missing_item'` and the opaque `key`.
 Storage errors propagate unchanged; they still require caller rollback.
 
 This is not a remote message protocol, replay envelope, permission system,
@@ -79,14 +75,7 @@ primitive entrypoints without constructing Square.
 
 ## Square composition
 
-Square uses these functions for production landing, perceive and `markSeen` (including explicit
-`Participant.ack`) against its existing activity, audience and receipt tables. `Participant.pending`
-uses the same addressed/unconsumed relation without writing receipts; its shared exact-ID, sender,
-metadata, search and cursor filters are applied by storage before the page limit. Numeric activity indexes stay
-internal keys; the primitive does not know Square IDs. Square retains validation,
-limits, filtering, perception, ownership, leases, hints and error mapping. The
-empty-perceive read probe does not hydrate or acquire a writer; a nonempty probe is
-reselected inside the writer. Ordinary perceive sees historical receipt holes,
-including before rejoin; proactive pending still starts after the latest join.
-The artifact schema/format and receipt identity are unchanged. See the
-[Square API](square-api.md) for product operations.
+Square's artifact queries its landed audience and applies ID, sender and attention filters before
+paging. Perceive does not hydrate bodies or acquire a writer if an empty read probe settles the
+result, and reselects inside the writer when taking activity in. See the [Square API](square-api.md)
+for product operations.

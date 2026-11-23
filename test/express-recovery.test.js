@@ -70,12 +70,12 @@ test('missing and malformed replies are dropped from runnable recovery while rec
   for (const reply of ['act/999', 'not-an-id']) {
     const body = `reply body \r\nwith 'quotes'\r\n`;
     const before = (await says(file)).length;
-    const result = run(withName(file, 'Alice', ['express', '--no-wait', '--no-mention', '--mention', 'Bob', '--reply', reply, '-']), { input: body });
+    const result = run(withName(file, 'Alice', ['express', '--no-wait', '--mention', 'Bob', '--reply', reply, '-']), { input: body });
     assert.equal(result.status, 2, result.stderr);
     const saved = recovery(result, body);
     assert.equal(saved.commands.length, 1);
     assert.match(saved.commands[0], /express --no-wait/);
-    assert.ok(saved.commands[0].includes("--mention 'Bob' --no-mention"));
+    assert.ok(saved.commands[0].includes("--mention 'Bob'"));
     assert.doesNotMatch(saved.commands[0], /--reply|--force/);
     assert.match(saved.output, /history --limit 10/);
     assert.match(saved.output, /choose a valid --reply from history, or send without a reply/);
@@ -112,7 +112,6 @@ test('invalid reply recovery retains body candidates without forcing a bare sele
     const saved = recovery(run(withName(file, 'Alice', ['express', '--reply', reply, '-']), { input: body }), body);
     assert.equal(saved.commands.length, 1);
     assert.doesNotMatch(saved.commands[0], /--reply/);
-    assert.doesNotMatch(saved.commands[0], /--no-mention/);
     const retry = executeRecovery(saved.commands[0]);
     assert.equal(retry.status, 0, retry.stdout + retry.stderr);
     assert.deepEqual((await says(file)).at(-1).mentions, body === '@Bob\n' ? ['Bob'] : []);
@@ -125,8 +124,8 @@ test('throttle recovery remains no-wait and does not add force', shellReplay, as
     await alice.express('first');
   }, { throttlePerMinute: 1 });
   const body = 'waiting for a lull\n';
-  const saved = recovery(run(withName(file, 'Alice', ['express', '--no-wait', '--no-mention', '-']), { input: body, env: { SQUARE_NOW_MS: '3000' } }), body);
-  assert.match(saved.commands[0], /express --no-wait --no-mention -/);
+  const saved = recovery(run(withName(file, 'Alice', ['express', '--no-wait', '-']), { input: body, env: { SQUARE_NOW_MS: '3000' } }), body);
+  assert.match(saved.commands[0], /express --no-wait -/);
   const stillThrottled = executeRecovery(saved.commands[0], { SQUARE_NOW_MS: '3000' });
   assert.equal(stillThrottled.status, 1, stillThrottled.stderr);
   assert.equal(stillThrottled.signal, null);
@@ -181,7 +180,7 @@ test('only admission rejection proves a failed express unsent; post-commit failu
   for (const landedId of [undefined, 'act/1']) {
     const rendered = renderActivityUncertain({ squarePath: '/tmp/test.square', name: 'Alice', draftPath: '/tmp/draft.md', landedId });
     assert.match(rendered, /sending it again could repeat your activity/);
-    assert.match(rendered, /history .*--full/);
+    assert.match(rendered, landedId === undefined ? /history --limit/ : /history --ids act\/1/);
     assert.doesNotMatch(rendered, / express |--force|< '\/tmp\/draft.md'/);
   }
   await square.close();
@@ -208,12 +207,12 @@ test('a failed observation clock cannot prevent raw draft saving or landed recon
         draftAtRecovery = fs.readFileSync(path.join(root, 'drafts', drafts[0]), 'utf8');
         throw clockFailure;
       },
-    }), file, 'Alice', raw, { noMention: true }, () => 'test:draft-clock');
+    }), file, 'Alice', raw, {}, () => 'test:draft-clock');
     assert.equal(process.exitCode, 1);
     assert.equal(draftAtRecovery, raw);
     assert.equal(fs.readFileSync(draftPathFrom(output), 'utf8'), raw);
     assert.match(output, /act\/2/);
-    assert.match(output, /history .*--full/);
+    assert.match(output, /history --ids act\/2/);
     assert.doesNotMatch(output, / express |--force|< /);
   } finally {
     stderr.mock.restore();
@@ -235,7 +234,7 @@ DatabaseSync.prototype.prepare = function(sql, ...args) {
   if (!announced && sql.includes('application_id')) { announced = true; process.send('opening'); }
   return prepare.call(this, sql, ...args);
 };`);
-  const child = spawn(process.execPath, ['--import', readyModule, CLI, ...withName(file, 'Alice', ['express', '--no-mention', '-'])], {
+  const child = spawn(process.execPath, ['--import', readyModule, CLI, ...withName(file, 'Alice', ['express', '-'])], {
     cwd: ROOT, env: testEnv(), stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
   });
   const opening = once(child, 'message'), exited = once(child, 'exit');

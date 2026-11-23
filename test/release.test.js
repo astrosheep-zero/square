@@ -151,9 +151,10 @@ if(specifier.includes('@opencode/') || context.parentURL?.includes('/@opencode/'
 return next(specifier,context);
 }`);
   fs.writeFileSync(path.join(fixture, 'register.mjs'), `import {register} from 'node:module';register('./no-sdk.mjs',import.meta.url);`);
-  // Resolve the public subpath as an outside consumer, without any installed SDKs.
+  // Supply the declared validator to the packed consumer, without installing any harness SDK.
   fs.mkdirSync(path.join(fixture, 'node_modules', '@astrosheep'), { recursive: true });
   fs.symlinkSync(shipped, path.join(fixture, 'node_modules', '@astrosheep', 'square'), 'dir');
+  fs.symlinkSync(path.join(root, 'node_modules', 'zod'), path.join(fixture, 'node_modules', 'zod'), 'dir');
   fs.writeFileSync(path.join(fixture, 'ledger.mjs'), `import {DeliveryLedger as RootLedger} from '@astrosheep/square';
 import {DeliveryLedger} from '@astrosheep/square/delivery-ledger';
 if (RootLedger !== DeliveryLedger) throw new Error('root and subpath differ');

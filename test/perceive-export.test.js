@@ -48,7 +48,7 @@ async function armPerceive(c, options = { from: ['Alice'] }) {
   };
   const bob = await waiter.participant('Bob', { owner: 'perceive:bob' });
   const abort = new AbortController();
-  const result = bob.perceive({ wait: 10_000, ...options }, { signal: abort.signal,
+  const result = bob.perceive({ wait: '10s', ...options }, { signal: abort.signal,
     onProgress: progress => { if (progress.kind === 'perceive-started') started.resolve(); },
   });
   // Cleanup may cancel a still-running perceive; observe its rejection from the start.
@@ -64,7 +64,7 @@ const hasCard = (cards, id) => cards.some(card => card.key[6] + '/' + card.key[7
 
 test('a live filtered perceive owns matching exports while excluded routes and notices remain eligible', { timeout: 10000 }, async t => {
   const c = await fixture(t);
-  await c.bob.listen('Alice');
+  await c.bob.attention({ target: 'Alice', state: 'listen' });
   const question = (await c.bob.express({ body: 'question for Alice', force: true })).activity;
   const waiting = await armPerceive(c, { from: ['Alice'], mention: true });
   const matched = (await c.alice.express({ body: 'owned by perceive', mentions: ['Bob'], force: true })).activity;

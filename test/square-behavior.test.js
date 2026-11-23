@@ -44,7 +44,7 @@ test('build persists a square that reopens through the facade', async () => {
     hardCap: 3,
   });
   assert.equal((await square.status()).hardCap, 3);
-  assert.deepEqual((await square.history({ limit: null })).activities, []);
+  assert.deepEqual((await square.history()).activities, []);
   await closeSquare(square);
 
   const persisted = (await readSquareSnapshot(squarePath)).state;
@@ -55,7 +55,7 @@ test('build persists a square that reopens through the facade', async () => {
 
   const reopened = await Square.at({ path: squarePath });
   assert.equal((await reopened.status()).hardCap, 3);
-  assert.deepEqual(((await reopened.history({ limit: null })).activities).map((activity) => activity.id), []);
+  assert.deepEqual(((await reopened.history()).activities).map((activity) => activity.id), []);
   await closeSquare(reopened);
 });
 
@@ -76,7 +76,7 @@ test('joining an unknown participant records one join activity and derives the r
   assert.equal(alice.name, 'Alice');
   const snapshot = await square.participants();
   assert.deepEqual(snapshot.participants.map((participant) => participant.name), ['Alice']);
-  assert.deepEqual(((await square.history({ limit: null })).activities).map((activity) => ({ kind: activity.kind, actor: activity.actor })), [
+  assert.deepEqual(((await square.history()).activities).map((activity) => ({ kind: activity.kind, actor: activity.actor })), [
     { kind: 'join', actor: 'Alice' },
   ]);
   await closeSquare(square);
@@ -86,7 +86,7 @@ test('rejoin does not append a second join activity', async () => {
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   await square.join('Alice', { owner: squareBody });
   await square.join('Alice', { owner: squareBody });
-  assert.deepEqual(((await square.history({ limit: null })).activities).map((activity) => activity.kind), ['join']);
+  assert.deepEqual(((await square.history()).activities).map((activity) => activity.kind), ['join']);
   await closeSquare(square);
 });
 
@@ -194,7 +194,7 @@ test('a listener receives a bare say through perceive without presence obligatio
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
-  await bob.listen('Alice');
+  await bob.attention({ target: 'Alice', state: 'listen' });
   const expressed = await alice.express('bare attention', { force: true });
   const perceived = await bob.perceive();
   assert.deepEqual(perceived.activities.map((activity) => activity.id), [expressed.activity.id]);
@@ -251,7 +251,7 @@ test('history remains read-only until perceive writes a delivery receipt', async
   const expressed = await alice.express('hello @Bob please check', { force: true, mentions: ['Bob'] });
   assert.equal(Boolean((await square.resource.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), false);
   await square.history({ limit: 100 });
-  await square.history({ search: { text: 'please check', mode: 'regex' } });
+  await square.history({ search: 'please check' });
   assert.equal(Boolean((await square.resource.artifact.read(facts => facts.receipt('Bob', Number(expressed.activity.id.slice(4))))).value), false);
   const perceived = await bob.perceive();
   assert.equal(perceived.activities[0].body, 'hello @Bob please check');
@@ -266,22 +266,18 @@ test('history grep searches ids, participant names, and bodies and honors limit 
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
   await alice.express('first inventory @Bob', { force: true, mentions: ['Bob'] });
   await bob.express('facts only @Alice', { force: true, mentions: ['Alice'] });
-  assert.equal(((await square.history({ search: { text: '^act/2$', mode: 'regex' } })).activities)[0].body, 'first inventory @Bob');
-  assert.equal(((await square.history({ search: { text: '^Bob$', mode: 'regex' } })).activities)[0].body, 'facts only @Alice');
+  assert.equal(((await square.history({ search: '/^act/2$/' })).activities)[0].body, 'first inventory @Bob');
+  assert.equal(((await square.history({ search: '/^Bob$/' })).activities)[0].body, 'facts only @Alice');
   assert.deepEqual(
-    ((await square.history({ search: { text: 'act/2|facts only', mode: 'regex' }, limit: 2 })).activities).map((activity) => activity.id),
+    ((await square.history({ search: '/act/2|facts only/', limit: 2 })).activities).map((activity) => activity.id),
     ['act/2', 'act/3'],
   );
   for (let index = 0; index < 12; index += 1) {
     await alice.express(`needle ${index} @Alice`, { force: true, mentions: ['Alice'] });
   }
   assert.deepEqual(
-    ((await square.history({ search: { text: 'needle', mode: 'regex' }, limit: 3 })).activities).map((activity) => activity.body),
+    ((await square.history({ search: 'needle', limit: 3 })).activities).map((activity) => activity.body),
     ['needle 9 @Alice', 'needle 10 @Alice', 'needle 11 @Alice'],
-  );
-  assert.deepEqual(
-    ((await square.history({ search: { text: 'needle', mode: 'regex' }, limit: 3, order: 'desc' })).activities).map((activity) => activity.body),
-    ['needle 11 @Alice', 'needle 10 @Alice', 'needle 9 @Alice'],
   );
   await closeSquare(square);
 });
@@ -315,7 +311,7 @@ test('historical Format13 bell keeps its archive bytes and original pending audi
   });
   const id = 'act/4';
   const expected = { id, at: 123456789, kind: 'say', actor: 'Alice', body: 'Historical **bell**.\n@Bob remains literal.\n', mentions: [], reach: 'bell' };
-  const archive = () => square.history({ at: [id] });
+  const archive = () => square.history({ ids: [id] });
   assert.deepEqual((await archive()).activities, [expected]);
 
   const bob = await square.participant('Bob', { owner: 'archive:bob' });
@@ -326,7 +322,7 @@ test('historical Format13 bell keeps its archive bytes and original pending audi
   assert.deepEqual((await bob.perceive({ mention: true, from: ['Cara'] })).activities, []);
   assert.deepEqual((await cara.perceive({ mention: true })).activities, []);
   assert.deepEqual((await bob.perceive({ mention: true, from: ['Alice'] })).activities, [directed]);
-  assert.deepEqual((await dee.perceive({ id })).activities, [directed]);
+  assert.deepEqual((await dee.perceive({ ids: [id] })).activities, [directed]);
   assert.deepEqual((await bob.pending()).activities, []);
   assert.deepEqual((await archive()).activities, [expected]);
 });
@@ -363,19 +359,19 @@ test('a reply to an author who left lands and reports the author is not here', a
   const square = Square.inMemory({ markdown: 'context', clock: tickingClock().tick });
   const alice = (await square.join('Alice', { owner: squareBody })).participant;
   const bob = (await square.join('Bob', { owner: squareBody })).participant;
-  const question = await bob.express('question', { force: true, noMention: true });
+  const question = await bob.express('question', { force: true });
 
-  const answer = await alice.express('answer', { force: true, noMention: true, reply: question.activity.id });
+  const answer = await alice.express('answer', { force: true, reply: question.activity.id });
   assert.equal(answer.activity.reply, question.activity.id);
   assert.deepEqual(answer.activity.mentions, []);
   assert.equal(answer.replyAuthorNotHere, undefined);
 
-  const selfReply = await alice.express('note to self', { force: true, noMention: true, reply: answer.activity.id });
+  const selfReply = await alice.express('note to self', { force: true, reply: answer.activity.id });
   assert.equal(selfReply.activity.body, 'note to self');
   assert.equal(selfReply.replyAuthorNotHere, undefined);
 
   await bob.done();
-  const late = await alice.express('late answer', { force: true, noMention: true, reply: question.activity.id });
+  const late = await alice.express('late answer', { force: true, reply: question.activity.id });
   assert.equal(late.activity.body, 'late answer');
   assert.equal(late.replyAuthorNotHere, 'Bob');
   await closeSquare(square);

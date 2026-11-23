@@ -87,7 +87,7 @@ test('SQUARE_TOOLS controls shared parsing, MCP exposure and Pi registration', a
   }
 });
 
-test('mute and unmute are standalone optional-location tools with the configured ledger', async (t) => {
+test('mute sets or clears seat and ledger holds using one optional-location tool', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-mute-tools-'));
   const squarePath = path.join(root, 'MUTE.square');
   const ledgerLocation = path.join(root, 'delivery.sqlite');
@@ -106,16 +106,7 @@ test('mute and unmute are standalone optional-location tools with the configured
   };
   const client = await connect(createSquareMcpServer({ cwd: root, env, owner: 'test:owner', clock }));
   const tools = new Map((await client.listTools()).tools.map(tool => [tool.name, tool]));
-  assert.equal(tools.get('mute').description, 'Step back from notifications for a while. Whatever reaches you stays waiting for perceive.');
-  assert.equal(tools.get('unmute').description, 'Resume automatic notifications early.');
   assert.deepEqual(tools.get('mute').inputSchema.required, ['duration']);
-  assert.equal(tools.get('mute').inputSchema.properties.duration.description, 'How long to pause automatic notifications, like "30m" or "2h".');
-  assert.equal(tools.get('mute').inputSchema.properties.location.description, 'Path to the .square file. Omit to mute the entire ledger.');
-  assert.equal(tools.get('mute').inputSchema.properties.as.description, 'Your name in the square.');
-  assert.equal(tools.get('unmute').inputSchema.properties.location.description, 'Path to the .square file. Omit to unmute the entire ledger.');
-  assert.equal(tools.get('mute').inputSchema.additionalProperties, false);
-  assert.equal(tools.get('unmute').inputSchema.additionalProperties, false);
-  assert.equal('target' in tools.get('mute').inputSchema.properties, false);
 
   const globalMute = await client.callTool({ name: 'mute', arguments: { duration: '30m' } });
   assert.equal(globalMute.isError, undefined, globalMute.content[0].text);
@@ -139,10 +130,10 @@ test('mute and unmute are standalone optional-location tools with the configured
     assert.equal((await ledger.suppression({ owner: 'test:owner', id: seatId })).expiresAt, now + 60_000);
   } finally { await ledger.close(); }
 
-  const localUnmute = await client.callTool({ name: 'unmute', arguments: { location: squarePath, as: 'Alice' } });
+  const localUnmute = await client.callTool({ name: 'mute', arguments: { location: squarePath, as: 'Alice', duration: 'off' } });
   assert.equal(localUnmute.isError, undefined, localUnmute.content[0].text);
   assert.match(localUnmute.content[0].text, /@Alice ends their notification hold/);
-  const globalUnmute = await client.callTool({ name: 'unmute', arguments: {} });
+  const globalUnmute = await client.callTool({ name: 'mute', arguments: { duration: 'off' } });
   assert.equal(globalUnmute.isError, undefined, globalUnmute.content[0].text);
   assert.match(globalUnmute.content[0].text, /the notification hold ends/);
 

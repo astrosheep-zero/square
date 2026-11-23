@@ -34,7 +34,7 @@ test('in-memory producer keys round-trip, fold exact receipts and withdraw only 
   assert.deepEqual((await bob.pending()).activities, [], 'normal mutation folds the in-memory full receipt');
   const next = await alice.express('withdraw this in-memory card', { mentions: ['Bob'], force: true });
   assert.equal((await ledger.cards({ owner: 'memory:bob', keyPrefix: ['square', square.location] })).length, 1);
-  await bob.perceive({ id: next.activity.id });
+  await bob.perceive({ ids: [next.activity.id] });
   assert.deepEqual(await ledger.cards({ owner: 'memory:bob', keyPrefix: ['square', square.location] }), []);
   assert.deepEqual((await ledger.receipts('memory:bob')).map(r => r.key), [key], 'withdrawal does not invent presentation evidence');
 });
@@ -159,12 +159,12 @@ test('a metadata-only card receipt leaves the structured activity unread until e
   const session = await ledger.session(`b:${root}`);
   const claim = await ledger.claimPresentation(session.owner, { generation: session.generation, budgetChars: 4000 });
   assert.match(claim.cards[0].text, /structured activity/);
-  assert.match(claim.cards[0].text, new RegExp(`square_perceive.*${sent.activity.id}`));
+  assert.match(claim.cards[0].text, new RegExp(`history .*${sent.activity.id}`));
   assert.doesNotMatch(claim.cards[0].text, /hidden structured data/);
   assert.equal(await claim.settle('presented'), true);
   await square.join('Alice', { owner: `a:${root}` });
   assert.deepEqual((await bob.pending()).activities.map(activity => activity.id), [sent.activity.id]);
-  const perceived = await bob.perceive({ id: sent.activity.id });
+  const perceived = await bob.perceive({ ids: [sent.activity.id] });
   assert.deepEqual(perceived.activities[0].metadata, { payload: { outcome: 'hidden structured data' } });
   assert.equal((await bob.pending()).activities.length, 0);
 });

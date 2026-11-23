@@ -54,9 +54,11 @@ Physical line/byte totals come from the complete snapshots, not a formatted diff
 
 Entry still uses the actual selector with explicit `['say', 'done']` kinds and its effective limit. It retains perception, lifetime say ordinals and join context. No obsolete helper is retained for tests. No schema/storage framing, build validation, catch lease or expression certainty behavior changes.
 
-## Necessary distinctions retained
+## Historical behavior at delivery (superseded)
 
-- **Defaults:** SDK `Square.history` is unbounded. SDK `Participant.history` defaults to ten. Application/CLI/MCP default to ten, cap explicit limits at 100, and reject an implicit merged context larger than 100 with the original `operation.historyBounds` detail. Supplying a limit bounds that context. Application's stricter grep/fixed, non-empty search, finite since and safe nonnegative context validation is unchanged; SDK search remains intentionally looser.
+These details document the linked 2026-10-15 implementation only. They do not describe Square 0.7.0. See [Queries and acknowledgement](square-api.md#queries-and-acknowledgement) for shared validation, defaults, and history bounds.
+
+- **Defaults at delivery:** SDK `Square.history` was unbounded; SDK `Participant.history`, CLI, and MCP defaulted to ten. CLI/MCP used a separate validation path and capped implicit merged context.
 - **Three subsets:** raw selected records can contain reads and historical actorless lifecycle records; public `Activity` omits read/actorless records but retains listen/ignore; ordinary terminal visibility contains join/say/done. Hidden listener events still occupy page positions. Since/context windows still select raw bookkeeping; ordinary history excludes reads. Field formatting uses raw records; CLI JSON now serializes the public SDK result and omits bookkeeping records. No third event model was introduced.
 - **Paging:** cursor bounds remain exclusive stable IDs, sparse context counts existing positions, and from/mention/search intersect before applying the limit. An after cursor selects the oldest eligible page; otherwise the newest eligible page is selected. `order` only reverses the selected page. Continuation uses the terminal-visible subset and the same filtered candidate universe; a listener-only page has no invented terminal anchor. Audience paging continues through empty intersections.
 - **Projection:** ordinals, presence anchors, roster facts and final data come from the same read callback. The projection clock is now sampled within that callback instead of after the intermediate async presentation completed. It is still an observation-only operation with no receipt, presence or lease writes. Overflow is rejected before unnecessary anchor/ordinal enrichment.

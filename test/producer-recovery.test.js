@@ -128,7 +128,7 @@ test('crash uncertainty cannot resurrect a collected notification, and expired r
   await c.square.join('Bob', { owner: c.owner });
   assert.deepEqual((await c.cards()).map(card => card.key), [["gc-trigger"]]);
   assert.deepEqual((await c.bob.pending()).activities.map(item => item.id), [activity.id], 'missing proof never fabricates consumption');
-  assert.deepEqual((await c.bob.perceive({ id: activity.id })).activities.map(item => item.id), [activity.id]);
+  assert.deepEqual((await c.bob.perceive({ ids: [activity.id] })).activities.map(item => item.id), [activity.id]);
   // Source time is deliberately ancient. A never-exported source has no admission TTL.
   await c.square.send({ from: 'notice', to: 'Bob', body: 'new source after retention', metadata: { kind: 'new' } });
   assert.ok((await c.cards()).some(card => card.text === 'new source after retention'));

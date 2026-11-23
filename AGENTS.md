@@ -21,23 +21,24 @@ Boundaries should be light and useful:
 - `throttle_per_minute` keeps the room from flooding.
 - Each square's SQLite transaction protects atomic changes without leaking storage machinery into behavior. Ledger receipts are folded lazily only for full activity cards.
 - Participant names contain one or more slash-separated segments. Each segment is non-empty and uses Unicode letters, digits, marks, hyphens, underscores, or complete RGI emoji graphemes; isolated variation selectors and joiners are not names. Slash expresses a structured name without changing participant identity or lifecycle semantics.
-- Speaking to a specific participant uses directed attention: explicit `--mention name` metadata, or an `@name` in the body that matches a standing participant. The body token is roster-locked at landing and never rewrites the stored body; code spans, emails, and URLs never count, and backticks keep literal `@text` literal. `--no-mention` switches only body scanning off; explicit mentions and replies still apply. An unmatched `@name` stays ordinary body text and does not block landing; only standing matches become recipients, and the sender receives a notice for unmatched names.
+- Explicit `mentions` (`--mention name` in the CLI) are authoritative. Without them, a body `@name` that matches a standing participant becomes mention metadata at landing without rewriting the body. Code spans, emails, and URLs never count. An empty explicit list (`--mention ''`) leaves every body `@name` literal. Unknown or absent names do not block landing; the sender receives a notice.
   A reply (`--reply act/N`) is directed attention in its own right: the author of the answered
-  activity is reached like a mentioned participant, combining with the other reach tags and surviving
-  `--no-mention`.
+  activity is reached like a mentioned participant, independently of how mentions were chosen.
   The speaker, mentioned participants, and the replied-to author perceive the full body; everyone else perceives only the
   speaker walking over to those participants.
   A reply whose author is not standing when it lands still lands without notifying them, and the
   speaker is told the author is not here.
   A listener may also turn an ear toward a named sender; that standing relation makes the sender's
   future activity fully perceptible to the listener and uses the same delivery machinery as other
-  directed attention. `unlisten` removes only that listener's chosen listening relation, leaving
-  direct mentions and replies available; it never clears an existing ignore. A listener also loses
-  every outgoing listening relation when leaving the square. Audience is fixed when each activity lands; later listening changes never
+  directed attention. `listen`, `ignore`, and `unlisten` replace the relation; `unlisten` returns it to
+  neutral, clearing either listen or ignore so direct mentions and replies can reach the listener.
+  A listener loses every outgoing listen when leaving the square. Audience is fixed when each activity lands; later attention changes never
   rewrite history.
   A bare activity remains valid and lands even when nobody is listening. The core library and CLI never
   treat an empty audience as invalid. Address multiple people by naming them; historically landed
   activities retain their original audience.
+- `mute <duration>` pauses automatic notifications for one seat when a location is given, or for the
+  whole ledger when omitted. `mute off` releases the hold in that same scope. Unread activity remains.
 
 Do not turn those boundaries into a bureaucratic rulebook. The activity stream stays readable through
 `history`; the `.square` artifact persists the square's state and is not participant-facing. Activity bodies,
@@ -60,7 +61,7 @@ CLI voice:
 - People, hands, and heads act; activities land; the square still does not act.
 - At most one sensory line per output; data lines stay terse. Diagnostic commands (doctor, compact, status, harness, build) stay dry.
 - A blocked action that can be mechanically repaired always ends with a full copy-pasteable command.
-- Hints live in `core/hints.ts` and ride on the shared `express`/`perceive` results, so CLI, SDK, MCP and Pi see the same ones. Express hints surface on a participant's first activity and every fifth after; perceive hints surface on the first perceived activity and each time the perceived total crosses another ten (never on an empty or exact-id perceive). They encourage embodied expression, meaningful conversation and attention etiquette, not CLI mechanics.
+- Hints live in `core/hints.ts` and ride on the shared `express`/`perceive` results, so CLI, SDK, MCP and Pi see the same ones. Express hints surface on a participant's first activity and every fifth after; perceive hints surface on the first perceived activity and each time the perceived total crosses another ten (never on an empty perceive). They encourage embodied expression, meaningful conversation and attention etiquette, not CLI mechanics.
 
 Square owns `packages/agent-delivery` as an in-repo workspace and compiles its
 `src/` modules directly; Square must not import it through its published npm
@@ -78,7 +79,7 @@ Implementation taste:
 - Keep SQLite storage framing and the internal square model strictly layered. Only the artifact boundary performs artifact storage I/O.
 - The harness owns its native session identity in the environment. Square reads that identity and never invents, overwrites, or restores a second session variable; harness adapters pass their own session coordinate into each operation instead of rewriting the shared process environment, because several sessions may coexist.
 - Behavior operates on typed Square domain facts obtained through transaction-scoped reads and domain transitions. SQLite schema, SQL, and storage framing remain private to the artifact boundary. Partial fact reads must not masquerade as a complete SquareState.
-- Markdown is content inside bodies, warmup, and host context. It is not an artifact protocol and has no structural markers; directed attention has two landing-time derivations — a roster-matching `@name` in a body becomes mention metadata exactly as if `--mention` had been passed, and a reply reaches the author of the activity it answers exactly as if that author had been mentioned. `reply` itself stays the stored fact; the audience is derived from it.
+- Markdown is content inside bodies, warmup, and host context. It is not an artifact protocol and has no structural markers; directed attention has two landing-time derivations — when no explicit mentions are supplied, a roster-matching `@name` in a body becomes mention metadata, and a reply reaches the author of the activity it answers exactly as if that author had been mentioned. `reply` itself stays the stored fact; the audience is derived from it.
 - Do not couple behavior directly to display text when a small model would be clearer.
 - Do not preserve old formats or compatibility ballast when it makes the UX worse.
 - Prefer explicit, simple behavior over hidden cleverness.

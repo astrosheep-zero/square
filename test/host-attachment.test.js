@@ -26,19 +26,19 @@ test('ledger detach projects away while retaining audience and unread; attach re
   const { square, ledger, alice, bob } = await setup(t);
   const session = await ledger.session('test:bob');
   const question = await bob.express('question', { force: true });
-  await bob.listen('Alice');
+  await bob.attention({ target: 'Alice', state: 'listen' });
   assert.equal(await ledger.detach({ owner: 'test:bob', generation: session.generation }), true);
   const match = { fields: [{ path: ['job'], equals: 7 }] };
   assert.deepEqual(await bob.ack({ from: 'Worker', match, future: 'exact' }), { consumed: 0 });
   const result = await alice.express('while away @bob @BOB @Alice @Missing', {
-    force: true, mentions: ['BOB', 'Alice'], reply: question.activity.id,
+    force: true, mentions: ['BOB', 'Alice', 'Missing'], reply: question.activity.id,
   });
   const sent = result.activity;
   assert.deepEqual(result.awayRecipients, ['Bob']);
   assert.equal(result.observation, undefined, 'away facts do not require observe');
   assert.deepEqual(result.unmatchedMentions, ['Missing']);
   assert.equal(sent.awayRecipients, undefined);
-  assert.equal((await square.history({ at: [sent.id] })).activities[0].awayRecipients, undefined);
+  assert.equal((await square.history({ ids: [sent.id] })).activities[0].awayRecipients, undefined);
   const away = (await square.participants()).participants.find(p => p.name === 'Bob');
   assert.equal(away.presence, 'away');
   assert.equal(away.unreadActivityCount, 1);
@@ -52,19 +52,19 @@ test('ledger deletion is overlaid on reads and lands done only on the next mutat
   const { square, ledger, alice } = await setup(t);
   const session = await ledger.session('test:bob');
   assert.equal(await ledger.markDeleted({ owner: 'test:bob', generation: session.generation }), true);
-  const before = await square.history({ limit: null });
+  const before = await square.history();
   await square.status();
   assert.equal((await square.participants()).participants.find(p => p.name === 'Bob').presence, 'away');
-  assert.deepEqual((await square.history({ limit: null })).activities, before.activities);
+  assert.deepEqual((await square.history()).activities, before.activities);
   await alice.express('reconcile', { force: true });
-  const done = (await square.history({ limit: null })).activities.filter(a => a.kind === 'done' && a.actor === 'Bob');
+  const done = (await square.history()).activities.filter(a => a.kind === 'done' && a.actor === 'Bob');
   assert.equal(done.length, 1);
 });
 
 test('away observations do not override ignore and a reply still reaches its away author', async t => {
   const { square, ledger, alice, bob } = await setup(t);
   const question = await bob.express('question', { force: true });
-  await bob.ignore('Alice');
+  await bob.attention({ target: 'Alice', state: 'ignore' });
   const session = await ledger.session('test:bob');
   await ledger.detach({ owner: 'test:bob', generation: session.generation });
   const direct = await alice.express('@bob', { force: true });

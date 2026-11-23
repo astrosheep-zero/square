@@ -1,4 +1,4 @@
-import { deliveryLedgerLocation } from '../api/square-api.js';
+import * as api from '../api/square-api.js';
 import { type CLI_OPERATIONS, issueText, type Input, type OperationBinding } from '../surfaces/operations.js';
 import { spellAction } from '../surfaces/presentation.js';
 import { operationText } from '../surfaces/operation-presentation.js';
@@ -39,7 +39,7 @@ export function operationCommand({ operation, fields, fixed }: CliOperation): Co
           refuse(`missing value for ${flag}`);
         if (field.kind === 'array') {
           const values = field.split?.(value) ?? value.split(',');
-          if (values.length === 0) refuse(`${flag} needs at least one value`);
+          if (values.length === 0 && !field.repeat) refuse(`${flag} needs at least one value`);
           input[field.key] = [...(input[field.key] as string[] | undefined ?? []), ...values];
         } else input[field.key] = field.kind === 'number' && /^-?\d+$/.test(value) ? Number(value) : value;
       }
@@ -47,11 +47,11 @@ export function operationCommand({ operation, fields, fixed }: CliOperation): Co
       return input;
     },
     async execute(input, context) {
-      const binding: OperationBinding = { surface: 'cli', text: operationText, expressFromCli, cwd: context.cwd,
+      const binding: OperationBinding = { api, surface: 'cli', text: operationText, expressFromCli, cwd: context.cwd,
         stdin: { tty: process.stdin.isTTY === true, read: readStdin },
         identity: () => commandIdentity(context.env, context.owner), clock: () => commandClock(context)(),
-        ledgerLocation: deliveryLedgerLocation(context.env, context.homeDir), ownerFlag: context.owner ?? context.env.SQUARE_OWNER,
-        exit: code => { process.exitCode = code; }, progress: text => { process.stderr.write(`${text}\n`); }, refuse: fail };
+        ledgerLocation: api.deliveryLedgerLocation(context.env, context.homeDir), ownerFlag: context.owner ?? context.env.SQUARE_OWNER,
+        exit: code => { process.exitCode = code; }, progress: text => { process.stderr.write(`${text}\n`); } };
       const parsed = operation.cliSchema.safeParse(input);
       if (!parsed.success) {
         const message = issueText(parsed.error);

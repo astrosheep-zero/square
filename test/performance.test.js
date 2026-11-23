@@ -149,7 +149,7 @@ test('perceive fences selection and captures the page facts in its receipt trans
     }
     return result;
   };
-  const interrupted = await bob.perceive({ wait: 1 }, { signal: AbortSignal.timeout(2000) });
+  const interrupted = await bob.perceive({ wait: '1ms' }, { signal: AbortSignal.timeout(2000) });
   assert.equal(interrupted.reason, 'replaced');
   assert.equal(replaced, true);
   assert.equal((await cell.read(facts => facts.receipt('Bob', 2))).value, undefined, 'a replaced lease cannot insert a receipt');
@@ -194,7 +194,7 @@ test('a capped idle perceive through the shared SDK owner hydrates no bodies and
   const before = (await cell.read(facts => facts.receipt('P0', 2))).value;
   assert.equal(before, undefined);
   counters.hydrated = [];
-  const perceived = await participant.perceive({ wait: 1 }, { signal: AbortSignal.timeout(2000) });
+  const perceived = await participant.perceive({ wait: '1ms' }, { signal: AbortSignal.timeout(2000) });
   assert.deepEqual(perceived, { activities: [], remaining: 1, reason: 'capped' });
   assert.equal(counters.hydrated.flat().length, 0);
   assert.equal((await cell.read(facts => facts.receipt('P0', 2))).value, before);

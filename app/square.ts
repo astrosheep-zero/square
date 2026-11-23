@@ -2,19 +2,20 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { createArtifactPort, createSquare, diagnoseSquareFile, prepareSquareBuild } from '../artifact/artifact.js';
 import { coreDone, decideJoin } from '../core/decisions.js';
-import { InternalSquareError, SquareError, validateName, type Owner, type Seat, type WakeAddress } from '../core/model.js';
+import { InternalSquareError, SquareError, validateName, type Owner, type Seat } from '../core/model.js';
 import { checkControl, failure, squareLocation, type ObservationOptions, type OperationControl, type SquareLocation, type UnreadActivitySummary } from '../core/neutral.js';
 import type { SendInput, SendResult } from '../core/ports.js';
 import { inSquareCount, presenceAnchor, requireJoinName, requireOwner } from '../core/runtime.js';
 import { participantIdentity } from '../core/square-values.js';
-import { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT, NON_READ, entryPresentation, publicActivities, queryParticipants, queryStatus,
+import { entryPresentation, queryParticipants, queryStatus,
   recoveryObservation, selectHistory, toPublicActivity, type Activity, type EntryPresentation, type HistoryObservation,
-  type HistoryQuery, type ParticipantsResult, type PerceivedActivity, type SquareObservation, type StatusOptions, type StatusResult } from '../core/observations.js';
+  type ParticipantsResult, type PerceivedActivity, type SquareObservation, type StatusResult } from '../core/observations.js';
 import { deliveryLedgerLocation } from '../ledger/delivery-ledger.js';
 import { canonicalPath } from '../storage/canonical-path.js';
 import { SeatedParticipant, type Participant } from './participant.js';
 import { ensureInitialDeliverySession, flush, observation, reconcile, withHostPresence, type DispatchPostedCard, type SquareResource } from './square-posting.js';
 import { streamSquare, type StreamOptions, type StreamRecord } from './stream.js';
+import { parseOperation, type HistoryQuery, type JoinOptions, type StatusOptions } from '../surfaces/operations.js';
 
 export interface HeldSeat { readonly name: string; readonly generation: string }
 export interface OpenOptions {
@@ -28,12 +29,6 @@ export interface SquareBuildInput extends SquareAtInput {
   readonly throttlePerMinute?: number;
   readonly template?: string;
   readonly force?: boolean;
-}
-export interface JoinOptions extends ObservationOptions {
-  readonly owner: Owner;
-  readonly wakeAddress?: WakeAddress;
-  readonly takeover?: boolean;
-  readonly last?: number;
 }
 export interface JoinResult {
   readonly participant: Participant;
@@ -113,7 +108,7 @@ export class Square {
       let kind: JoinResult['kind'] = 'joined', activity = null;
       if (initial !== undefined) {
         if (!current?.joined) throw new SquareError('already_done', `${participantIdentity(participant)} is no longer standing here`);
-        facts.land(coreDone(facts, participant, '', now));
+        facts.land(coreDone(facts, participant, now));
         kind = 'taken-over';
       } else if (current?.joined) {
         if (currentSeat === undefined || currentSeat.owner !== owner)
@@ -165,8 +160,7 @@ export class Square {
     try {
       checkControl(control);
       name = requireJoinName(requested);
-      const last = options.last ?? HISTORY_DEFAULT_LIMIT;
-      if (!Number.isSafeInteger(last) || last < 1 || last > HISTORY_MAX_LIMIT) throw new SquareError('invalid_args', 'Join history limit must be between 1 and 100');
+      options = parseOperation('join', options);
       if (!await ensureInitialDeliverySession(requireOwner(options.owner), options.wakeAddress, control?.signal, this.resource.ledgerLocation, this.resource.clock))
         throw new SquareError('already_joined', `${participantIdentity(name)} is away; resume the host session first`, { reason: 'needs_seat' });
       await reconcile(this.resource, control?.signal);
@@ -179,7 +173,7 @@ export class Square {
       let entry, deliveryAvailable = false;
       try {
         const observed = await withHostPresence(this.resource, (facts, available) => ({
-          entry: entryPresentation(facts, participant.name, last),
+          entry: entryPresentation(facts, participant.name),
           deliveryAvailable: available(participant.name),
         }), control);
         entry = observed.entry;
@@ -192,21 +186,11 @@ export class Square {
     }
   }
   async history(query: HistoryQuery = {}, control?: OperationControl): Promise<HistoryResult> {
-    if (query.limit !== undefined && query.limit !== null && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > HISTORY_MAX_LIMIT))
-      throw new SquareError('invalid_args', `History limit must be a positive integer no greater than ${HISTORY_MAX_LIMIT}`);
-    if (query.order !== undefined && query.order !== 'asc' && query.order !== 'desc')
-      throw new SquareError('invalid_args', 'History order must be asc or desc.');
-    if (query.since !== undefined && !Number.isFinite(query.since)) throw new SquareError('invalid_args', 'History timestamp must be finite');
-    if (query.context !== undefined && (!Number.isSafeInteger(query.context) || query.context < 0 || query.context > HISTORY_MAX_LIMIT))
-      throw new SquareError('invalid_args', `History context must be a non-negative integer no greater than ${HISTORY_MAX_LIMIT}`);
-    const limit = query.limit === undefined ? (query.at?.length ? null : HISTORY_DEFAULT_LIMIT) : query.limit;
-    const contextual = !!query.at?.length || query.context !== undefined;
-    const kinds = contextual || query.since !== undefined ? [...NON_READ, 'read' as const] : NON_READ;
+    query = parseOperation('history', query);
+    const now = this.resource.clock();
     return (await this.resource.artifact.read(facts => {
-      const selected = selectHistory(facts, query, limit, kinds, query.observe === true);
-      if (contextual && limit === null && selected.totalMatches > HISTORY_MAX_LIMIT)
-        throw failure(new SquareError('invalid_args', `History context exceeds ${HISTORY_MAX_LIMIT} activities`), { operation: 'history', historyBounds: { maxLimit: HISTORY_MAX_LIMIT, totalMatches: selected.totalMatches } });
-      const activities = publicActivities(selected.activities);
+      const selected = selectHistory(facts, query, now);
+      const activities = selected.activities.map(toPublicActivity);
       if (!query.observe) return { activities };
       const indexes = selected.activities.map(activity => activity.index), presenceAnchors: Record<number, string[]> = {};
       for (const participant of facts.roster()) {
@@ -218,6 +202,7 @@ export class Square {
     }, control?.signal)).value;
   }
   async status(options: StatusOptions = {}, control?: OperationControl): Promise<StatusResult> {
+    options = parseOperation('status', options);
     return withHostPresence(this.resource, (facts, available, mutes) => {
       const result = queryStatus(facts, { location: this.location, now: this.resource.clock() }, options.viewer, options.observe === true);
       return {

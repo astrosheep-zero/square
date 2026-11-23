@@ -78,7 +78,7 @@ test('perceive continuation replays the sender filter and excludes the distracto
   assert.doesNotMatch(second.stdout, /dan aside/);
 });
 
-test('history search keeps a stable older continuation and recovers a bounded context', async (t) => {
+test('history search keeps a stable older continuation and clips individual bodies', async (t) => {
   const firstBody = `FIRST-${'x'.repeat(240)}-schema\nv3-${'y'.repeat(240)}-FIRST-TAIL`;
   const file = await persistSquare(async ({ square, body }) => {
     const alice = (await square.join('Alice', { owner: body })).participant;
@@ -88,42 +88,21 @@ test('history search keeps a stable older continuation and recovers a bounded co
   });
   t.after(() => fs.rmSync(path.dirname(file), { recursive: true, force: true }));
 
-  const newer = run(withPath(file, ['history', '--regex', '--search', 'schema\\s+v3', '--limit', '1']), { env: { SQUARE_NOW_MS: '50000' } });
+  const newer = run(withPath(file, ['history', '--search', '/schema\\s+v3/', '--limit', '1']), { env: { SQUARE_NOW_MS: '50000' } });
   assert.equal(newer.status, 0, newer.stderr);
   assert.match(newer.stdout, /act\/2/);
   assert.doesNotMatch(newer.stdout, /act\/1/);
-  assert.ok(command(newer.stdout, '--before').includes("--search 'schema\\s+v3' --before act/2 --limit 1"));
+  assert.ok(command(newer.stdout, '--before').includes("--search '/schema\\s+v3/' --limit 1 --before act/2"));
 
-  const older = run(withPath(file, ['history', '--regex', '--search', 'schema\\s+v3', '--before', 'act/2', '--limit', '1']), { env: { SQUARE_NOW_MS: '50000' } });
+  const older = run(withPath(file, ['history', '--search', '/schema\\s+v3/', '--before', 'act/2', '--limit', '1']), { env: { SQUARE_NOW_MS: '50000' } });
   assert.equal(older.status, 0, older.stderr);
   assert.match(older.stdout, /act\/1/);
   assert.doesNotMatch(older.stdout, /act\/2/);
 
-  const full = run(withPath(file, ['history', '--at', 'act/1', '-C', '0', '--full']), { env: { SQUARE_NOW_MS: '50000' } });
-  assert.equal(full.status, 0, full.stderr);
-  assert.match(full.stdout, /FIRST-TAIL/);
-
-  const boundsFile = await persistSquare(async ({ square, file, body }) => {
-    await square.join('Alice', { owner: body });
-    await square.close();
-    const artifact = createArtifactPort(file);
-    try {
-      const seat = (await artifact.read((facts) => facts.seat('Alice'))).value;
-      await artifact.transactAs({ kind: 'participant', seat }, (facts) => {
-        for (let index = 1; index <= 101; index += 1) facts.land({ kind: 'say', actor: 'Alice', at: 1000 + index, body: `short ${index}` });
-      });
-    } finally { await artifact.close(); }
-  }, { hardCap: 200 });
-  t.after(() => fs.rmSync(path.dirname(boundsFile), { recursive: true, force: true }));
-
-  const anchor = 'act/100';
-  const refused = run(withPath(boundsFile, ['history', '--at', anchor, '-C', '100']));
-  assert.equal(refused.status, 2);
-  assert.match(refused.stderr, /history is capped at 100 activities/);
-  assert.match(refused.stderr, /history --at act\/100 -C 100 --limit 100/);
-  const recovered = run(withPath(boundsFile, ['history', '--at', anchor, '-C', '100', '--limit', '100']));
-  assert.equal(recovered.status, 0, recovered.stderr);
-  assert.ok(recovered.stdout.split(/\s+/).includes(anchor));
+  const clipped = run(withPath(file, ['history', '--ids', 'act/1', '--max-chars', '20']));
+  assert.equal(clipped.status, 0, clipped.stderr);
+  assert.match(clipped.stdout, /FIRST-x+\s+… .*characters total/);
+  assert.doesNotMatch(clipped.stdout, /FIRST-TAIL/);
 });
 
 test('a historical body-bearing done stays in the archive without reaching perceive', async (t) => {
@@ -143,7 +122,7 @@ test('a historical body-bearing done stays in the archive without reaching perce
 
   const square = await Square.at({ path: file, clock: () => 7000 });
   try {
-    const history = await square.history({ limit: null });
+    const history = await square.history();
     const departure = history.activities.find((activity) => activity.kind === 'done');
     assert.equal(departure.body, 'final note');
     const alice = await square.participant('Alice', { owner });
@@ -151,7 +130,7 @@ test('a historical body-bearing done stays in the archive without reaching perce
     assert.equal(perceived.activities.some((activity) => activity.id === departure.id), false);
   } finally { await square.close(); }
 
-  const cli = run(withPath(file, ['history', '--full']), { env: { SQUARE_NOW_MS: '8000' } });
+  const cli = run(withPath(file, ['history']), { env: { SQUARE_NOW_MS: '8000' } });
   assert.equal(cli.status, 0, cli.stderr);
   assert.equal((cli.stdout.match(/final note/g) ?? []).length, 1);
   assert.match(cli.stdout, /@Bob stepped out of the square — done · act\/2/);
@@ -206,7 +185,7 @@ test('list orders depth and cursor paging, then reports a bounded uncertain walk
   assert.match(rendered, /square list --depth 4 --limit 1 --after 'a-left\.square'/);
 });
 
-test('history keeps a historical read out of public activities', async (t) => {
+test('history names a historical read only when IDs are supplied', async (t) => {
   const file = await persistSquare(async ({ square, body }) => {
     const alice = (await square.join('Alice', { owner: body })).participant;
     await alice.express('first public activity', { force: true });
@@ -224,7 +203,7 @@ test('history keeps a historical read out of public activities', async (t) => {
   });
   const id = formatActivityId(readIndex);
 
-  const history = run(withPath(file, ['history', '--at', id, '-C', '0']), { env: { SQUARE_NOW_MS: '5000' } });
+  const history = run(withPath(file, ['history', '--ids', id]), { env: { SQUARE_NOW_MS: '5000' } });
   assert.equal(history.status, 0, history.stderr);
-  assert.match(history.stdout, /no activity matches this history query/);
+  assert.ok(history.stdout.includes(`@Alice looked through ${id}`));
 });

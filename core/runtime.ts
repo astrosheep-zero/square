@@ -5,7 +5,6 @@ export const WATCH_HEARTBEAT_MS = 60000;
 export const WATCH_STALE_MS = 180000;
 export const THROTTLE_WINDOW_MS = 60000;
 export const UNREAD_BLOCK_GRACE_MS = 90000;
-export const FACT_PAGE_SIZE = 100;
 
 export function inSquareCount(facts: SquareRead): number { return facts.participantCounts().joined; }
 

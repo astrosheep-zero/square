@@ -19,7 +19,7 @@ export interface LandingEffect {
   readonly activity: ActDraft & { readonly index: number };
   readonly participant?: ParticipantFact;
   readonly removeListeningOf?: string;
-  readonly removeListening?: { readonly listener: string; readonly target: string };
+  readonly clearAttention?: { readonly listener: string; readonly target: string };
   readonly replaceAttention?: AttentionFact;
   readonly audience: readonly LandedRecipient[];
 }
@@ -51,10 +51,9 @@ export function deriveLanding(activity: ActDraft & { readonly index: number }, f
     const existing = facts.outgoing.find(item => sameName(item.target, activity.target));
     if (existing?.kind !== activity.kind) replaceAttention = { listener: participant.name, target: activity.target, kind: activity.kind, sinceIndex: activity.index };
   }
-  const removeListening = activity.kind === 'unlisten' && facts.outgoing.some(item => item.kind === 'listen' && sameName(item.target, activity.target))
-    ? { listener: participant.name, target: activity.target } : undefined;
   return { activity, participant, audience, ...(activity.kind === 'done' ? { removeListeningOf: participant.name } : {}),
-    ...(removeListening === undefined ? {} : { removeListening }), ...(replaceAttention === undefined ? {} : { replaceAttention }) };
+    ...(activity.kind === 'unlisten' ? { clearAttention: { listener: participant.name, target: activity.target } } : {}),
+    ...(replaceAttention === undefined ? {} : { replaceAttention }) };
 }
 export function landingFacts(read: SquareRead, activity: ActDraft): LandingFacts {
   const standing = activity.kind === 'say' ? read.roster().filter(item => item.joined) : [];
@@ -65,7 +64,7 @@ export function landingFacts(read: SquareRead, activity: ActDraft): LandingFacts
   }
   return { actor: read.participant(activity.actor), standing, seats,
     incoming: activity.kind === 'say' ? read.incomingAttention(activity.actor) : [],
-    outgoing: activity.kind === 'listen' || activity.kind === 'ignore' || activity.kind === 'unlisten' ? read.attention(activity.actor) : [],
+    outgoing: activity.kind === 'listen' || activity.kind === 'ignore' ? read.attention(activity.actor) : [],
     replyAuthor: activity.kind === 'say' && activity.reply !== undefined ? read.activity(activity.reply)?.actor : undefined };
 }
 export interface LandingWriter extends Pick<SquareWrite, 'putLease' | 'removeLease' | 'markSeen' | 'setSeatAttachment'>, ProducerWrite {

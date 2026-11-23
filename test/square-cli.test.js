@@ -28,13 +28,13 @@ test('CLI joins, refuses a foreign body, and takes over the same name', async (t
   assert.equal(joined.status, 0, joined.stderr);
   assert.match(joined.stdout, /● you stepped into the square/);
   const alice = await square.participant('Alice', { owner });
-  const before = (await square.history({ limit: null })).activities;
+  const before = (await square.history()).activities;
 
   const foreign = run(withName(file, 'Alice', ['perceive']), { env: { CODEX_THREAD_ID: 'worker-body' } });
   assert.equal(foreign.status, 2, foreign.stdout);
   assert.match(foreign.stderr, /is not held by this owner/);
   assert.ok(foreign.stderr.trimEnd().endsWith(`square --location '${file}' --as 'Alice' join`));
-  assert.deepEqual((await square.history({ limit: null })).activities, before);
+  assert.deepEqual((await square.history()).activities, before);
   assert.equal((await square.participant('Alice', { owner })).name, 'Alice');
 
   const takeover = run(withName(file, 'Alice', ['join', '--takeover']), { env: { CODEX_THREAD_ID: 'worker-body' } });
@@ -57,7 +57,6 @@ test('status expands the latest body only when it is actually clipped', async ()
   assert.equal(first.status, 0, first.stderr);
   const literal = first.stdout;
   assert.match(literal, /more chars fits without clipping/);
-  assert.doesNotMatch(literal, /more chars\n|history --at act\/\d+ -C 2 --full/);
 
   const square = await Square.at({ path: file });
   let latest;
@@ -69,8 +68,7 @@ test('status expands the latest body only when it is actually clipped', async ()
   const after = status();
   assert.equal(after.status, 0, after.stderr);
   const clipped = after.stdout;
-  assert.match(clipped, /… \d+ more chars/);
-  assert.match(clipped, new RegExp(`history --at ${latest.id} -C 2 --full`));
+  assert.ok(clipped.includes(`history --ids ${latest.id} -C 2 --max-chars`));
 });
 
 test('missing locations stay quiet and point at discovery', () => {

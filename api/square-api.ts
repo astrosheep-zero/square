@@ -4,7 +4,8 @@ import { requireOwner } from '../core/runtime.js';
 import { DeliveryLedger, deliveryLedgerLocation } from '../ledger/delivery-ledger.js';
 import { openReadOnlyDeliveryLedger } from '../ledger/delivery-lifetime.js';
 import { dispatchPostedCard } from '../hosts/notifications.js';
-import { muteDeadline } from '../core/time.js';
+import { muteDeadline, parseDurationMs } from '../core/time.js';
+import { parseOperation, type MuteInput } from '../surfaces/operations.js';
 import type { OperationControl, Participant, SquareAtInput, SquareBuildInput } from './types.js';
 
 export { migrateDeliveryLedger, type MigrateDeliveryLedgerInput, type MigrateDeliveryLedgerResult } from '../ledger/delivery-ledger.js';
@@ -47,16 +48,13 @@ async function withDeliveryLedger<T>(input: DeliveryMuteOptions, control: Operat
   try { return await run(ledger); }
   finally { await ledger.close(); }
 }
-/** Pause automatic notifications for the entire resolved delivery ledger. */
-export async function muteDeliveryLedger(input: DeliveryMuteOptions & { readonly durationMs: number }, control?: OperationControl): Promise<{ readonly mutedUntil: number | null }> {
-  const now = (input.clock ?? Date.now)();
-  muteDeadline(now, input.durationMs);
-  return withDeliveryLedger({ ...input, clock: () => now }, control,
-    ledger => ledger.mute({ durationMs: input.durationMs }, control?.signal));
-}
-/** Release only the all-owner hold; independent seat and producer holds remain. */
-export function unmuteDeliveryLedger(input: DeliveryMuteOptions = {}, control?: OperationControl): Promise<{ readonly mutedUntil: number | null }> {
-  return withDeliveryLedger(input, control, ledger => ledger.unmute(control?.signal));
+/** Set or release the all-owner hold. Independent seat and producer holds remain. */
+export async function muteDeliveryLedger({ ledgerLocation, clock, ...input }: DeliveryMuteOptions & MuteInput, control?: OperationControl): Promise<{ readonly mutedUntil: number | null }> {
+  const { duration } = parseOperation('mute', input);
+  if (duration === 'off') return withDeliveryLedger({ ledgerLocation, clock }, control, ledger => ledger.unmute(control?.signal));
+  const now = (clock ?? Date.now)(), durationMs = parseDurationMs(duration)!;
+  muteDeadline(now, durationMs);
+  return withDeliveryLedger({ ledgerLocation, clock: () => now }, control, ledger => ledger.mute({ durationMs }, control?.signal));
 }
 /** Read the active all-owner hold without creating an absent ledger. */
 export async function deliveryLedgerMutedUntil(input: DeliveryMuteOptions = {}, control?: OperationControl): Promise<number | null> {
@@ -67,10 +65,9 @@ export async function deliveryLedgerMutedUntil(input: DeliveryMuteOptions = {}, 
 }
 export { ACTIVITY_METADATA_MAX_BYTES } from '../core/model.js';
 export { localUserOwner, harnessOwner, decodeHarnessOwner } from '../core/owner.js';
-export { ACTIVITY_ID_PATTERN, formatActivityId, isNarratedActivity, MAX_IDENTITY_SET_SIZE, parseActivityId } from '../core/square-core.js';
-export { PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT } from '../core/perceive-decisions.js';
-export { HISTORY_DEFAULT_LIMIT, HISTORY_MAX_LIMIT } from '../core/observations.js';
-export { DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../app/list.js';
+export { ACTIVITY_ID_PATTERN, formatActivityId, isNarratedActivity, MAX_IDENTITY_SET_SIZE, PAGE_CAP, parseActivityId,
+  PERCEIVE_DEFAULT_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT } from '../core/square-core.js';
+export { HISTORY_DEFAULT_LIMIT } from '../core/observations.js';
 export { diagnoseSquare } from '../app/square.js';
 export { discover } from '../app/list.js';
 export { inbox } from '../app/inbox.js';

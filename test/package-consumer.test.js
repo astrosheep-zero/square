@@ -106,7 +106,7 @@ test('packed ESM and types expose the real Square and delivery ledger APIs', (t)
     extension({on(event,handler){handlers.set(event,handler)},registerFlag(name){flags.push(name)},
       registerTool(tool){tools.push(tool)},getFlag(){return undefined},sendMessage(){throw Error('unexpected send')}});
     assert.deepEqual(flags,['agent-delivery-socket']);
-    assert.ok(tools.some(tool => tool.name === 'square_express' && tool.parameters.properties.noMention));
+    assert.ok(tools.some(tool => tool.name === 'square_express' && tool.parameters.properties.mentions));
     assert.ok(handlers.has('session_start') && handlers.has('session_shutdown'));
     const {default: v2} = await import('@astrosheep/square/server');
     const v1 = await import('@astrosheep/square/opencode-v1');

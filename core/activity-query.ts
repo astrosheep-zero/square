@@ -19,10 +19,10 @@ export interface ActivityQuery {
   readonly cursor?: ActivityCursor;
 }
 
-/** Both public read paths compile the same filters; neither resolves senders through membership. */
-export function activityQueryFilter(query: ActivityQuery, extraFields: readonly string[] = []): ActivityFilter {
+/** Pending filters do not resolve senders through membership. */
+export function activityQueryFilter(query: ActivityQuery): ActivityFilter {
   const fail = (message: string): never => { throw new SquareError('invalid_args', message); };
-  const fields = ['at', 'from', 'match', 'search', 'cursor', 'limit', ...extraFields];
+  const fields = ['at', 'from', 'match', 'search', 'cursor', 'limit'];
   if (typeof query !== 'object' || query === null || Array.isArray(query)) fail('Activity query must be an object.');
   for (const field of Object.keys(query))
     if (!fields.includes(field)) fail(`Unknown activity query field: ${field}`);

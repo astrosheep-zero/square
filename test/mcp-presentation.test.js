@@ -6,7 +6,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
-import { Square } from '../dist/api/square-api.js';
+import { Square, discover } from '../dist/api/square-api.js';
 import { renderFailureLines } from '../dist/surfaces/operation-presentation.js';
 import { spellAction } from '../dist/surfaces/presentation.js';
 import { createSquareMcpServer } from '../dist/surfaces/mcp.js';
@@ -51,8 +51,8 @@ test('history prints one CLI page through MCP text-only transport', async (t) =>
     await square.join('bob', { owner: body });
     const rei = await square.participant('rei', { owner: body });
     await rei.express('first words @bob', { force: true });
-    await rei.express('*waves*', { force: true, noMention: true });
-    await (await square.participant('bob', { owner: body })).listen('rei');
+    await rei.express('*waves*', { force: true });
+    await (await square.participant('bob', { owner: body })).attention({ target: 'rei', state: 'listen' });
   });
   const cli = run(withPath(squarePath, ['history']), { env: envFor(squarePath) });
   assert.equal(cli.status, 0, cli.stderr);
@@ -75,12 +75,12 @@ test('every participant command reaches its MCP operation and shares its validat
     ['express', ['express', 'hello'], { body: 'hello' }],
     ['perceive', ['perceive'], {}],
     ['history', ['history'], {}],
-    ['attention', ['listen', 'Bob'], { action: 'listen', target: 'Bob' }],
-    ['attention', ['unlisten', 'Bob'], { action: 'unlisten', target: 'Bob' }],
-    ['attention', ['ignore', 'Bob'], { action: 'ignore', target: 'Bob' }],
+    ['attention', ['listen', 'Bob'], { state: 'listen', target: 'Bob' }],
+    ['attention', ['unlisten', 'Bob'], { state: 'neutral', target: 'Bob' }],
+    ['attention', ['ignore', 'Bob'], { state: 'ignore', target: 'Bob' }],
     ['status', ['status'], {}],
     ['mute', ['mute', '1m'], { duration: '1m' }],
-    ['unmute', ['unmute'], {}],
+    ['mute', ['mute', 'off'], { duration: 'off' }],
     ['done', ['done'], {}],
     ['list', ['ls'], {}],
   ]) {
@@ -93,15 +93,13 @@ test('every participant command reaches its MCP operation and shares its validat
 
   const alice = (argv) => withName(cliSquare, 'Alice', argv);
   for (const [name, argv, args] of [
-    ['list', ['ls', '--depth', '-1'], { depth: -1, location: null }],
-    ['join', alice(['join', '--last', '0']), { as: 'Alice', last: 0 }],
+    ['list', ['ls', '--after', toolSquare], { after: toolSquare, location: null }],
     ['express', alice(['express', '--reply', 'not-an-id', 'hello']), { as: 'Alice', reply: 'not-an-id', body: 'hello' }],
-    ['perceive', alice(['perceive', '--takeover']), { as: 'Alice', takeover: true }],
-    ['history', withPath(cliSquare, ['history', '--order', 'sideways']), { order: 'sideways' }],
-    ['attention', alice(['listen', 'not a name']), { as: 'Alice', action: 'listen', target: 'not a name' }],
+    ['perceive', alice(['perceive', '--replace']), { as: 'Alice', replace: true }],
+    ['history', withPath(cliSquare, ['history', '--after', 'sideways']), { after: 'sideways' }],
+    ['attention', alice(['listen', 'not a name']), { as: 'Alice', state: 'listen', target: 'not a name' }],
     ['status', withName(cliSquare, 'bad/', ['status']), { as: 'bad/' }],
     ['mute', alice(['mute', '0m']), { as: 'Alice', duration: '0m' }],
-    ['unmute', withName(cliSquare, 'bad//name', ['unmute']), { as: 'bad//name' }],
     ['done', withName(cliSquare, '', ['done']), { as: '' }],
   ]) {
     const cli = cliRun(argv);
@@ -110,6 +108,8 @@ test('every participant command reaches its MCP operation and shares its validat
     assert.equal(tool.isError, true, `${name}: ${tool.content[0].text}`);
     const refusal = tool.content[0].text;
     assert.ok(cli.stderr.trim().split('\n').includes(refusal), `${name}: expected ${JSON.stringify(refusal)} in ${cli.stderr}`);
+    if (name === 'list') await assert.rejects(discover({ cwd: path.dirname(toolSquare) }, { after: args.after }),
+      { code: 'invalid_args', message: refusal });
   }
 });
 
@@ -137,7 +137,7 @@ test('invalid reply recovery has CLI and tool actions for the same typed failure
   ]);
 });
 
-test('history continuation and full expansion round-trip through tool arguments', async (t) => {
+test('history continuation preserves regex search and clipping arguments', async (t) => {
   const squarePath = await buildSquare(t);
   const tail = `${'x'.repeat(300)} REAL-TAIL`;
   let earlier, later;
@@ -148,16 +148,15 @@ test('history continuation and full expansion round-trip through tool arguments'
     later = (await participant.express(`needle 9 ${'z'.repeat(300)} REAL-TAIL`, { force: true })).activity.id;
   });
   const call = await openMcp(t, squarePath);
-  const first = (await call('history', { search: 'needle \\d+', regex: true, full: true, limit: 1 })).content[0].text;
+  const first = (await call('history', { search: '/needle \\d+/', maxChars: 20, limit: 1 })).content[0].text;
   const line = first.split('\n').find((row) => row.startsWith('history ') && row.includes('"before"'));
   assert.ok(line !== undefined, first);
   const args = JSON.parse(line.slice('history '.length));
-  assert.equal(args.search, 'needle \\d+');
-  assert.equal(args.regex, true);
-  assert.equal(args.full, true);
+  assert.equal(args.search, '/needle \\d+/');
+  assert.equal(args.maxChars, 20);
   assert.equal(args.before, later);
   const second = (await call('history', args)).content[0].text;
   assert.ok(second.includes(earlier), second);
-  const expanded = (await call('history', { at: [earlier], context: 1, full: true })).content[0].text;
+  const expanded = (await call('history', { ids: [earlier], context: 1 })).content[0].text;
   assert.ok(expanded.includes('REAL-TAIL'), expanded);
 });

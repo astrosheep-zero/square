@@ -1,5 +1,3 @@
-import { SquareError } from './neutral.js';
-
 /** Validate one finite named mute deadline from an operation-entry clock. */
 export function muteDeadline(now: number, durationMs: number): number {
   if (!Number.isFinite(now)) throw new RangeError('Expected finite clock time');
@@ -10,12 +8,11 @@ export function muteDeadline(now: number, durationMs: number): number {
   return expiresAt;
 }
 
-export function parseDurationMs(value: string, label: string): number {
-  const match = value.match(/^([1-9]\d*)(ms|s|m|h)$/);
-  if (!match) throw new SquareError('invalid_args', `✕ invalid ${label}: expected a positive duration with unit ms, s, m, or h (for example 500ms, 30s, 3m, 1h)`);
-  const milliseconds = Number(match[1]) * ({ ms: 1, s: 1000, m: 60000, h: 3600000 }[match[2]]!);
-  if (!Number.isSafeInteger(milliseconds)) throw new SquareError('invalid_args', `✕ invalid ${label}: duration is too large`);
-  return milliseconds;
+export function parseDurationMs(value: string): number | undefined {
+  const match = /^([1-9]\d*)(ms|s|m|h|d)$/.exec(value);
+  if (match === null) return undefined;
+  const ms = Number(match[1]) * ({ ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2]]!);
+  return Number.isSafeInteger(ms) ? ms : undefined;
 }
 
 function pad(value: number, length = 2): string {
@@ -75,22 +72,10 @@ export function parseTimestamp(value: string): number {
   return Date.parse(normalized);
 }
 
-/** Relative offsets like -3d, -24h, -30m, -90s; absolute timestamps via parseTimestamp. */
-export function parseTimeOrRelative(value: string, now = Date.now()): number {
+/** A relative duration looks back from the operation clock. */
+export function parseTimeOrRelative(value: string, now: number): number {
   const trimmed = value.trim();
-  const relative = trimmed.match(/^(-?)(\d+)(ms|s|m|h|d)$/i);
-  if (relative) {
-    const sign = relative[1] === '-' ? -1 : 1;
-    const amount = Number(relative[2]);
-    const unit = relative[3].toLowerCase();
-    const multipliers: Record<string, number> = {
-      ms: 1,
-      s: 1000,
-      m: 60_000,
-      h: 3_600_000,
-      d: 86_400_000,
-    };
-    return now + sign * amount * multipliers[unit];
-  }
-  return parseTimestamp(trimmed);
+  const duration = parseDurationMs(trimmed.replace(/^-/, ''));
+  if (duration !== undefined) return now - duration;
+  return /^\d{4}-\d{2}-\d{2}(?:$|[T ])/.test(trimmed) ? parseTimestamp(trimmed) : NaN;
 }

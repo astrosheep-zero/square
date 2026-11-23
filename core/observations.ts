@@ -1,17 +1,19 @@
-import { formatActivityId, isNarratedActivity, NARRATED_ACTIVITY_KINDS, parseActivityId, type ActivityId, type Perception, type Reach } from './square-core.js';
+import { formatActivityId, PAGE_CAP, parseActivityId, type ActivityId, type Perception, type Reach } from './square-core.js';
 import { compareParticipantActivity, coreParticipants, resolveKnownName, unreadActivitySummaries, type ParticipantSummary } from './decisions.js';
 import { SquareError, nameKey, sameName, type ActivityMetadata, type DirectedNotificationRoute, type HydratedAct, type Owner, type StoredAct } from './model.js';
-import type { ObservationOptions } from './neutral.js';
-import type { ActivityFilter, ActivityHead, SquareRead } from './ports.js';
+import { truncateChars } from './neutral.js';
+import type { ActivityFilter, SquareRead } from './ports.js';
 import { inSquareCount } from './runtime.js';
-import { activityQueryFilter, type ActivityQuery } from './activity-query.js';
+import { historySearch } from './search.js';
+import { parseTimeOrRelative } from './time.js';
+import type { HistoryQuery } from '../surfaces/operations.js';
 
 /** Indexed archive event, including read bookkeeping and a say's linked content. */
 export type ArchiveRecord = Readonly<HydratedAct>;
 export interface Activity {
   readonly id: ActivityId;
   readonly at: number;
-  readonly kind: 'join' | 'say' | 'done' | 'listen' | 'ignore' | 'unlisten';
+  readonly kind: StoredAct['kind'];
   readonly actor: string;
   readonly body?: string;
   readonly metadata?: ActivityMetadata;
@@ -19,6 +21,7 @@ export interface Activity {
   readonly reach?: Reach;
   readonly target?: string;
   readonly reply?: ActivityId;
+  readonly through?: ActivityId;
 }
 export interface PerceivedActivity extends Activity {
   readonly perception: Perception;
@@ -45,9 +48,6 @@ export interface PerceivePresence {
   readonly participants: readonly ParticipantSummary[];
   readonly now: number;
 }
-export interface StatusOptions extends ObservationOptions {
-  readonly viewer?: string;
-}
 export interface StatusResult {
   /** Present when a viewer resolves; an empty list means they listen to nobody. */
   readonly listening?: readonly string[];
@@ -63,14 +63,6 @@ export interface StatusResult {
 export interface ParticipantsResult {
   readonly participants: readonly ParticipantSummary[];
   readonly observation?: ParticipantsObservation;
-}
-export interface HistoryQuery extends ActivityQuery, ObservationOptions {
-  /** Ten by default; null explicitly reads the full archive. */
-  readonly limit?: number | null;
-  readonly order?: 'asc' | 'desc';
-  readonly mention?: string;
-  readonly since?: number;
-  readonly context?: number;
 }
 export interface HistoryContinuation {
   readonly direction: 'before' | 'after';
@@ -94,12 +86,11 @@ export interface StatusObservation extends Omit<SquareObservation, 'now'>, Prese
 }
 export interface ParticipantsObservation extends SquareObservation, PresenceClassification {}
 
-const PAGE_SIZE = 100;
 export const HISTORY_DEFAULT_LIMIT = 10;
-export const HISTORY_MAX_LIMIT = 100;
+const HISTORY_DEFAULT_MAX_CHARS = 1000;
 const STATUS_HERE_WINDOW_MS = 30 * 60_000;
 const PRESENCE_WINDOW_MS = 8 * 60 * 60_000;
-export const NON_READ = ['join', 'done', 'say', 'listen', 'ignore', 'unlisten'] as const;
+const NON_READ = ['join', 'done', 'say', 'listen', 'ignore', 'unlisten'] as const;
 
 export function directedTo(facts: SquareRead, activity: StoredAct, name: string): boolean {
   return activity.kind === 'say' && facts.directedAt(name, activity.index) !== undefined;
@@ -110,15 +101,15 @@ export function perceiveActivity(facts: SquareRead, activity: StoredAct, name: s
   return activity.kind !== 'say' || sameName(activity.actor, name) || directedTo(facts, activity, name) ? 'full' : 'presence';
 }
 
-/** The one stored-to-public Activity field mapping. Rejects read bookkeeping. */
+/** The one stored-to-public Activity field mapping. */
 export function toPublicActivity(stored: HydratedAct): Activity {
-  if (stored.kind === 'read') throw new Error(`Cannot expose stored activity ${formatActivityId(stored.index)}`);
   return { id: formatActivityId(stored.index), at: stored.at, kind: stored.kind, actor: stored.actor,
     ...(stored.kind === 'say' && stored.reach !== undefined ? { reach: stored.reach } : {}),
     ...('body' in stored && stored.body !== undefined ? { body: stored.body } : {}),
     ...('metadata' in stored && stored.metadata !== undefined ? { metadata: stored.metadata } : {}),
     mentions: stored.kind === 'say' ? stored.mentions ?? [] : [], ...('target' in stored ? { target: stored.target } : {}),
-    ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}) };
+    ...(stored.kind === 'say' && stored.reply !== undefined ? { reply: formatActivityId(stored.reply) } : {}),
+    ...(stored.kind === 'read' ? { through: formatActivityId(stored.through) } : {}) };
 }
 export function toPerceivedActivity(facts: SquareRead, stored: HydratedAct, viewer: string): PerceivedActivity {
   const via = facts.directedAt(viewer, stored.index)?.route;
@@ -131,74 +122,53 @@ export function parseRequiredActivityId(id: ActivityId): number {
   return index;
 }
 
-/** The narrated page's cursor head: first for older paging, last for newer. */
-function narratedAnchor(heads: readonly ActivityHead[], direction: 'before' | 'after'): ActivityHead | undefined {
-  const narrated = heads.filter((head) => isNarratedActivity(head.kind));
-  return direction === 'before' ? narrated[0] : narrated.at(-1);
+function archiveBound(bound: string | undefined, now: number): [index?: number, time?: number] {
+  if (bound === undefined) return [];
+  const index = parseActivityId(bound);
+  return index === undefined ? [undefined, parseTimeOrRelative(bound, now)] : [index];
 }
-/** History adds archive context and ordering to the shared storage-side query predicates. */
-export function selectHistory(facts: SquareRead, query: HistoryQuery, limit: number | null, kinds: ActivityFilter['kinds'], presentation = true) {
-  const shared = activityQueryFilter(query, ['observe', 'order', 'mention', 'since', 'context']);
-  const { afterIndex } = shared;
-  const recipient = query.mention == null ? undefined : resolveKnownName(facts, query.mention);
-  if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) throw new SquareError('invalid_args', 'History limit must be a positive integer');
-  const filter: ActivityFilter = {
-    ...shared, afterAt: query.since,
-    ...(shared.indexes === undefined ? {} : { indexes: facts.contextIndexes(shared.indexes, query.context ?? 0, query.context ?? 0) }),
-    kinds: query.search === undefined ? kinds : ['say', 'done'],
-  };
-  const direction = afterIndex === undefined ? 'before' : 'after';
-  let selected: readonly ActivityHead[], totalMatches: number, more = false, extreme: number | undefined;
-  if (recipient === undefined && limit !== null && limit <= PAGE_SIZE) {
-    selected = facts.activityHeads(filter, { edge: afterIndex === undefined ? 'newest' : 'oldest', limit }).items;
-    totalMatches = facts.activityCount(filter);
-    const anchor = presentation ? narratedAnchor(selected, direction) : undefined;
-    if (anchor !== undefined) more = facts.activityCount({ ...filter,
-      kinds: filter.kinds === undefined ? NARRATED_ACTIVITY_KINDS : filter.kinds.filter(isNarratedActivity),
-      [direction === 'before' ? 'beforeIndex' : 'afterIndex']: anchor.index }) > 0;
-  } else {
-    const page: ActivityHead[] = [];
-    totalMatches = 0;
-    let cursor = afterIndex ?? -1;
-    while (true) {
-      const source = recipient === undefined
-        ? facts.activityHeads({ ...filter, afterIndex: cursor }, { edge: 'oldest', limit: PAGE_SIZE })
-        : facts.directed(recipient, { ...filter, senders: filter.actors, afterIndex: cursor }, { edge: 'oldest', limit: PAGE_SIZE });
-      const heads = recipient === undefined ? source.items as readonly ActivityHead[] : source.items.length === 0 ? []
-        : facts.activityHeads({ ...filter, indexes: source.items.map((head) => head.index).filter((index) => filter.indexes === undefined || filter.indexes.includes(index)) }, { edge: 'oldest', limit: PAGE_SIZE }).items;
-      for (const head of heads) {
-        totalMatches++;
-        if (presentation && isNarratedActivity(head.kind)) extreme = extreme === undefined ? head.index
-          : direction === 'before' ? Math.min(extreme, head.index) : Math.max(extreme, head.index);
-        if (limit === null || afterIndex === undefined || page.length < limit) page.push(head);
-        if (limit !== null && page.length > limit) page.shift();
-      }
-      if (!source.hasMore) break;
-      cursor = source.items.at(-1)!.index;
-    }
-    selected = page;
-    const anchor = presentation ? narratedAnchor(selected, direction) : undefined;
-    more = anchor !== undefined && extreme !== undefined
-      && (direction === 'before' ? extreme < anchor.index : extreme > anchor.index);
-  }
-  const anchor = presentation ? narratedAnchor(selected, direction) : undefined;
-  const continuation: HistoryContinuation | undefined = limit === null || anchor === undefined || !more
-    ? undefined : { direction, cursor: formatActivityId(anchor.index), limit };
-  const activities = [...facts.activities(selected.map((head) => head.index))];
-  if (query.order === 'desc') activities.reverse();
+
+export function selectHistory(facts: SquareRead, query: HistoryQuery, now: number) {
+  const [afterIndex, afterAt] = archiveBound(query.after, now);
+  const [beforeIndex, beforeAt] = archiveBound(query.before, now);
+  const range = { afterIndex, afterAt, beforeIndex, beforeAt };
+  const indexes = query.ids?.map(id => parseActivityId(id)!);
+  const filter: ActivityFilter = { ...range, indexes, actors: query.from,
+    search: query.search === undefined ? undefined : historySearch(query.search),
+    kinds: query.ids !== undefined ? undefined : query.search === undefined ? NON_READ : ['say', 'done'] };
+  const recipient = query.to === undefined ? undefined : resolveKnownName(facts, query.to);
+  const limit = query.limit ?? HISTORY_DEFAULT_LIMIT;
+  const direction = query.after === undefined ? 'before' : 'after';
+  const page = { edge: direction === 'before' ? 'newest' as const : 'oldest' as const, limit: Math.max(1, indexes?.length ?? limit) };
+  const directedFilter = { ...filter, senders: filter.actors };
+  const selected = recipient === undefined ? facts.activityHeads(filter, page) : facts.directed(recipient, directedFilter, page);
+  const matches = selected.items.map(head => head.index);
+  const context = query.context ?? 0;
+  const expanded = context === 0 ? matches : facts.contextIndexes(matches, context, context);
+  const activities = facts.activities(expanded).filter(activity => (query.ids !== undefined || activity.kind !== 'read')
+    && (afterIndex === undefined || activity.index > afterIndex) && (beforeIndex === undefined || activity.index < beforeIndex)
+    && (afterAt === undefined || activity.at > afterAt) && (beforeAt === undefined || activity.at < beforeAt))
+    .map(activity => clipHistoryBody(activity, query.maxChars ?? HISTORY_DEFAULT_MAX_CHARS));
+  const anchor = direction === 'before' ? matches[0] : matches.at(-1);
+  const continuation: HistoryContinuation | undefined = query.observe && selected.hasMore && indexes === undefined && anchor !== undefined
+    ? { direction, cursor: formatActivityId(anchor), limit } : undefined;
+  const totalMatches = !query.observe ? matches.length : recipient === undefined ? facts.activityCount(filter) : facts.directedCount(recipient, directedFilter);
   return { activities, totalMatches, ...(continuation === undefined ? {} : { continuation }) };
 }
-export function publicActivities(activities: readonly ArchiveRecord[]): Activity[] {
-  return activities.flatMap((activity) => activity.kind === 'read' ? [] : [toPublicActivity(activity)]);
+
+function clipHistoryBody(activity: HydratedAct, maxChars: number): HydratedAct {
+  if (!('body' in activity) || activity.body === undefined || activity.body.length <= maxChars) return activity;
+  const clipped = truncateChars(activity.body, maxChars);
+  return clipped.remaining === 0 ? activity : { ...activity, body: `${clipped.text}\n… ${maxChars + clipped.remaining} characters total` };
 }
 export function recoveryObservation(facts: SquareRead, name: string, now: number) {
   const known = resolveKnownName(facts, name);
   return { participant: known, activitySummaries: unreadActivitySummaries(facts, known, now), standingCount: inSquareCount(facts),
     ownActivityCount: facts.participant(known)!.sayCount, hardCap: facts.header().hardCap };
 }
-export function entryPresentation(facts: SquareRead, name: string, lastN: number = HISTORY_DEFAULT_LIMIT): EntryPresentation {
+export function entryPresentation(facts: SquareRead, name: string): EntryPresentation {
   const header = facts.header();
-  const heads = facts.activityHeads({ kinds: ['say', 'done'] }, { edge: 'newest', limit: lastN }).items;
+  const heads = facts.activityHeads({ kinds: ['say', 'done'] }, { edge: 'newest', limit: HISTORY_DEFAULT_LIMIT }).items;
   return { joinedBefore: facts.activityCount({ kinds: ['join'], actors: [name] }) > 1,
     scene: header.warmup.join('\n').trim(),
     joinContext: header.preamble.join('\n').trim(),
@@ -275,14 +245,14 @@ export function perceivePresence(facts: SquareRead, now: number): PerceivePresen
   return { participants, now };
 }
 export function streamProjection(facts: SquareRead, cursor: number, recipient?: string) {
-  const page = facts.activityHeads({ afterIndex: cursor, kinds: NON_READ }, { edge: 'oldest', limit: PAGE_SIZE });
+  const page = facts.activityHeads({ afterIndex: cursor, kinds: NON_READ }, { edge: 'oldest', limit: PAGE_CAP });
   const heads = recipient === undefined ? page.items : page.items.filter((head) => facts.directedAt(recipient, head.index) !== undefined);
   const activities = facts.activities(heads.map((head) => head.index)).map((activity) => recipient === undefined
     ? toPublicActivity(activity) : toPerceivedActivity(facts, activity, recipient));
   return { activities, cursor: page.items.at(-1)?.index ?? cursor, hasMore: page.hasMore };
 }
 export function streamTailProjection(facts: SquareRead, last = HISTORY_DEFAULT_LIMIT, recipient?: string) {
-  if (!Number.isSafeInteger(last) || last < 0 || last > PAGE_SIZE) throw new SquareError('invalid_args', `Invalid stream tail: expected a non-negative safe integer no greater than ${PAGE_SIZE}.`);
+  if (!Number.isSafeInteger(last) || last < 0 || last > PAGE_CAP) throw new SquareError('invalid_args', `Invalid stream tail: expected a non-negative safe integer no greater than ${PAGE_CAP}.`);
   const heads = last === 0 ? [] : recipient === undefined
     ? facts.activityHeads({ kinds: NON_READ }, { edge: 'newest', limit: last }).items
     : facts.directed(recipient, { kinds: ['say'] }, { edge: 'newest', limit: last }).items;

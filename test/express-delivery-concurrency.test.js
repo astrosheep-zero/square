@@ -15,6 +15,6 @@ test('concurrent expressions land exactly once with distinct activities and thei
   assert.notEqual(sent[0].activity.id, sent[1].activity.id);
   assert.deepEqual((await bob.perceive()).activities.map(item => item.body), ['for Bob']);
   assert.deepEqual((await cara.perceive()).activities.map(item => item.body), ['for Cara']);
-  const says = (await square.history({ limit: null })).activities.filter(item => item.kind === 'say');
+  const says = (await square.history()).activities.filter(item => item.kind === 'say');
   assert.deepEqual(says.map(item => item.body).sort(), ['for Bob', 'for Cara']);
 });

@@ -178,7 +178,7 @@ A CLI join executed in place of a native tool call does not count.
    successor turn has a different Body sequence and PID from the original. Neither a manual Tell
    nor any other prompt starts it.
    On the same provider, it uses the actual Square `perceive` tool with the exact `location`, `as`,
-   and `id` from the Tell. Retain the native tool result showing that exact activity and matching
+   and `ids` from the Tell. Retain the native tool result showing that exact activity and matching
    directed nonce. Do not rejoin or take over. OpenCode must log a new stdio connection. After clean
    successor exit, compare all histories, ledger checks and process receipts with that lane's
    baseline. The other AkuId and any third owner gain no Tell, Body or pending entry for this

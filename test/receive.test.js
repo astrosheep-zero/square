@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { receive, selectReceivedHeads, consumeReceived, recordConsumed, ReceiveError } from '../dist/core/receive.js';
+import { receive, selectReceivedHeads, consumeReceived, recordConsumed } from '../dist/core/receive.js';
 
 // Caller-owned transactional memory, with storage uniqueness and rollback. Keys
 // are equality identities; array insertion order, not key spelling, orders heads.
@@ -25,10 +25,6 @@ function memory() {
           && (!unconsumed || receipt({ recipient, item: row.key }) === undefined))
           .slice(0, limit).map(({ key, via }) => ({ key, via }));
       },
-      addressed(recipient, key) {
-        const row = draft.addresses.find(row => row.recipient === recipient && row.key === key);
-        return row === undefined ? undefined : { key, via: row.via };
-      },
       load(keys) {
         loads.push([...keys]);
         return new Map([...keys].reverse().filter(key => draft.items.has(key)).map(key => [key, draft.items.get(key)]));
@@ -50,8 +46,7 @@ function memory() {
   }
   return { transact, loads, snapshot: () => structuredClone(state) };
 }
-const page = (query = {}, limit = 10) => ({ kind: 'page', query, limit });
-const exact = key => ({ kind: 'exact', key, remainingQuery: {} });
+const page = (query = {}, limit = 10) => ({ query, limit });
 const admit = (tx, key, audience, data = key) => receive(tx, { item: { key, data }, audience });
 const address = (via = 'direct', recipient = 'east:bob') => ({ recipient, via });
 
@@ -66,7 +61,7 @@ test('admission keeps supplied audience order, allows nobody, and rolls back dup
   assert.deepEqual(db.snapshot(), before);
 });
 
-test('page filters before limit, probes do not consume, and sparse exact receipts preserve first time', () => {
+test('page filters before limit and leaves unselected items unread', () => {
   const db = memory();
   db.transact(tx => {
     admit(tx, 'z#first', [address('quiet')]);
@@ -77,22 +72,13 @@ test('page filters before limit, probes do not consume, and sparse exact receipt
   db.transact(tx => {
     assert.deepEqual(selectReceivedHeads(tx, 'east:bob', page({ via: 'direct' }, 1)), [{ key: 'a#second', via: 'direct' }]);
     assert.equal(tx.count('east:bob', {}, true), 4);
-    assert.deepEqual(consumeReceived(tx, 'east:bob', exact('m#third'), 10), {
-      items: [{ key: 'm#third', data: 'm#third', via: 'direct' }], newlyConsumed: 1, remaining: 3,
-    });
-    const repeat = consumeReceived(tx, 'east:bob', { ...exact('m#third'), remainingQuery: { via: 'quiet' } }, 20);
-    assert.equal(repeat.newlyConsumed, 0);
-    assert.equal(repeat.remaining, 1);
-    assert.deepEqual(tx.receipt({ recipient: 'east:bob', item: 'm#third' }), { at: 10 });
     const consumed = consumeReceived(tx, 'east:bob', page({ via: 'direct' }, 1), 30);
     assert.deepEqual(consumed.items.map(item => item.key), ['a#second']);
-    assert.equal(consumed.remaining, 1);
+    assert.equal(consumed.remaining, 2);
     assert.equal(tx.receipt({ recipient: 'east:bob', item: 'z#first' }), undefined);
     assert.equal(tx.receipt({ recipient: 'west:bob', item: 'm#third' }), undefined);
   });
-  assert.deepEqual(db.loads, [['m#third'], ['m#third'], ['a#second']]);
-  assert.throws(() => db.transact(tx => consumeReceived(tx, 'west:bob', exact('m#third'), 40)),
-    error => error instanceof ReceiveError && error.code === 'not_addressed' && error.key === 'm#third');
+  assert.deepEqual(db.loads, [['a#second']]);
 });
 
 test('missing hydration writes no receipts; later storage failure rolls back the entire consumption', () => {

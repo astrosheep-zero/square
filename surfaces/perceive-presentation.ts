@@ -1,6 +1,6 @@
 import { sameName } from '../core/model.js';
 import { participantIdentity } from '../core/square-values.js';
-import { formatDuration } from '../core/time.js';
+import { formatDuration, parseDurationMs } from '../core/time.js';
 import type { ParticipantSummary, PerceiveOptions, PerceiveResult } from '../api/types.js';
 import { style } from './tty-style.js';
 import { type PresentationSurface, spellAction, spellField, renderPresenceLines, renderAmbientEventFacts, withPathOutput } from './presentation.js';
@@ -26,7 +26,7 @@ interface WatchStatusOptions extends ParticipantOutputOptions {
   hardCap?: number | null;
 }
 
-function watchAction({ squarePath, name, owner, surface }: ParticipantOutputOptions, operation: 'done' | 'perceive', options: { wait?: string; takeover?: true } = {}): string {
+function watchAction({ squarePath, name, owner, surface }: ParticipantOutputOptions, operation: 'done' | 'perceive', options: { wait?: string; replace?: true } = {}): string {
   return spellAction({ operation, owner, args: { location: squarePath, as: name, ...options } }, surface);
 }
 
@@ -34,8 +34,8 @@ export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string
   return [
     `${style('blocked', '✕')} you are already perceiving`,
     `  · an active perceive is already running for ${participantIdentity(opts.name)}`,
-    `  · ${spellField('perceive', 'takeover', opts.surface)} lets a new perceive take over`,
-    watchAction(opts, 'perceive', { wait: '30m', takeover: true }),
+    `  · ${spellField('perceive', 'replace', opts.surface)} lets a new perceive take over`,
+    watchAction(opts, 'perceive', { wait: '30m', replace: true }),
   ].join('\n');
 }
 
@@ -117,10 +117,10 @@ export function renderPerceiveOutcome(
   }).text).filter(Boolean).join('\n\n');
   const remaining = data.remaining === 0 ? ''
     : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${spellAction({ operation: 'perceive', owner,
-      args: { location, as: name, from: options.from?.length ? options.from : undefined, mention: options.mention || undefined, limit: options.limit } }, surface)}`;
+      args: { location, as: name, ids: options.ids, from: options.from, mention: options.mention || undefined, limit: options.limit } }, surface)}`;
   const terminal = stop === undefined ? '' : renderWatchStatus({
     ...statusOptions, status: stop,
-    ...(stop === 'idle' && options.wait !== undefined ? { idleMs: options.wait } : {}),
+    ...(stop === 'idle' && options.wait !== undefined ? { idleMs: parseDurationMs(options.wait) } : {}),
   });
   const fallback = stop === undefined && !projection.deliveryAvailable && data.remaining === 0
     ? `${watchAction(statusOptions, 'perceive', { wait: '30m' })}\n  stay available for new activity` : '';

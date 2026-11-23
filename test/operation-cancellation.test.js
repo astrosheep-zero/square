@@ -23,9 +23,9 @@ async function tempDirectory(prefix) {
 
 test('pre-aborted lifecycle operations do not mutate the artifact', async () => {
   const square = Square.inMemory({ markdown: 'context' });
-  const before = await square.history({ limit: null });
+  const before = await square.history();
   await assert.rejects(() => square.join('Alice', { owner: body('memory') }, { signal: aborted().signal }), /cancelled/);
-  assert.deepEqual(await square.history({ limit: null }), before);
+  assert.deepEqual(await square.history(), before);
   await square.close();
 });
 
@@ -130,7 +130,7 @@ test('idle perceive aborts without consuming activity added later', async () => 
   const bob = (await square.join('Bob', { owner: body('memory') })).participant;
   await bob.perceive();
   const controller = new AbortController();
-  const waiting = bob.perceive({ wait: 60_000 }, { signal: controller.signal });
+  const waiting = bob.perceive({ wait: '60s' }, { signal: controller.signal });
   await new Promise(resolve => setImmediate(resolve));
   controller.abort(new Error('cancelled'));
   await assert.rejects(waiting, /cancelled/);

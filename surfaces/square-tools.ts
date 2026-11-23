@@ -1,3 +1,4 @@
+import * as api from '../api/square-api.js';
 import { isSquareError, SquareError } from '../core/model.js';
 import type { OperationControl, OperationError } from '../api/types.js';
 import { OPERATIONS, issueText, type Input, type OperationBinding } from './operations.js';
@@ -26,7 +27,7 @@ export async function runSquareTool(tool: typeof SQUARE_TOOLS[number], args: Inp
   let squarePath = typeof args.location === 'string' ? args.location : undefined;
   try {
     const { identity, ...binding } = await bind();
-    return { text: await tool.run({ ...binding, surface: 'tool', text: operationText, identity: () => identity,
+    return { text: await tool.run({ ...binding, api, surface: 'tool', text: operationText, identity: () => identity,
       opened: location => { squarePath = location; } }, parsed.data, control) };
   } catch (error) {
     return { isError: true, text: renderFailureLines(failureReport(error, control.signal), {

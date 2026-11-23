@@ -268,6 +268,8 @@ function activitySelection(filter: ActivityFilter, alias = 'a'): Selection {
         add(`${alias}.act_index <= ?`, integer(filter.throughIndex, -1));
     if (filter.afterAt !== undefined)
         add(`${alias}.at > ?`, finite(filter.afterAt));
+    if (filter.beforeAt !== undefined)
+        add(`${alias}.at < ?`, finite(filter.beforeAt));
     for (const [column, values] of [['act_index', filter.indexes], ['kind', filter.kinds], [filter.actorMatch === 'exact' ? 'actor_json' : 'actor_key_json', filter.actors?.map(name => filter.actorMatch === 'exact' ? encode(name) : key(name))]] as const) {
         if (values !== undefined) {
             if (column === 'act_index')
@@ -482,10 +484,9 @@ export function createSqliteDriver(db: DatabaseSync): SqliteDriver {
                 run('INSERT INTO participants(name_key_json,name_json,first_index,joined,done,say_count,last_active_at,last_join_index) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(name_key_json) DO UPDATE SET joined=excluded.joined,done=excluded.done,say_count=excluded.say_count,last_active_at=excluded.last_active_at,last_join_index=excluded.last_join_index', [key(p.name), encode(p.name), p.firstIndex, Number(p.joined), Number(p.done), p.sayCount, p.lastActiveAt ?? null, p.lastJoinIndex ?? null]);
             }
             if (effect.removeListeningOf !== undefined) run("DELETE FROM attention WHERE listener_key_json=? AND kind='listen'", [key(effect.removeListeningOf)]);
-            if (effect.removeListening !== undefined) {
-                const target = effect.removeListening;
-                string(target.listener, true); string(target.target, true);
-                run("DELETE FROM attention WHERE listener_key_json=? AND target_key_json=? AND kind='listen'", [key(target.listener), key(target.target)]);
+            if (effect.clearAttention !== undefined) {
+                const { listener, target } = effect.clearAttention;
+                run('DELETE FROM attention WHERE listener_key_json=? AND target_key_json=?', [key(listener), key(target)]);
             }
             if (effect.replaceAttention) {
                 const t = effect.replaceAttention;

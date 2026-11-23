@@ -56,7 +56,7 @@ test('Pi registers the shared contract as namespaced codemode tools', () => {
     assert.equal(tool.description, shared.description);
     assert.equal(tool.parameters.type, 'object');
     assert.equal(tool.parameters.additionalProperties, false);
-    const locationRequired = !['list', 'mute', 'unmute'].includes(shared.name);
+    const locationRequired = !['list', 'mute'].includes(shared.name);
     assert.equal(tool.parameters.required?.includes('location') ?? false, locationRequired);
     assert.equal('location' in tool.parameters.properties, shared.name !== 'list');
     assert.equal('session' in tool.parameters.properties, false);
@@ -66,8 +66,7 @@ test('Pi registers the shared contract as namespaced codemode tools', () => {
     }
   }
   const express = tools.get('square_express').parameters.properties;
-  assert.equal(express.noMention.type, 'boolean');
-  assert.equal('bell' in express, false);
+  assert.equal(express.mentions.type, 'array');
 });
 
 test('Pi calls use live context, preserve environment, and return human text and failures', async (t) => {
@@ -105,16 +104,16 @@ test('Pi calls use live context, preserve environment, and return human text and
     assert.ok(invalid.content[0].text.length > 0);
   }
   await call('join', { as: 'bob' });
-  await call('attention', { as: 'bob', action: 'listen', target: 'rei' });
+  await call('attention', { as: 'bob', state: 'listen', target: 'rei' });
   assert.match((await call('status', { as: 'BOB' })).content[0].text, /you listen to\s+· @rei/);
   const ambiguous = await call('status');
   assert.equal(ambiguous.isError, undefined);
   assert.doesNotMatch(ambiguous.content[0].text, /you listen to/);
-  assert.match((await call('attention', { as: 'bob', action: 'unlisten', target: 'rei' })).content[0].text, /stops listening to @rei/);
+  assert.match((await call('attention', { as: 'bob', state: 'neutral', target: 'rei' })).content[0].text, /returns to direct mentions and replies from @rei/);
   assert.match((await call('status', { as: 'bob' })).content[0].text, /not turned toward anyone/);
-  const bare = await call('express', { as: 'rei', body: 'literal @bob', noMention: true, force: true });
+  const bare = await call('express', { as: 'rei', body: 'literal @bob', mentions: [], force: true });
   assert.match(bare.content[0].text, /your words land.*act\/\d+/);
-  const directed = await call('express', { as: 'rei', body: 'hello', noMention: true, mentions: ['bob'], force: true });
+  const directed = await call('express', { as: 'rei', body: 'hello', mentions: ['bob'], force: true });
   assert.match(directed.content[0].text, /you walk over to @bob/);
   const perceived = await call('perceive', { as: 'bob' });
   assert.match(perceived.content[0].text, /hello/);
@@ -150,7 +149,7 @@ test('Pi express reports absent and away targets once, while addressed activity 
     '⚠ @Nobody is not in this square.', '⚠ @Bob is away.',
   ]);
   await ledger.attach({ owner: session.owner, expectedGeneration: session.generation, routes: [] });
-  await call('express', { as: 'Alice', body: 'resume check', noMention: true, force: true });
+  await call('express', { as: 'Alice', body: 'resume check', force: true });
   const perceived = await call('perceive', { as: 'Bob' }, bobContext);
   assert.match(perceived.content[0].text, /@bob @BOB @Nobody @nobody/);
 });

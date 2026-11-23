@@ -4,8 +4,8 @@ import {
 import type { UnreadActivitySummary } from './neutral.js';
 import type { ParticipantFact, SquareRead } from './ports.js';
 import { participantIdentity } from './square-values.js';
-import { UNREAD_BLOCK_GRACE_MS, freshWatchLease, readCursor, FACT_PAGE_SIZE, THROTTLE_WINDOW_MS } from './runtime.js';
-import { formatActivityId, MAX_IDENTITY_SET_SIZE } from './square-core.js';
+import { UNREAD_BLOCK_GRACE_MS, freshWatchLease, readCursor, THROTTLE_WINDOW_MS } from './runtime.js';
+import { formatActivityId, MAX_IDENTITY_SET_SIZE, PAGE_CAP } from './square-core.js';
 import { scanMentionCandidates, resolveMention } from './mention-parse.js';
 
 type TimedAct<K extends ActDraft['kind'] = ActDraft['kind']> = Extract<ActDraft, { kind: K }>;
@@ -69,7 +69,7 @@ export function unreadActivitySummaries(facts: SquareRead, name: string, now: nu
   let afterIndex = readCursor(facts, name);
   const summaries = new Map<string, { count: number; latestAt: number; lastIndex: number }>();
   while (true) {
-    const page = facts.directed(name, { afterIndex, kinds: ['say'], unseenOnly: true }, { edge: 'oldest', limit: FACT_PAGE_SIZE });
+    const page = facts.directed(name, { afterIndex, kinds: ['say'], unseenOnly: true }, { edge: 'oldest', limit: PAGE_CAP });
     for (const item of page.items) {
       const summary = summaries.get(item.actor) ?? { count: 0, latestAt: -Infinity, lastIndex: item.index };
       summary.count++;
@@ -89,7 +89,7 @@ export function unreadActivitySummaries(facts: SquareRead, name: string, now: nu
   }).sort((a, b) => a.latestActivityAgeMs - b.latestActivityAgeMs || a.name.localeCompare(b.name));
 }
 
-export function decideAct(facts: SquareRead, input: { name: string; body?: string; force: boolean; now: number; metadata?: ActivityMetadata; mentions?: readonly string[]; reply?: number; noMention?: boolean }): ActDecision {
+export function decideAct(facts: SquareRead, input: { name: string; body?: string; force: boolean; now: number; metadata?: ActivityMetadata; mentions?: readonly string[]; reply?: number }): ActDecision {
   const { now, force, reply } = input;
   let metadata: ActivityMetadata | undefined;
   try { metadata = validateActivityMetadata(input.metadata); }
@@ -113,12 +113,12 @@ export function decideAct(facts: SquareRead, input: { name: string; body?: strin
     if (resolved !== undefined && names.length >= MAX_IDENTITY_SET_SIZE) throw activityRefusal('invalid_args', `An activity can mention at most ${MAX_IDENTITY_SET_SIZE} participants`);
     names.push(name);
   };
-  for (const requested of input.mentions ?? []) {
+  if (input.mentions === undefined) {
+    for (const token of scanMentionCandidates(body ?? '')) addMention(token, resolveMention(token, joinedNames));
+  } else for (const requested of input.mentions) {
     validateActivityName(requested);
     addMention(requested, joinedNames.find((candidate) => sameName(candidate, requested)));
   }
-  const bodyMentions = input.noMention === true ? [] : scanMentionCandidates(body ?? '');
-  for (const token of bodyMentions) addMention(token, resolveMention(token, joinedNames));
   const header = facts.header();
   if (reply !== undefined && (!Number.isSafeInteger(reply) || reply < 0 || reply >= header.nextActIndex)) {
     const label = Number.isSafeInteger(reply) && reply >= 0 ? formatActivityId(reply) : String(reply);
@@ -144,11 +144,7 @@ export function decideAct(facts: SquareRead, input: { name: string; body?: strin
     ...(replyAuthorNotHere === undefined ? {} : { replyAuthorNotHere }) };
 }
 
-export function validateDoneBody(body: unknown): void {
-  if (body !== undefined && body !== '') throw new SquareError('invalid_args', 'done only leaves the square and does not accept a message; use express before leaving', { reason: 'invalid_done_body' });
-}
-export function coreDone(facts: SquareRead, name: string, body: string, now: number): TimedAct<'done'> {
-  validateDoneBody(body);
+export function coreDone(facts: SquareRead, name: string, now: number): TimedAct<'done'> {
   const current = resolveStanding(facts, name);
   requireStanding(current);
   return { kind: 'done', actor: current.name, at: now };
@@ -159,7 +155,7 @@ export function attentionChange(facts: SquareRead, kind: 'listen' | 'ignore' | '
   requireStanding(current);
   const outgoing = facts.attention(current.name);
   const existing = outgoing.find((item) => sameName(item.target, target));
-  if (kind === 'unlisten') return existing?.kind === 'listen' ? { kind, actor: current.name, target, at: now } : undefined;
+  if (kind === 'unlisten') return existing === undefined ? undefined : { kind, actor: current.name, target, at: now };
   if (kind === 'listen' && existing?.kind !== 'listen' && outgoing.filter((item) => item.kind === 'listen').length >= MAX_IDENTITY_SET_SIZE) {
     throw new SquareError('invalid_args', `A participant can listen to at most ${MAX_IDENTITY_SET_SIZE} others`);
   }

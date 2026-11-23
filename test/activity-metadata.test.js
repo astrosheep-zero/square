@@ -46,11 +46,11 @@ test('activity metadata lands as an immutable fact through local reads and direc
     assert.deepEqual(perceived.activities[0].metadata, metadataOnly);
     assert.equal(perceived.activities[0].body, undefined);
 
-    await bob.listen('Alice');
+    await bob.attention({ target: 'Alice', state: 'listen' });
     const listened = await alice.express({ metadata: { bare: true }, force: true });
     assert.deepEqual((await bob.perceive()).activities[0].metadata, listened.activity.metadata);
 
-    const history = await square.history({ limit: null });
+    const history = await square.history();
     assert.deepEqual(history.activities.at(-1)?.metadata, listened.activity.metadata);
     const rendered = renderEventCli(history.activities.at(-1));
     assert.match(rendered, /structured activity/);
@@ -70,7 +70,7 @@ test('metadata survives reopen and stream without changing audience semantics', 
     } finally { await square.close(); }
     const reopened = await Square.at({ path: location });
     try {
-      assert.deepEqual((await reopened.history({ limit: null })).activities.at(-1)?.metadata, metadata);
+      assert.deepEqual((await reopened.history()).activities.at(-1)?.metadata, metadata);
       const iterator = reopened.stream({ start: { kind: 'tail', last: 1 } })[Symbol.asyncIterator]();
       const next = await iterator.next();
       assert.deepEqual(next.value.metadata, metadata);
@@ -83,7 +83,7 @@ test('metadata admission is bounded, lossless, and rejects unsupported content b
   const square = await localSquare();
   try {
     const alice = (await square.join('Alice', { owner: body('local') })).participant;
-    const before = (await square.history({ limit: null })).activities.length;
+    const before = (await square.history()).activities.length;
     const invalid = [
       {},
       { value: undefined },
@@ -107,7 +107,7 @@ test('metadata admission is bounded, lossless, and rejects unsupported content b
     for (let index = 0; index < 256; index++) leaf = leaf.next;
     assert.equal(leaf.leaf, true);
     await assert.rejects(alice.express({ metadata: depth(257), force: true }), error => error.code === 'invalid_args' && error.facts?.activityUnsent === true && error.operation?.expressEffect === 'unsent');
-    assert.equal((await square.history({ limit: null })).activities.length, before + 1);
+    assert.equal((await square.history()).activities.length, before + 1);
 
     const empty = await alice.express({ body: 'body preserves empty object', metadata: {}, force: true });
     assert.deepEqual(empty.activity.metadata, {});
@@ -127,7 +127,7 @@ test('stored say validation rejects blank bodies with empty metadata', async () 
     try { database.prepare("UPDATE activities SET payload_json=json_set(payload_json, '$.body', ?, '$.metadata', json(?)) WHERE kind='say'").run('   ', '{}'); }
     finally { database.close(); }
     const reopened = await Square.at({ path: location });
-    try { await assert.rejects(reopened.history({ limit: null }), /non-empty body or non-empty metadata/); }
+    try { await assert.rejects(reopened.history(), /non-empty body or non-empty metadata/); }
     finally { await reopened.close(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -142,7 +142,7 @@ test('CLI metadata input and retry keep the original JSON without a body redirec
     assert.equal(cli.status, 0, cli.stderr);
     assert.match(cli.stdout, /structured activity/);
     const reopened = await Square.at({ path: location });
-    try { assert.deepEqual((await reopened.history({ limit: null })).activities.at(-1)?.metadata, { cli: true }); }
+    try { assert.deepEqual((await reopened.history()).activities.at(-1)?.metadata, { cli: true }); }
     finally { await reopened.close(); }
     const retry = activityRetryCommand(location, 'Alice', { metadataJson: '{"cli":true}', bodyProvided: false });
     assert.match(retry, /--metadata '\{"cli":true\}'/);
@@ -176,6 +176,6 @@ test('directed perceive renders metadata-only activities without exposing metada
 
     // Tool rendering leaves the exact domain metadata available to SDK readers.
     assert.deepEqual(directed.activity.metadata, metadata);
-    assert.deepEqual((await square.history({ limit: null })).activities.at(-1)?.metadata, metadata);
+    assert.deepEqual((await square.history()).activities.at(-1)?.metadata, metadata);
   } finally { await square.close(); }
 });

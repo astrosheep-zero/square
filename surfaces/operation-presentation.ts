@@ -13,7 +13,7 @@ import {
 } from './presentation.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from '../core/time.js';
 import { style } from './tty-style.js';
-import type { ListenerVerb, OperationBinding } from './operations.js';
+import type { AttentionInput, OperationBinding } from './operations.js';
 import { renderHistoryResult } from './history-presentation.js';
 import { renderPerceiveOutcome, renderWatchForceTakeover, renderWatchReplaceMissing } from './perceive-presentation.js';
 
@@ -180,7 +180,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
   }
   if (presentation.joinCount > 3) latest.push(style('dim', `  → … ${presentation.joinCount - 3} more stepped in`));
   if (visible.bodyClipped && data.latestActivity !== undefined) {
-    latest.push(spellAction({ operation: 'history', args: { location: squarePath, at: [data.latestActivity.id], context: 2, full: true } }, options.surface));
+    latest.push(spellAction({ operation: 'history', args: { location: squarePath, ids: [data.latestActivity.id], context: 2, maxChars: [...(data.latestActivity.body ?? '')].length } }, options.surface));
   }
   const counts = [
     `${orderedHere.length} here`,
@@ -202,27 +202,27 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
   return withPathOutput(squarePath, output, { participantCount: presentation.standingCount });
 }
 
-export function renderListenerChange(squarePath: string, verb: ListenerVerb, data: ListenerChangeResult): string | undefined {
+export function renderListenerChange(squarePath: string, state: AttentionInput['state'], data: ListenerChangeResult): string | undefined {
   const projection = data.observation;
   if (projection?.participant === undefined) return undefined;
   const actor = participantIdentity(projection.participant);
   const target = participantIdentity(projection.target);
   const action = data.activity !== null
-    ? verb === 'listen' ? `${actor} turns an ear toward ${target}`
-      : verb === 'ignore' ? `${actor} turns away from ${target}`
-        : `${actor} stops listening to ${target} — direct mentions and replies still reach you unless ignored`
-    : verb === 'listen' ? `${actor} already turns an ear toward ${target}`
-      : verb === 'ignore' ? `${actor} already ignores ${target}`
-        : `${actor} is not listening to ${target}`;
+    ? state === 'listen' ? `${actor} turns an ear toward ${target}`
+      : state === 'ignore' ? `${actor} turns away from ${target}`
+        : `${actor} returns to direct mentions and replies from ${target}`
+    : state === 'listen' ? `${actor} already turns an ear toward ${target}`
+      : state === 'ignore' ? `${actor} already ignores ${target}`
+        : `${actor} already hears only direct attention from ${target}`;
   return withPathOutput(squarePath, `${data.activity === null ? '○' : '·'} ${action}`, {
     participantCount: projection.standingCount,
   });
 }
 
-export function renderMuteResult(squarePath: string | undefined, verb: 'mute' | 'unmute', data: MuteResult): string {
+export function renderMuteResult(squarePath: string | undefined, data: MuteResult): string {
   const name = data.observation?.participant;
   const until = data.mutedUntil === null ? '' : ` until ${formatTimestamp(data.mutedUntil)}`;
-  const line = verb === 'mute'
+  const line = data.mutedUntil !== null
     ? name === undefined ? `○ notifications pause${until}` : `○ ${participantIdentity(name)} steps back from notifications${until}`
     : name === undefined ? '● the notification hold ends' : `● ${participantIdentity(name)} ends their notification hold`;
   return squarePath === undefined ? `${line}\n`
@@ -287,14 +287,12 @@ export function renderFailureLines(failure: FailureReport, options: FailureOptio
   const reason = facts?.reason;
   const gate = expressGateLines(failure, options);
   if (gate !== undefined) return gate;
-  const marked = reason === 'never_joined' || reason === 'not_standing'
-    || (failure.operation?.operation === 'perceive' && reason === 'not_addressed');
+  const marked = reason === 'never_joined' || reason === 'not_standing';
   const lines = marked ? failure.message.split('\n').map((line) => `✕ ${line}`) : [failure.message];
   const { surface } = options;
   const join = (takeover?: true) => spellAction({ operation: 'join', owner, args: { location: squarePath, as: name, takeover } }, surface);
   const status = () => spellAction({ operation: 'status', args: { location: squarePath } }, surface);
-  const history = (at?: string) => spellAction({ operation: 'history', args: { location: squarePath,
-    ...(at === undefined ? { limit: 10 } : { at: [at], context: 2 }) } }, surface);
+  const history = () => spellAction({ operation: 'history', args: { location: squarePath, limit: 10 } }, surface);
   if (reason === 'invalid_reply') {
     lines[0] = `Invalid ${spellField('express', 'reply', surface)}: ${facts?.activityExists === false ? `${facts.activityId ?? options.reply ?? 'that activity'} is not in this square's history` : 'expected an activity id like act/12'}`;
     if (squarePath !== undefined) lines.push(history());
@@ -311,8 +309,7 @@ export function renderFailureLines(failure: FailureReport, options: FailureOptio
     lines.push(failure.operation?.subject !== 'filter' && name !== undefined ? join() : status());
   } else if (squarePath !== undefined && reason === 'not_standing') {
     lines.push(status());
-  } else if (squarePath !== undefined && reason === 'not_addressed' && facts?.activityId !== undefined) {
-    lines.push(history(facts.activityExists === true ? facts.activityId : undefined));
+
   }
   if (reason === 'invalid_done_body') {
     const help = spellAction({ operation: 'done', help: true }, surface);
@@ -324,7 +321,7 @@ export function renderFailureLines(failure: FailureReport, options: FailureOptio
 export const operationText: OperationBinding['text'] = {
   list: renderSquareList, join: renderJoinResult, express: renderExpression, perceive: renderPerceiveOutcome,
   history: renderHistoryResult, attention: renderListenerChange, done: renderLifecycleResult, status: renderStatusResult,
-  mute: renderMuteResult, action: spellAction, field: spellField,
+  mute: renderMuteResult,
   perceiveProgress: replaced => replaced ? renderWatchForceTakeover() : renderWatchReplaceMissing(),
   perceiveStopped: location => withPathOutput(location, '○ you step back — perceive stopped'),
 };

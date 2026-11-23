@@ -11,7 +11,7 @@ test('express previews only five latest unseen activities, keeps Unicode intact,
   const bob = (await square.join('Bob', { owner: body })).participant;
   const ids = [];
   for (let i = 0; i < 12; i++) ids.push((await bob.express(`${i}:` + '🐟'.repeat(600), { mentions: ['Alice'], force: true })).activity.id);
-  await alice.perceive({ id: ids[10] }); // A seen row beyond the oldest unread hole must stay excluded.
+  await alice.perceive({ ids: [ids[10]] }); // A seen row beyond the oldest unread hole must stay excluded.
 
   // Count hydration through the real artifact port while express observes its own unread feed.
   const hydrated = [];

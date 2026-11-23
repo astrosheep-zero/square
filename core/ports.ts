@@ -86,7 +86,7 @@ export interface ActivityHead { readonly index: ActivityIndex; readonly at: numb
 export interface ActivityFilter {
   readonly afterIndex?: number; readonly beforeIndex?: number; readonly throughIndex?: number;
   readonly indexes?: readonly ActivityIndex[]; readonly kinds?: readonly StoredAct['kind'][];
-  readonly actors?: readonly string[]; readonly actorMatch?: 'identity' | 'exact'; readonly afterAt?: number;
+  readonly actors?: readonly string[]; readonly actorMatch?: 'identity' | 'exact'; readonly afterAt?: number; readonly beforeAt?: number;
   readonly metadataMatch?: MetadataMatch; readonly search?: ActivitySearch;
 }
 export interface DirectedFilter extends Omit<ActivityFilter, 'actors' | 'actorMatch'> {

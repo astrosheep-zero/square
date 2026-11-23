@@ -239,7 +239,7 @@ test('a bridge first started on an empty square posts what landed while it was s
 
   const { square, body } = await opened(t, path)
   const rei = (await square.join('rei', { owner: body })).participant
-  const late = Array.from({ length: 101 }, (_, index) => `late ${index}`)
+  const late = [...Array.from({ length: 100 }, (_, index) => `late ${index}`), `${'long '.repeat(220)}tail`]
   for (const text of late) await rei.express(text, { force: true })
 
   const restarted = await Bridge.open({ settings, port: slack })

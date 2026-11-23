@@ -27,6 +27,6 @@ test('send returns a notice, not a participant or a say activity', async t => {
   assert.match(result.id, /^notice\/\d+$/);
   assert.equal(result.body, 'notice');
   assert.deepEqual(result.metadata, metadata);
-  assert.equal((await square.history({ limit: null })).activities.some(a => a.actor === 'Coordinator'), false);
+  assert.equal((await square.history()).activities.some(a => a.actor === 'Coordinator'), false);
   assert.equal((await square.participants()).participants.some(p => p.name === 'Coordinator'), false);
 });

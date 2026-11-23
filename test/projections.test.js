@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createArtifactPort, createSquareFile } from '../dist/artifact/artifact.js';
 import { Square } from '../dist/api/square-api.js';
 import { resolveKnownName } from '../dist/core/decisions.js';
-import { perceivePresence, entryPresentation, selectHistory, NON_READ, queryParticipants, recoveryObservation, queryStatus, streamProjection } from '../dist/core/observations.js';
+import { perceivePresence, entryPresentation, selectHistory, queryParticipants, recoveryObservation, queryStatus, streamProjection } from '../dist/core/observations.js';
 
 const queryContext = { location: 'memory', now: 100_000 };
 
@@ -91,14 +91,15 @@ test('entry hydrates only its newest public page and settles viewer perception w
   acts.push({ kind: 'listen', actor: 'Bob', target: 'Alice', at: 242, index: 242 });
   const { square, reads, cell } = measuredSquare(fixture(acts));
   try {
-    const entry = (await square.artifact.read(facts => entryPresentation(facts, 'BOB', 3))).value;
-    assert.deepEqual(entry.recentActivities.map((a) => a.id), ['act/239', 'act/240', 'act/241']);
-    assert.deepEqual(entry.recentActivities.map((a) => a.perception), ['full', 'full', 'full']);
-    assert.deepEqual(reads.batches, [[239, 240, 241]]);
+    const entry = (await square.artifact.read(facts => entryPresentation(facts, 'BOB'))).value;
+    const indexes = Array.from({ length: 10 }, (_, offset) => 232 + offset);
+    assert.deepEqual(entry.recentActivities.map(a => a.id), indexes.map(index => `act/${index}`));
+    assert.ok(entry.recentActivities.every(a => a.perception === 'full'));
+    assert.deepEqual(reads.batches, [indexes]);
     assert.deepEqual(reads.ordinals, []);
     assert.equal(entry.joinContext, 'context\n---');
     assert.equal(entry.joinedBefore, false);
-    const ambient = (await square.artifact.read(facts => entryPresentation(facts, '', 1))).value;
+    const ambient = (await square.artifact.read(facts => entryPresentation(facts, ''))).value;
     assert.equal(ambient.recentActivities[0].perception, 'presence');
   } finally { await cell.close(); }
 });
@@ -110,8 +111,8 @@ test('history filters audience, senders and search in storage before paging and 
   acts.push({ kind: 'say', actor: 'Cara', at: 209, index: 209, body: 'second needle', mentions: ['Bob'] });
   const { square, reads, cell } = measuredSquare(fixture(acts));
   try {
-    const query = { from: ['CARA'], mention: 'bob', search: { text: 'needle', mode: 'regex' }, limit: 1, order: 'desc' };
-    const selected = (await square.artifact.read((facts) => selectHistory(facts, query, query.limit, NON_READ))).value;
+    const query = { from: ['CARA'], to: 'bob', search: '/needle/', limit: 1, observe: true };
+    const selected = (await square.artifact.read(facts => selectHistory(facts, query, 209))).value;
     assert.deepEqual(selected.activities.map((a) => a.index), [209]);
     assert.equal(selected.totalMatches, 2);
     assert.deepEqual(selected.continuation, { direction: 'before', cursor: 'act/209', limit: 1 });
@@ -122,14 +123,14 @@ test('history filters audience, senders and search in storage before paging and 
     assert.deepEqual(outcome.activities.map((activity) => activity.id), ['act/209']);
     assert.equal(reads.directed, 1);
     assert.deepEqual(reads.batches.filter((ids) => ids.length > 0), [[209]]);
-    const byId = (await app.history({ mention: 'Bob', search: { text: '^act/208$', mode: 'regex' }, limit: 1 })).activities;
+    const byId = (await app.history({ to: 'Bob', search: '/^act/208$/', limit: 1 })).activities;
     assert.deepEqual(byId.map((a) => a.id), ['act/208']);
-    const first = (await app.history({ cursor: { id: 'act/207', direction: 'after' }, mention: 'Bob', limit: 1, order: 'desc' })).activities;
+    const first = (await app.history({ after: 'act/207', to: 'Bob', limit: 1 })).activities;
     assert.deepEqual(first.map((a) => a.id), ['act/208']);
   } finally { await cell.close(); }
 });
 
-test('context uses existing activity positions while facade omits read', async (t) => {
+test('ID history includes read events and expands context over existing positions', async (t) => {
   const acts = [
     { kind: 'join', actor: 'Alice', at: 0, index: 0 },
     { kind: 'say', actor: 'Alice', at: 1, index: 7, body: 'before' },
@@ -137,32 +138,15 @@ test('context uses existing activity positions while facade omits read', async (
     { kind: 'say', actor: 'Alice', at: 3, index: 80, body: 'middle', mentions: [] },
     { kind: 'say', actor: 'Alice', at: 4, index: 101, body: 'after' },
   ];
-  const { square, cell } = measuredSquare(fixture(acts));
-  try {
-    const app = await archiveSquare(t, fixture(acts));
-    const application = await app.history({ observe: true, at: ['act/50'], context: 1 });
-    assert.deepEqual(application.observation.activities.map((activity) => activity.index), [7, 50, 80]);
-    assert.deepEqual(application.activities.map((activity) => activity.id), ['act/7', 'act/80']);
-    assert.equal(application.observation.continuation, undefined);
-    const ordinary = await app.history({ observe: true, limit: 3 });
-    assert.deepEqual(ordinary.observation.activities.map((a) => a.index), [7, 80, 101]);
-    const facade = (await app.history({ cursor: { id: 'act/80', direction: 'before' }, limit: 3 })).activities;
-    assert.deepEqual(facade.map((a) => a.id), ['act/0', 'act/7']);
-    const after = (await app.history({ cursor: { id: 'act/0', direction: 'after' }, limit: 1, order: 'desc' })).activities;
-    assert.deepEqual(after.map((a) => a.id), ['act/7']);
-    const all = (await app.history({ limit: null })).activities;
-    const stream = app.stream({ start: { kind: 'tail', last: 10 } }, { signal: AbortSignal.timeout(2000) })[Symbol.asyncIterator]();
-    const records = [];
-    for (const _activity of all) records.push((await stream.next()).value);
-    await stream.return();
-    assert.deepEqual(records, all, 'read records never escape as stream activities');
-    const later = app.stream({ start: { kind: 'after', after: 'act/50' } }, { signal: AbortSignal.timeout(2000) })[Symbol.asyncIterator]();
-    assert.equal((await later.next()).value.id, 'act/80');
-    await later.return();
-  } finally { await cell.close(); }
+  const square = await archiveSquare(t, fixture(acts));
+  const { activities } = await square.history({ ids: ['act/50', 'act/101'], context: 1, limit: 1 });
+  assert.deepEqual(activities.map(a => a.id), ['act/7', 'act/50', 'act/80', 'act/101']);
+  assert.deepEqual(activities[1], { id: 'act/50', kind: 'read', actor: 'Alice', at: 2, mentions: [], through: 'act/7' });
+  const ordinary = await square.history({ search: 'middle', context: 2 });
+  assert.deepEqual(ordinary.activities.map(a => a.id), ['act/7', 'act/80', 'act/101']);
 });
 
-test('hidden listener events occupy history positions without becoming terminal continuation anchors', async (t) => {
+test('history pages forward with after and backward otherwise, always displaying oldest first', async (t) => {
   const state = fixture([
     { kind: 'join', actor: 'Alice', at: 0, index: 0 },
     { kind: 'join', actor: 'Bob', at: 1, index: 2 },
@@ -173,37 +157,33 @@ test('hidden listener events occupy history positions without becoming terminal 
     { kind: 'say', actor: 'Alice', at: 6, index: 101, body: 'latest', mentions: ['Bob'] },
   ]);
   const app = await archiveSquare(t, state);
-  const recent = await app.history({ observe: true, limit: 3, order: 'desc' });
-  assert.deepEqual(recent.observation.activities.map((activity) => activity.index), [101, 80, 50]);
-  assert.deepEqual(recent.activities.map((activity) => activity.id), ['act/101', 'act/80', 'act/50']);
-  assert.deepEqual(recent.observation.continuation, { direction: 'before', cursor: 'act/101', limit: 3 });
+  const recent = await app.history({ observe: true, limit: 3 });
+  assert.deepEqual(recent.activities.map(a => a.id), ['act/50', 'act/80', 'act/101']);
+  assert.deepEqual(recent.observation.continuation, { direction: 'before', cursor: 'act/50', limit: 3 });
   assert.deepEqual(recent.observation.sayNumbers, { 101: 2 });
   assert.deepEqual(recent.observation.presenceAnchors, { 101: ['Alice'] });
   assert.equal(recent.observation.standingCount, 2);
-  const forward = await app.history({ observe: true, cursor: { id: 'act/0', direction: 'after' }, limit: 3, order: 'desc' });
-  assert.deepEqual(forward.observation.activities.map((activity) => activity.index), [50, 7, 2]);
-  assert.deepEqual(forward.observation.continuation, { direction: 'after', cursor: 'act/7', limit: 3 });
-  const hidden = await app.history({ observe: true, cursor: { id: 'act/101', direction: 'before' }, limit: 2 });
-  assert.deepEqual(hidden.activities.map((activity) => activity.kind), ['listen', 'ignore']);
-  assert.equal(hidden.observation.continuation, undefined);
+  const forward = await app.history({ observe: true, after: 'act/0', before: '1970-01-01T00:00:00.006Z', limit: 3 });
+  assert.deepEqual(forward.activities.map(a => a.id), ['act/2', 'act/7', 'act/50']);
+  assert.deepEqual(forward.observation.continuation, { direction: 'after', cursor: 'act/50', limit: 3 });
 });
 
-test('history bounds contextual windows and uses the same validation for SDK and adapters', async (t) => {
-  const state = fixture([{ kind: 'join', actor: 'Alice', at: 0, index: 0 },
-    ...Array.from({ length: 101 }, (_, index) => ({ kind: 'say', actor: 'Alice', at: index + 1, index: index + 1, body: `message ${index}` })),
-  ]);
-  const app = await archiveSquare(t, state);
-  await assert.rejects(app.history({ observe: true, at: ['act/50'], context: 100 }), (error) => {
-    assert.equal(error.code, 'invalid_args');
-    assert.deepEqual(error.operation, { operation: 'history', historyBounds: { maxLimit: 100, totalMatches: 102 } });
-    return true;
-  });
-  assert.equal((await app.history({ observe: true, at: ['act/50'], context: 100, limit: 100 })).activities.length, 100);
-  for (const query of [{ limit: 101 }, { search: { text: '', mode: 'literal' } }, { since: Infinity }, { context: -1 }, { cursor: { id: 'act/5', direction: 'sideways' } }, { at: ['bad'] }]) {
-    await assert.rejects(app.history(query), (error) => error.code === 'invalid_args');
-  }
-  assert.equal((await app.history({ limit: null, search: { text: 'message', mode: 'regex' } })).activities.length, 101);
-  assert.equal((await app.history({ limit: null })).activities.length, 102);
+test('history applies relative time bounds, pages matches before adding context, and clips a lone body', async t => {
+  let now = 0;
+  const square = Square.inMemory({ markdown: '', clock: () => now });
+  t.after(() => square.close());
+  const { participant: alice } = await square.join('Alice', { owner: 'test:history-shapes' });
+  now = 2000;
+  const first = (await alice.express('needle one')).activity;
+  now = 2500;
+  const neighbor = (await alice.express('other')).activity;
+  now = 3000;
+  await alice.express('needle two');
+  now = 5000;
+  const page = await square.history({ after: '4s', before: '1s', search: '/needle/', context: 1, limit: 1 });
+  assert.deepEqual(page.activities.map(a => a.id), [first.id, neighbor.id]);
+  const single = await square.history({ ids: [first.id], maxChars: 6 });
+  assert.equal(single.activities[0].body, 'needle\n… 10 characters total');
 });
 
 test('status settles viewer perception and retains exact-spelling rejoin annotations', async () => {
@@ -279,7 +259,7 @@ test('observed lifecycle renders its committed public activity and listener keep
   const square = Square.inMemory({ markdown: 'context', clock: () => 100 });
   t.after(() => square.close());
   const alice = (await square.join('Alice', { owner: body })).participant;
-  const listened = await alice.listen('Bob', { observe: true });
+  const listened = await alice.attention({ target: 'Bob', state: 'listen' }, { observe: true });
   assert.equal(listened.observation.target, 'Bob');
   assert.equal(Object.hasOwn(listened.observation, 'requestedTarget'), false);
 });

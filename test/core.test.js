@@ -9,7 +9,7 @@ import { renderPresenceLines } from '../dist/surfaces/presentation.js';
 import { presenceAnchor, readCursor } from '../dist/core/runtime.js';
 import { Square } from '../dist/api/square-api.js';
 import { createArtifactPort } from '../dist/artifact/artifact.js';
-import { perceivePresence, publicActivities, NON_READ, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/core/observations.js';
+import { perceivePresence, selectHistory, listPresentation, queryParticipants, queryStatus } from '../dist/core/observations.js';
 
 function makeState(overrides = {}) {
   const acts = (overrides.acts ?? []).map((act, index) => ({ ...act, index }));
@@ -21,10 +21,6 @@ function makeState(overrides = {}) {
     acts,
     runtime: overrides.runtime ?? { ...emptyRuntimeState(acts.length), nextActIndex: acts.length },
   };
-}
-
-async function selectedHistory(square, query) {
-  return (await square.artifact.read((facts) => publicActivities(selectHistory(facts, query, query.limit ?? null, NON_READ, false).activities))).value;
 }
 
 function memorySquare(overrides = {}, clock = () => 0) {
@@ -124,8 +120,8 @@ test('unknown participant errors identify only the requested name', async () => 
   await cell.close();
 });
 
-test('mention history selects historical direct attention for the addressed participant', async () => {
-  const { cell, square } = memorySquare({
+test('history to selects historical landed audience, including listeners', async () => {
+  const { cell } = memorySquare({
     acts: [
       { kind: 'join', actor: 'Alice', at: 1 },
       { kind: 'join', actor: 'Bob', at: 2 },
@@ -138,8 +134,9 @@ test('mention history selects historical direct attention for the addressed part
     ],
   });
   try {
-    assert.deepEqual((await selectedHistory(square, { mention: 'Bob' })).map((item) => item.id), ['act/3']);
-    assert.deepEqual((await selectedHistory(square, { mention: 'Cara' })).map((item) => item.id), ['act/5']);
+    const idsFor = to => cell.read(facts => selectHistory(facts, { to }, 20).activities.map(a => a.index));
+    assert.deepEqual((await idsFor('Bob')).value, [3]);
+    assert.deepEqual((await idsFor('Cara')).value, [5]);
   } finally {
     await cell.close();
   }
@@ -315,15 +312,16 @@ test('listener landings append only real edge changes', async () => {
   const square = Square.inMemory({ markdown: '', clock: () => ++now });
   try {
     const caller = (await square.join('Caller', { owner: body })).participant;
-    const first = await caller.listen('aku/riko');
-    const repeated = await (await square.participant('caller', { owner: body })).listen('AKU/RIKO');
+    const first = await caller.attention({ target: 'aku/riko', state: 'listen' });
+    const repeated = await (await square.participant('caller', { owner: body })).attention({ target: 'AKU/RIKO', state: 'listen' });
     assert.equal(first.activity.kind, 'listen');
     assert.equal(first.activity.target, 'aku/riko');
     assert.equal(repeated.activity, null);
     assert.deepEqual((await caller.listening()).listening, ['aku/riko']);
 
-    const removed = await caller.ignore('aku/riko');
-    const absent = await caller.ignore('aku/riko');
+    const ignored = { target: 'aku/riko', state: 'ignore' };
+    const removed = await caller.attention(ignored);
+    const absent = await caller.attention(ignored);
     assert.equal(removed.activity.kind, 'ignore');
     assert.equal(absent.activity, null);
     assert.deepEqual((await square.history()).activities.map(activity => activity.kind), ['join', 'listen', 'ignore']);
@@ -362,58 +360,6 @@ test('admission refuses capped and throttled says', async () => {
   } finally {
     await capped.cell.close();
     await throttled.cell.close();
-  }
-});
-
-test('activity history after a timestamp excludes older public activity', async () => {
-  const { cell, square } = memorySquare({
-    acts: [
-      { kind: 'join', actor: 'Alice', at: 1000 },
-      { kind: 'join', actor: 'Bob', at: 2000 },
-      { kind: 'say', actor: 'Bob', at: 3000, body: 'hello @Alice', mentions: ['Alice'] },
-      { kind: 'done', actor: 'Bob', at: 4000, body: 'bye' },
-    ],
-  });
-  try {
-    const selected = (await cell.read((facts) => selectHistory(facts, { since: 3500 }, 10, undefined))).value.activities;
-    assert.deepEqual(selected.map((activity) => ({ index: activity.index, kind: activity.kind })), [{ index: 3, kind: 'done' }]);
-  } finally {
-    await cell.close();
-  }
-});
-
-test('activity history at indexes unions their context windows', async () => {
-  const { cell, square } = memorySquare({
-    acts: [
-      { kind: 'join', actor: 'Alice', at: 1 },
-      { kind: 'join', actor: 'Bob', at: 2 },
-      { kind: 'say', actor: 'Alice', at: 3, body: 'first @Bob', mentions: ['Bob'] },
-      { kind: 'say', actor: 'Bob', at: 4, body: 'second @Alice', mentions: ['Alice'] },
-    ],
-  });
-  try {
-    const selected = (await cell.read((facts) => selectHistory(facts, { at: ['act/2', 'act/3'], context: 0 }, null, undefined))).value.activities;
-    assert.deepEqual(selected.map((activity) => activity.index), [2, 3]);
-  } finally {
-    await cell.close();
-  }
-});
-
-test('activity history grep searches ids, participant names, and bodies', async () => {
-  const { cell, square } = memorySquare({
-    acts: [
-      { kind: 'join', actor: 'Alice', at: 1 },
-      { kind: 'join', actor: 'Bob', at: 2 },
-      { kind: 'say', actor: 'Alice', at: 3, body: 'first inventory @Bob', mentions: ['Bob'] },
-      { kind: 'say', actor: 'Bob', at: 4, body: 'facts only @Alice', mentions: ['Alice'] },
-    ],
-  });
-  try {
-    assert.deepEqual((await selectedHistory(square, { search: { text: '^act/2$', mode: 'regex' } })).map((item) => item.body), ['first inventory @Bob']);
-    assert.deepEqual((await selectedHistory(square, { search: { text: '^Bob$', mode: 'regex' } })).map((item) => item.body), ['facts only @Alice']);
-    assert.deepEqual((await selectedHistory(square, { search: { text: 'act/2|facts only', mode: 'regex' } })).map((item) => item.id), ['act/2', 'act/3']);
-  } finally {
-    await cell.close();
   }
 });
 

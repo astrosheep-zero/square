@@ -36,7 +36,7 @@ test('explicit exact ACK consumes existing and future notices only for its captu
   const c = await setup(t);
   const sent = await c.square.send(notice('turn/7', ['observer', 'other']));
   assert.match(sent.id, /^notice\//);
-  assert.equal((await c.square.history({ limit: null })).activities.some(activity => activity.actor === 'keiyaku-notice'), false);
+  assert.equal((await c.square.history()).activities.some(activity => activity.actor === 'keiyaku-notice'), false);
   assert.deepEqual(await c.observer.ack({ from: 'keiyaku-notice', match: match(), future: 'exact' }), { consumed: 1 });
   await c.square.send(notice());
   await c.square.send(notice('turn/8'));
