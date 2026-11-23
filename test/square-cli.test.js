@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Square, harnessOwner, localUserOwner } from '../dist/api/square-api.js';
 import { commandIdentity } from '../dist/cli/context.js';
-import { statusCommand, streamCommand } from '../dist/cli/observation-commands.js';
+import { streamCommand } from '../dist/cli/observation-commands.js';
 import { helpRequest, renderSubcommandHelp } from '../dist/cli/help.js';
 import { ROOT, persistSquare, run, tempSquare, testEnv, withName, withPath } from './square-cli-helpers.js';
 
@@ -52,10 +52,10 @@ test('status expands the latest body only when it is actually clipped', async ()
     const alice = (await square.join('Alice', { owner: body })).participant;
     await alice.express('the phrase more chars fits without clipping', { force: true });
   }, { hardCap: 10 });
-  const context = { command: 'status', squarePath: file, name: 'Alice', cwd: ROOT, homeDir: os.homedir(),
-    env: testEnv({ CODEX_THREAD_ID: path.resolve(file), SQUARE_NOW_MS: '10000' }, file) };
-  const intent = statusCommand.parse([], context);
-  const literal = await statusCommand.execute(intent, context);
+  const status = () => run(withName(file, 'Alice', ['status']), { env: { SQUARE_NOW_MS: '10000' } });
+  const first = status();
+  assert.equal(first.status, 0, first.stderr);
+  const literal = first.stdout;
   assert.match(literal, /more chars fits without clipping/);
   assert.doesNotMatch(literal, /more chars\n|history --at act\/\d+ -C 2 --full/);
 
@@ -66,7 +66,9 @@ test('status expands the latest body only when it is actually clipped', async ()
     await alice.express('x'.repeat(260), { force: true });
     latest = (await square.history()).activities.at(-1);
   } finally { await square.close(); }
-  const clipped = await statusCommand.execute(intent, context);
+  const after = status();
+  assert.equal(after.status, 0, after.stderr);
+  const clipped = after.stdout;
   assert.match(clipped, /… \d+ more chars/);
   assert.match(clipped, new RegExp(`history --at ${latest.id} -C 2 --full`));
 });
@@ -118,14 +120,14 @@ test('delivery doctor needs no square', () => {
 
 test('scoped help resolves aliases and refuses unknown commands', () => {
   assert.deepEqual(helpRequest(['perceive', '--help']), { command: 'perceive' });
-  assert.match(renderSubcommandHelp('perceive'), /--mention\s+Match direct attention/);
+  assert.match(renderSubcommandHelp('perceive'), /--mention\s+Only what was addressed to you/);
   assert.match(renderSubcommandHelp('ls'), /Aliases: list/);
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'square-help-'));
   try {
     const missing = path.join(cwd, 'missing.square');
     const scoped = run(['--as', 'Alice', '--location', missing, 'perceive', '-h'], { cwd });
     assert.equal(scoped.status, 0, scoped.stderr);
-    assert.match(scoped.stdout, /Usage: square \[--location <square>\] --as <name> perceive/);
+    assert.match(scoped.stdout, /Usage: square --location <square> \[--as <name>\] perceive/);
     const unknown = run(['help', 'missing-command'], { cwd });
     assert.equal(unknown.status, 2);
     assert.match(unknown.stderr, /unknown command: missing-command/);

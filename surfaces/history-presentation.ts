@@ -5,7 +5,7 @@ import { grepSnippet } from '../core/search.js';
 import { participantIdentity } from '../core/square-values.js';
 import { formatTimestamp } from '../core/time.js';
 import { style } from './tty-style.js';
-import { type PresentationSurface, commandPrefix, displayPath, formatToolAction, previewBodyFacts, quoteShell, renderEventCli, renderPresenceAnchor, withPathOutput } from './presentation.js';
+import { type PresentationSurface, spellAction, previewBodyFacts, quoteShell, renderEventCli, renderPresenceAnchor, withPathOutput } from './presentation.js';
 
 const GREP_PREVIEW_CHARS = 160;
 
@@ -50,9 +50,7 @@ export function renderGrepActivitiesView(
   }
 
   if (publicVisible.length === 1 || truncated) {
-    chunks.push(surface === 'tool'
-      ? formatToolAction('history', { location: displayPath(squarePath), at: [publicVisible[0].id], context: 2, ...(truncated ? { full: true } : {}) })
-      : `${commandPrefix(squarePath)} history --at ${publicVisible[0].id} -C 2${truncated ? ' --full' : ''}`);
+    chunks.push(spellAction({ operation: 'history', args: { location: squarePath, at: [publicVisible[0].id], context: 2, full: truncated || undefined } }, surface));
   }
   return chunks.join('\n\n');
 }
@@ -79,20 +77,16 @@ function renderHistoryProjection(
   if (chunks.length === 0) return '○ no activity matches this history query';
   if (preview !== undefined && shown.some((activity) => activity.kind === 'say' && (activity.body?.length ?? 0) > preview)) {
     const ids = shown.map((activity) => activity.id);
-    chunks.push(surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), at: ids, full: true }) : `${commandPrefix(squarePath)} history --at ${ids.join(',')} --full`);
+    chunks.push(spellAction({ operation: 'history', args: { location: squarePath, at: ids, full: true } }, surface));
   }
   if (anchored.length > 0) chunks.push(renderPresenceAnchor(anchored));
   return chunks.join('\n\n');
 }
 
-export function historyContinuationCommand(squarePath: string, args: readonly string[]): string {
-  return `${commandPrefix(squarePath)} history ${args.map((arg) => arg.startsWith('-') || /^act\/\d+$/.test(arg) || /^\d+$/.test(arg) ? arg : quoteShell(arg)).join(' ')}`;
-}
-
 export function renderHistoryResult(
   squarePath: string,
   data: HistoryResult,
-  options: { query?: HistoryQuery; full?: boolean; continuationArgs?: readonly string[]; surface?: PresentationSurface } = {},
+  options: { query?: HistoryQuery; full?: boolean; filters?: Record<string, unknown>; surface?: PresentationSurface } = {},
 ): string | undefined {
   const projection = data.observation;
   if (projection === undefined) return undefined;
@@ -104,7 +98,7 @@ export function renderHistoryResult(
     ? renderHistoryProjection(projection, shown, full, squarePath, options.surface ?? 'cli')
     : renderGrepActivitiesView(shown, projection.totalMatches, full, squarePath, search.text, search.mode === 'literal', options.surface);
   const next = projection.continuation;
-  const base = options.continuationArgs ?? [];
-  const continuation = next === undefined ? '' : `\n\n${options.surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), ...(query.from?.length ? { from: query.from } : {}), ...(query.since !== undefined ? { since: formatTimestamp(query.since) } : {}), ...(query.at?.length ? { at: query.at } : {}), ...(query.context !== undefined ? { context: query.context } : {}), ...(query.mention !== undefined ? { mention: query.mention } : {}), ...(query.search !== undefined ? { search: query.search.text, ...(query.search.mode === 'regex' ? { regex: true } : {}) } : {}), ...(query.order !== undefined ? { order: query.order } : {}), ...(full ? { full: true } : {}), [next.direction]: next.cursor, limit: next.limit }) : historyContinuationCommand(squarePath, [...base, `--${next.direction}`, next.cursor, '--limit', String(next.limit)])}`;
+  const continuation = next === undefined ? '' : `\n\n${spellAction({ operation: 'history',
+    args: { location: squarePath, ...options.filters, [next.direction]: next.cursor, limit: next.limit } }, options.surface)}`;
   return withPathOutput(squarePath, output + continuation, { participantCount: projection.standingCount });
 }

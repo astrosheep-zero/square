@@ -7,11 +7,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { Square } from '../dist/api/square-api.js';
-import { historyCommand } from '../dist/cli/observation-commands.js';
 import { renderFailureLines } from '../dist/surfaces/operation-presentation.js';
-import { formatToolAction } from '../dist/surfaces/presentation.js';
+import { spellAction } from '../dist/surfaces/presentation.js';
 import { createSquareMcpServer } from '../dist/surfaces/mcp.js';
-import { ROOT, testEnv } from './square-cli-helpers.js';
+import { run, testEnv, withName, withPath } from './square-cli-helpers.js';
 
 process.env.NO_COLOR = '1';
 const at = 1_000;
@@ -23,9 +22,6 @@ function tempDir(t) {
 }
 const bodyFor = (squarePath) => `codex:${encodeURIComponent(path.resolve(squarePath))}`;
 const envFor = (squarePath) => testEnv({ CODEX_THREAD_ID: path.resolve(squarePath), SQUARE_NOW_MS: String(at) }, squarePath);
-function commandContext(squarePath) {
-  return { command: 'history', cwd: ROOT, env: envFor(squarePath), squarePath, homeDir: os.homedir() };
-}
 
 async function buildSquare(t) {
   const squarePath = path.join(tempDir(t), 'parity.square');
@@ -44,7 +40,8 @@ async function openMcp(t, squarePath) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   t.after(async () => { await client.close().catch(() => undefined); await server.close(); });
-  return (name, args = {}) => client.callTool({ name, arguments: { location: squarePath, ...args } });
+  return (name, { location = squarePath, ...args } = {}) => client.callTool({ name,
+    arguments: location === null ? args : { location, ...args } });
 }
 
 test('history prints one CLI page through MCP text-only transport', async (t) => {
@@ -57,14 +54,63 @@ test('history prints one CLI page through MCP text-only transport', async (t) =>
     await rei.express('*waves*', { force: true, noMention: true });
     await (await square.participant('bob', { owner: body })).listen('rei');
   });
-  const context = commandContext(squarePath);
-  const expected = await historyCommand.execute(historyCommand.parse([], context), context);
+  const cli = run(withPath(squarePath, ['history']), { env: envFor(squarePath) });
+  assert.equal(cli.status, 0, cli.stderr);
   const response = await (await openMcp(t, squarePath))('history');
   assert.equal(response.isError, undefined, JSON.stringify(response));
   assert.equal(response.structuredContent, undefined);
   assert.equal(response.content.length, 1);
   assert.equal(response.content[0].type, 'text');
-  assert.equal(response.content[0].text, expected);
+  assert.equal(response.content[0].text, cli.stdout);
+});
+
+test('every participant command reaches its MCP operation and shares its validation refusal', async (t) => {
+  const cliSquare = await buildSquare(t);
+  const toolSquare = await buildSquare(t);
+  for (const file of [cliSquare, toolSquare]) await seed(file, (square, owner) => square.join('Bob', { owner }));
+  const call = await openMcp(t, toolSquare);
+  const cliRun = (args) => run(args, { cwd: path.dirname(cliSquare), env: envFor(cliSquare) });
+  for (const [name, argv, args] of [
+    ['join', ['join'], {}],
+    ['express', ['express', 'hello'], { body: 'hello' }],
+    ['perceive', ['perceive'], {}],
+    ['history', ['history'], {}],
+    ['attention', ['listen', 'Bob'], { action: 'listen', target: 'Bob' }],
+    ['attention', ['unlisten', 'Bob'], { action: 'unlisten', target: 'Bob' }],
+    ['attention', ['ignore', 'Bob'], { action: 'ignore', target: 'Bob' }],
+    ['status', ['status'], {}],
+    ['mute', ['mute', '1m'], { duration: '1m' }],
+    ['unmute', ['unmute'], {}],
+    ['done', ['done'], {}],
+    ['list', ['ls'], {}],
+  ]) {
+    const as = name === 'done' ? 'Bob' : ['history', 'list'].includes(name) ? undefined : 'Alice';
+    const cli = cliRun(name === 'list' ? argv : as ? withName(cliSquare, as, argv) : withPath(cliSquare, argv));
+    assert.equal(cli.status, 0, cli.stderr);
+    const tool = await call(name, { ...args, ...(as ? { as } : {}), ...(name === 'list' ? { location: null } : {}) });
+    assert.equal(tool.isError, undefined, tool.content[0].text);
+  }
+
+  const alice = (argv) => withName(cliSquare, 'Alice', argv);
+  for (const [name, argv, args] of [
+    ['list', ['ls', '--depth', '-1'], { depth: -1, location: null }],
+    ['join', alice(['join', '--last', '0']), { as: 'Alice', last: 0 }],
+    ['express', alice(['express', '--reply', 'not-an-id', 'hello']), { as: 'Alice', reply: 'not-an-id', body: 'hello' }],
+    ['perceive', alice(['perceive', '--takeover']), { as: 'Alice', takeover: true }],
+    ['history', withPath(cliSquare, ['history', '--order', 'sideways']), { order: 'sideways' }],
+    ['attention', alice(['listen', 'not a name']), { as: 'Alice', action: 'listen', target: 'not a name' }],
+    ['status', withName(cliSquare, 'bad/', ['status']), { as: 'bad/' }],
+    ['mute', alice(['mute', '0m']), { as: 'Alice', duration: '0m' }],
+    ['unmute', withName(cliSquare, 'bad//name', ['unmute']), { as: 'bad//name' }],
+    ['done', withName(cliSquare, '', ['done']), { as: '' }],
+  ]) {
+    const cli = cliRun(argv);
+    const tool = await call(name, args);
+    assert.equal(cli.status, 2, `${name}: ${cli.stdout}${cli.stderr}`);
+    assert.equal(tool.isError, true, `${name}: ${tool.content[0].text}`);
+    const refusal = tool.content[0].text;
+    assert.ok(cli.stderr.trim().split('\n').includes(refusal), `${name}: expected ${JSON.stringify(refusal)} in ${cli.stderr}`);
+  }
 });
 
 test('a missing seat reports a tool-shaped join action', async (t) => {
@@ -83,7 +129,7 @@ test('invalid reply recovery has CLI and tool actions for the same typed failure
   const reply = { code: 'invalid_args', message: 'bad', facts: { reason: 'invalid_reply', activityExists: false } };
   assert.deepEqual(renderFailureLines(reply, { squarePath, surface: 'tool', reply: 'act/8' }), [
     "Invalid reply: act/8 is not in this square's history",
-    formatToolAction('history', { location: squarePath, limit: 10 }),
+    spellAction({ operation: 'history', args: { location: squarePath, limit: 10 } }, 'tool'),
   ]);
   assert.deepEqual(renderFailureLines(reply, { squarePath, reply: 'act/8' }), [
     "Invalid --reply: act/8 is not in this square's history",

@@ -180,7 +180,7 @@ test('Pi list uses live owner and cwd, while single-square calls require locatio
   const { cwd, tools, context, call } = await fixture(t);
   const missing = await tools.get('square_express').execute('test', { body: 'no destination' }, undefined, undefined, context());
   assert.equal(missing.isError, true);
-  assert.match(missing.content[0].text, /Square needs a location/);
+  assert.equal(missing.content[0].text, 'location must be a string');
   await call('join', { as: 'rei' });
   await call('join', { as: 'bob' });
   await call('express', { as: 'bob', body: 'for rei', mentions: ['rei'], force: true });

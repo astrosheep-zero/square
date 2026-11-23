@@ -116,13 +116,14 @@ test('history search keeps a stable older continuation and recovers a bounded co
   }, { hardCap: 200 });
   t.after(() => fs.rmSync(path.dirname(boundsFile), { recursive: true, force: true }));
 
-  const refused = run(withPath(boundsFile, ['history', '--at', 'act/100', '-C', '100', '--json']));
+  const anchor = 'act/100';
+  const refused = run(withPath(boundsFile, ['history', '--at', anchor, '-C', '100']));
   assert.equal(refused.status, 2);
   assert.match(refused.stderr, /history is capped at 100 activities/);
-  assert.match(refused.stderr, /history --at act\/100 -C 100 --json --limit 100/);
-  const recovered = run(withPath(boundsFile, ['history', '--at', 'act/100', '-C', '100', '--json', '--limit', '100']));
+  assert.match(refused.stderr, /history --at act\/100 -C 100 --limit 100/);
+  const recovered = run(withPath(boundsFile, ['history', '--at', anchor, '-C', '100', '--limit', '100']));
   assert.equal(recovered.status, 0, recovered.stderr);
-  assert.equal(JSON.parse(recovered.stdout).activities.length, 100);
+  assert.ok(recovered.stdout.split(/\s+/).includes(anchor));
 });
 
 test('a historical body-bearing done stays in the archive without reaching perceive', async (t) => {
@@ -205,7 +206,7 @@ test('list orders depth and cursor paging, then reports a bounded uncertain walk
   assert.match(rendered, /square list --depth 4 --limit 1 --after 'a-left\.square'/);
 });
 
-test('history keeps a historical read out of public activities but not raw fields', async (t) => {
+test('history keeps a historical read out of public activities', async (t) => {
   const file = await persistSquare(async ({ square, body }) => {
     const alice = (await square.join('Alice', { owner: body })).participant;
     await alice.express('first public activity', { force: true });
@@ -223,10 +224,7 @@ test('history keeps a historical read out of public activities but not raw field
   });
   const id = formatActivityId(readIndex);
 
-  const json = run(withPath(file, ['history', '--at', id, '-C', '0', '--json']), { env: { SQUARE_NOW_MS: '5000' } });
-  assert.equal(json.status, 0, json.stderr);
-  assert.deepEqual(JSON.parse(json.stdout).activities, []);
-  const fields = run(withPath(file, ['history', '--at', id, '-C', '0', '--format', 'id,kind']), { env: { SQUARE_NOW_MS: '5000' } });
-  assert.equal(fields.status, 0, fields.stderr);
-  assert.equal(fields.stdout, `${id}\tread\n`);
+  const history = run(withPath(file, ['history', '--at', id, '-C', '0']), { env: { SQUARE_NOW_MS: '5000' } });
+  assert.equal(history.status, 0, history.stderr);
+  assert.match(history.stdout, /no activity matches this history query/);
 });

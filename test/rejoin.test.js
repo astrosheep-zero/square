@@ -50,8 +50,4 @@ test('history keeps departures and returns', async () => {
   const joins = history.stdout.match(/@Bob stepped into the square/g) ?? [];
   assert.equal(joins.length, 2, 'both the arrival and the return stay on the record');
 
-  const json = run(withPath(file, ['history', '--json']));
-  assert.equal(json.status, 0, json.stderr);
-  const kinds = JSON.parse(json.stdout).activities.map((activity) => activity.kind);
-  assert.deepEqual(kinds, ['join', 'join', 'done', 'join']);
 });

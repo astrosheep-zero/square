@@ -3,7 +3,7 @@ import { participantIdentity } from '../core/square-values.js';
 import { formatDuration } from '../core/time.js';
 import type { ParticipantSummary, PerceiveOptions, PerceiveResult } from '../api/types.js';
 import { style } from './tty-style.js';
-import { type PresentationSurface, participantAction, participantCommandPrefix, renderPresenceLines, renderAmbientEventFacts, displayPath, formatToolAction, withPathOutput } from './presentation.js';
+import { type PresentationSurface, spellAction, spellField, renderPresenceLines, renderAmbientEventFacts, withPathOutput } from './presentation.js';
 
 type WatchStatus = 'idle' | 'drained' | 'quorum' | 'capped';
 
@@ -26,20 +26,24 @@ interface WatchStatusOptions extends ParticipantOutputOptions {
   hardCap?: number | null;
 }
 
+function watchAction({ squarePath, name, owner, surface }: ParticipantOutputOptions, operation: 'done' | 'perceive', options: { wait?: string; takeover?: true } = {}): string {
+  return spellAction({ operation, owner, args: { location: squarePath, as: name, ...options } }, surface);
+}
+
 export function renderWatchAlreadyActive(opts: ParticipantOutputOptions): string {
   return [
     `${style('blocked', '✕')} you are already perceiving`,
     `  · an active perceive is already running for ${participantIdentity(opts.name)}`,
-    `  · ${opts.surface === 'tool' ? 'takeover' : '--takeover'} lets a new perceive take over`,
-    participantAction(opts.surface, opts.squarePath, opts.name, opts.owner, 'perceive', { wait: '30m', takeover: true }),
+    `  · ${spellField('perceive', 'takeover', opts.surface)} lets a new perceive take over`,
+    watchAction(opts, 'perceive', { wait: '30m', takeover: true }),
   ].join('\n');
 }
 
-export function renderWatchForceTakeover(_opts: ParticipantOutputOptions): string {
+export function renderWatchForceTakeover(): string {
   return '✓ your new perceive takes over';
 }
 
-export function renderWatchReplaceMissing(_opts: ParticipantOutputOptions): string {
+export function renderWatchReplaceMissing(): string {
   return '· no perceive stood here — yours takes the spot';
 }
 
@@ -59,7 +63,6 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
   switch (opts.status) {
     case 'idle':
     case 'drained': {
-      participantCommandPrefix(opts.squarePath, opts.name, opts.owner);
       // Quiet graduates with the idle length; an empty perceive has no idle budget to report.
       const idleMs = opts.idleMs;
       const quiet = idleMs !== undefined && idleMs >= 60 * 60 * 1000
@@ -68,7 +71,7 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
           ? style('dim', `○ dust settles on the flagstones — ${formatDuration(idleMs)} of quiet`)
           : style('dim', '○ only footsteps in the square — nothing new for you');
       // The quiet report never repeats the perceive just run.
-      const hints = [participantAction(opts.surface, opts.squarePath, opts.name, opts.owner, 'perceive', { wait: '30m' })];
+      const hints = [watchAction(opts, 'perceive', { wait: '30m' })];
       return [
         quiet,
         ...(opts.showPerceiveHint === false ? [] : hints),
@@ -76,22 +79,14 @@ export function renderWatchStatus(opts: WatchStatusOptions): string {
       ].join('\n');
     }
     case 'quorum':
-      return [`${style('release', '✓')} everyone else has left — the square is yours alone`, participantAction(opts.surface, opts.squarePath, opts.name, opts.owner, 'done')].join('\n');
+      return [`${style('release', '✓')} everyone else has left — the square is yours alone`, watchAction(opts, 'done')].join('\n');
     case 'capped': {
       const spoken = opts.hardCap === undefined || opts.hardCap === null
         ? ''
         : ` — ${opts.ownActivityCount ?? 0}/${opts.hardCap} spoken`;
-      return [`${style('blocked', '✕')} you’ve reached your speaking cap${spoken}`, participantAction(opts.surface, opts.squarePath, opts.name, opts.owner, 'done')].join('\n');
+      return [`${style('blocked', '✕')} you’ve reached your speaking cap${spoken}`, watchAction(opts, 'done')].join('\n');
     }
   }
-}
-
-function continuationCommand(squarePath: string, name: string, options: PerceiveOptions, owner?: string): string {
-  const args: string[] = [];
-  if (options.from?.length) args.push('--from', options.from.join(','));
-  if (options.mention) args.push('--mention');
-  if (options.limit !== undefined) args.push('--limit', String(options.limit));
-  return [participantCommandPrefix(squarePath, name, owner), 'perceive', ...args].join(' ');
 }
 
 /** Render settled perceive facts; no selection, terminal decisions, receipts or wait machinery. */
@@ -121,13 +116,14 @@ export function renderPerceiveOutcome(
     now: projection.now, perception: activity.perception, mention: options.mention ? name : undefined,
   }).text).filter(Boolean).join('\n\n');
   const remaining = data.remaining === 0 ? ''
-    : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${surface === 'tool' ? formatToolAction('perceive', { location: displayPath(location), as: name, ...(options.from?.length ? { from: options.from } : {}), ...(options.mention ? { mention: true } : {}), ...(options.limit !== undefined ? { limit: options.limit } : {}) }) : continuationCommand(location, name, options, owner)}`;
+    : `· ${data.remaining} matching ${data.remaining === 1 ? 'activity remains' : 'activities remain'}\n${spellAction({ operation: 'perceive', owner,
+      args: { location, as: name, from: options.from?.length ? options.from : undefined, mention: options.mention || undefined, limit: options.limit } }, surface)}`;
   const terminal = stop === undefined ? '' : renderWatchStatus({
     ...statusOptions, status: stop,
     ...(stop === 'idle' && options.wait !== undefined ? { idleMs: options.wait } : {}),
   });
   const fallback = stop === undefined && !projection.deliveryAvailable && data.remaining === 0
-    ? `${participantAction(surface, location, name, owner, 'perceive', { wait: '30m' })}\n  stay available for new activity` : '';
+    ? `${watchAction(statusOptions, 'perceive', { wait: '30m' })}\n  stay available for new activity` : '';
   const hint = data.hint === undefined ? '' : style('dim', `· ${data.hint}`);
   return withPathOutput(location, [terminal, rendered, hint, remaining, fallback].filter(Boolean).join('\n\n'), header);
 }

@@ -104,11 +104,11 @@ test('MCP tools validate JSON arguments and return only CLI text', async () => {
     }
     const missingLocation = await client.callTool({ name: 'express', arguments: { body: 'no location' } });
     assert.equal(missingLocation.isError, true);
-    assert.match(missingLocation.content[0].text, /expected string.*at location/);
+    assert.equal(missingLocation.content[0].text, 'location must be a string');
     for (const [name, field] of [['perceive', 'limit'], ['history', 'limit'], ['history', 'context']]) {
       const result = await client.callTool({ name, arguments: { location: squarePath, [field]: 101 } });
       assert.equal(result.isError, true);
-      assert.match(result.content[0].text, new RegExp(`<=100 at ${field}`));
+      assert.equal(result.content[0].text, `${field} must be at most 100`);
     }
     const invalid = await client.callTool({ name: 'express', arguments: { location: squarePath, body: 7 } });
     assert.equal(invalid.isError, true);
@@ -187,7 +187,7 @@ test('one MCP server accepts per-call participants without a configured default'
     }
     const missing = await client.callTool({ name: 'join', arguments: { location: squarePath } });
     assert.equal(missing.isError, true);
-    assert.match(missing.content[0].text, /expected string.*at as/);
+    assert.equal(missing.content[0].text, 'as must be a string');
     for (const as of ['alice', 'bob']) {
       const joined = await client.callTool({ name: 'join', arguments: { location: squarePath, as } });
       assert.equal(joined.isError, undefined);

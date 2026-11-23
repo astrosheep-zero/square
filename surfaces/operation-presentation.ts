@@ -8,12 +8,14 @@ import type {
   StatusResult, DiscoveryResult, MuteResult,
 } from '../api/types.js';
 import {
-  type PresentationSurface, displayPath, formatToolAction, commandPrefix, participantAction,
-  quoteShell, renderAmbientEventFacts,
+  type PresentationSurface, spellAction, spellField, renderAmbientEventFacts,
   renderUnreadSummary, withPathOutput,
 } from './presentation.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from '../core/time.js';
 import { style } from './tty-style.js';
+import type { ListenerVerb, OperationBinding } from './operations.js';
+import { renderHistoryResult } from './history-presentation.js';
+import { renderPerceiveOutcome, renderWatchForceTakeover, renderWatchReplaceMissing } from './perceive-presentation.js';
 
 function listDisplay(value: string): string {
   const truncated = truncateChars(value, 159);
@@ -52,7 +54,7 @@ export function renderSquareList(data: DiscoveryResult, projection: { now: numbe
   }
   if (remaining > 0) {
     lines.push(style('dim', stopped ? '  … more squares' : `  … ${remaining} more ${remaining === 1 ? 'square' : 'squares'}`));
-    if (next !== undefined) lines.push(projection.surface === 'tool' ? formatToolAction('list', { depth: projection.depth, limit: projection.limit, after: next }) : `square list --depth ${projection.depth} --limit ${projection.limit} --after ${quoteShell(next)}`);
+    if (next !== undefined) lines.push(spellAction({ operation: 'list', args: { depth: projection.depth, limit: projection.limit, after: next } }, projection.surface));
   }
   if (stopped) lines.push(style('dim', '○ the walk stopped early — deeper squares may still be hiding'));
   return lines.join('\n') + '\n';
@@ -70,7 +72,7 @@ export function renderJoinResult(data: JoinResult, owner?: string, surface: Pres
     now: after.now, preview: 200, perception: event.perception,
   }).text).filter(Boolean).join('\n\n');
   const fallback = after.deliveryAvailable ? ['', '· when someone calls you, you’ll hear them here'] : [
-    '', participantAction(surface, after.location, name, owner, 'perceive', { wait: '30m' }),
+    '', spellAction({ operation: 'perceive', owner, args: { location: after.location, as: name, wait: '30m' } }, surface),
     '  · stay within earshot — keep this perceive open for new activity',
   ];
   const entryLine = data.kind === 'joined' ? '● you stepped into the square'
@@ -102,7 +104,7 @@ export function renderExpression(squarePath: string, data: ExpressResult, owner?
     'Unread context · preview only, not consumed',
     ...context.activities.map(item => `· ${participantIdentity(item.actor)} · ${item.id}\n  ${item.preview}${item.truncated ? '… (truncated)' : ''}`),
     ...(context.remaining === 0 ? [] : [`· ${context.remaining} more unread activities`]),
-    participantAction(surface, projection.location, name, owner, 'perceive'),
+    spellAction({ operation: 'perceive', owner, args: { location: projection.location, as: name } }, surface),
   ].join('\n');
   const ownCount = projection.ownActivityCount;
   const capCount = projection.hardCap === null ? '' : ` · ${ownCount}/${projection.hardCap}`;
@@ -178,7 +180,7 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
   }
   if (presentation.joinCount > 3) latest.push(style('dim', `  → … ${presentation.joinCount - 3} more stepped in`));
   if (visible.bodyClipped && data.latestActivity !== undefined) {
-    latest.push(options.surface === 'tool' ? formatToolAction('history', { location: displayPath(squarePath), at: [data.latestActivity.id], context: 2, full: true }) : `${commandPrefix(squarePath)} history --at ${data.latestActivity.id} -C 2 --full`);
+    latest.push(spellAction({ operation: 'history', args: { location: squarePath, at: [data.latestActivity.id], context: 2, full: true } }, options.surface));
   }
   const counts = [
     `${orderedHere.length} here`,
@@ -199,8 +201,6 @@ export function renderStatusResult(squarePath: string, data: StatusResult, optio
   ].join('\n');
   return withPathOutput(squarePath, output, { participantCount: presentation.standingCount });
 }
-
-export type ListenerVerb = 'listen' | 'ignore' | 'unlisten';
 
 export function renderListenerChange(squarePath: string, verb: ListenerVerb, data: ListenerChangeResult): string | undefined {
   const projection = data.observation;
@@ -273,7 +273,7 @@ function expressGateLines(failure: FailureReport, options: FailureOptions): stri
       : ['✕ the square is packed — shoulder to shoulder', `  · a lull opens in ${formatDuration(facts?.retryAfterMs ?? 1)}`];
   const lines = [...scene, ...(options.draftPath === undefined ? [] : [style('dim', `· draft kept: ${options.draftPath}`)])];
   if (squarePath === undefined || name === undefined) return lines;
-  const action = (verb: 'perceive' | 'done') => participantAction(options.surface, squarePath, name, owner, verb);
+  const action = (operation: 'perceive' | 'done') => spellAction({ operation, owner, args: { location: squarePath, as: name } }, options.surface);
   if (failure.code === 'behind') lines.push(...(tool ? ['Take it in, then express again:', action('perceive')] : [action('perceive'), '  · take it in, then retry:']));
   if (failure.code === 'capped') lines.push('  · your words stay unsent; done only steps out', action('done'));
   if (failure.code !== 'capped' && options.retry !== undefined) lines.push(options.retry);
@@ -290,30 +290,41 @@ export function renderFailureLines(failure: FailureReport, options: FailureOptio
   const marked = reason === 'never_joined' || reason === 'not_standing'
     || (failure.operation?.operation === 'perceive' && reason === 'not_addressed');
   const lines = marked ? failure.message.split('\n').map((line) => `✕ ${line}`) : [failure.message];
+  const { surface } = options;
+  const join = (takeover?: true) => spellAction({ operation: 'join', owner, args: { location: squarePath, as: name, takeover } }, surface);
+  const status = () => spellAction({ operation: 'status', args: { location: squarePath } }, surface);
+  const history = (at?: string) => spellAction({ operation: 'history', args: { location: squarePath,
+    ...(at === undefined ? { limit: 10 } : { at: [at], context: 2 }) } }, surface);
   if (reason === 'invalid_reply') {
-    lines[0] = `Invalid ${options.surface === 'tool' ? 'reply' : '--reply'}: ${facts?.activityExists === false ? `${facts.activityId ?? options.reply ?? 'that activity'} is not in this square's history` : 'expected an activity id like act/12'}`;
-    if (squarePath !== undefined) lines.push(options.surface === 'tool'
-      ? formatToolAction('history', { location: displayPath(squarePath), limit: 10 })
-      : `${commandPrefix(squarePath)} history --limit 10`);
+    lines[0] = `Invalid ${spellField('express', 'reply', surface)}: ${facts?.activityExists === false ? `${facts.activityId ?? options.reply ?? 'that activity'} is not in this square's history` : 'expected an activity id like act/12'}`;
+    if (squarePath !== undefined) lines.push(history());
   } else if (reason === 'needs_seat' && squarePath !== undefined && name !== undefined) {
     lines.splice(0, 1, `✕ ${failure.message}`);
-    lines.push(participantAction(options.surface, squarePath, name, owner, 'join'));
+    lines.push(join());
   } else if (squarePath !== undefined && name !== undefined && failure.code === 'already_joined') {
     lines.splice(0, 1, `✕ ${participantIdentity(name)} shoos you out of the square`,
       `  · ${participantIdentity(name)} already stands here — another session holds the name`);
-    lines.push(`If this is your name to reclaim, ${options.surface === 'tool' ? 'takeover' : '--takeover'} banishes the one standing here so you can step in:`, participantAction(options.surface, squarePath, name, owner, 'join', { takeover: true }));
+    lines.push(`If this is your name to reclaim, ${spellField('join', 'takeover', surface)} banishes the one standing here so you can step in:`, join(true));
   } else if (squarePath !== undefined && name !== undefined && (failure.code === 'unknown_participant' || failure.code === 'not_joined') && reason !== 'not_standing') {
-    lines.push(participantAction(options.surface, squarePath, name, owner, 'join'));
+    lines.push(join());
   } else if (squarePath !== undefined && reason === 'never_joined') {
-    lines.push(options.surface === 'tool' ? (failure.operation?.subject !== 'filter' && name !== undefined ? formatToolAction('join', { location: displayPath(squarePath), as: name }) : formatToolAction('status', { location: displayPath(squarePath) })) : failure.operation?.subject !== 'filter' && name !== undefined
-      ? participantAction(options.surface, squarePath, name, owner, 'join') : `${commandPrefix(squarePath)} status`);
+    lines.push(failure.operation?.subject !== 'filter' && name !== undefined ? join() : status());
   } else if (squarePath !== undefined && reason === 'not_standing') {
-    lines.push(options.surface === 'tool' ? formatToolAction('status', { location: displayPath(squarePath) }) : `${commandPrefix(squarePath)} status`);
+    lines.push(status());
   } else if (squarePath !== undefined && reason === 'not_addressed' && facts?.activityId !== undefined) {
-    lines.push(options.surface === 'tool' ? (facts.activityExists === true ? formatToolAction('history', { location: displayPath(squarePath), at: [facts.activityId], context: 2 }) : formatToolAction('history', { location: displayPath(squarePath), limit: 10 })) : facts.activityExists === true
-      ? `${commandPrefix(squarePath)} history --at ${facts.activityId} -C 2`
-      : `${commandPrefix(squarePath)} history --limit 10`);
+    lines.push(history(facts.activityExists === true ? facts.activityId : undefined));
   }
-  if (reason === 'invalid_done_body' && options.surface !== 'tool') lines.push('square done --help');
+  if (reason === 'invalid_done_body') {
+    const help = spellAction({ operation: 'done', help: true }, surface);
+    if (help !== '') lines.push(help);
+  }
   return lines;
 }
+
+export const operationText: OperationBinding['text'] = {
+  list: renderSquareList, join: renderJoinResult, express: renderExpression, perceive: renderPerceiveOutcome,
+  history: renderHistoryResult, attention: renderListenerChange, done: renderLifecycleResult, status: renderStatusResult,
+  mute: renderMuteResult, action: spellAction, field: spellField,
+  perceiveProgress: replaced => replaced ? renderWatchForceTakeover() : renderWatchReplaceMissing(),
+  perceiveStopped: location => withPathOutput(location, '○ you step back — perceive stopped'),
+};

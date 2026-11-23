@@ -152,7 +152,7 @@ test('mute and unmute are standalone optional-location tools with the configured
   const refusedClient = await connect(createSquareMcpServer({ cwd: root, env: { ...env, SQUARE_DELIVERY: missing }, owner: 'test:owner', clock }));
   const refused = await refusedClient.callTool({ name: 'mute', arguments: { as: 'Alice', duration: '1m' } });
   assert.equal(refused.isError, true);
-  assert.match(refused.content[0].text, /ledger-wide mute does not accept as/);
+  assert.equal(refused.content[0].text, 'as needs a square location for mute');
   assert.equal(fs.existsSync(missing), false);
 });
 

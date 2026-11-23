@@ -1,4 +1,6 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod/v4';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SQUARE_TOOLS, SQUARE_TOOL_INSTRUCTIONS, runSquareTool, squareToolsEnabled } from './square-tools.js';
 import { codexWakeAddress } from '../hosts/codex-address.js';
@@ -17,7 +19,7 @@ export interface SquareMcpOptions extends Omit<SquareAtInput, 'path'> {
   /** Only a launcher-bound, single-actor stdio server can supply this. */
   readonly dedicatedActor?: AkumaActor;
 }
-export type SquareMcpServer = McpServer;
+export type SquareMcpServer = Server;
 
 export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServer {
   const { owner: configuredOwner, wakeAddress, dedicatedActor, ...resourceOptions } = options;
@@ -25,12 +27,17 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
   const clock = resourceOptions.clock ?? Date.now;
   const ledgerLocation = resourceOptions.ledgerLocation ?? deliveryLedgerLocation(baseEnv);
   const toolsEnabled = squareToolsEnabled(baseEnv);
-  const server = new McpServer({ name: 'square', version: SQUARE_IDENTITY.packageVersion }, {
-    ...(toolsEnabled ? { instructions: SQUARE_TOOL_INSTRUCTIONS } : {}),
-  });
-  if (toolsEnabled) for (const tool of SQUARE_TOOLS) {
-    server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputSchema }, (args, extra) => {
-      return runSquareTool(tool, args, { signal: extra.signal }, async () => {
+  const server = new Server({ name: 'square', version: SQUARE_IDENTITY.packageVersion }, toolsEnabled
+    ? { instructions: SQUARE_TOOL_INSTRUCTIONS, capabilities: { tools: { listChanged: true } } } : {});
+  if (!toolsEnabled) return server;
+  // The high-level SDK handler would validate before Square can render the same refusal as the CLI.
+  const tools = SQUARE_TOOLS.map(({ name, description, inputSchema }) => ({ name, description,
+    inputSchema: { ...z.toJSONSchema(inputSchema, { target: 'draft-7', io: 'input' }), type: 'object' as const } }));
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra) => {
+    const tool = SQUARE_TOOLS.find(tool => tool.name === params.name);
+    if (tool === undefined) return { isError: true, content: [{ type: 'text' as const, text: `Tool ${params.name} not found` }] };
+    return runSquareTool(tool, params.arguments ?? {}, { signal: extra.signal }, async () => {
         const threadId = extra._meta?.threadId;
         const opencodeSessionId = extra._meta?.['ai.opencode/sessionID'];
         // Claude's bundled mod requires a per-call native association; startup identity is not a fallback.
@@ -56,8 +63,7 @@ export function createSquareMcpServer(options: SquareMcpOptions): SquareMcpServe
       }).then(({ text, isError }) => ({
         ...(isError ? { isError } : {}), content: [{ type: 'text' as const, text }],
       }));
-    });
-  }
+  });
   return server;
 }
 

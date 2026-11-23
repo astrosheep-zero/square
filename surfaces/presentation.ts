@@ -7,12 +7,50 @@ import { MAX_IDENTITY_SET_SIZE, type Perception } from '../core/square-core.js';
 import { formatRelativeTime } from '../core/time.js';
 import type { Activity, UnreadActivitySummary, ParticipantSummary } from '../api/types.js';
 import { style } from './tty-style.js';
+import { CLI_OPERATIONS, fieldFlag, type PresentationSurface, type Suggestion } from './operations.js';
 
-export type PresentationSurface = 'cli' | 'tool';
+export type { PresentationSurface } from './operations.js';
 
-export function formatToolAction(tool: string, args: Readonly<Record<string, unknown>> = {}): string {
-  const clean = Object.fromEntries(Object.entries(args).filter(([, value]) => value !== undefined));
-  return Object.keys(clean).length === 0 ? tool : `${tool} ${JSON.stringify(clean)}`;
+export function spellField(operation: string, field: string, surface: PresentationSurface = 'cli'): string {
+  return surface === 'tool' ? field
+    : CLI_OPERATIONS.find(cli => cli.operation.name === operation)?.fields.find(option => option.key === field)?.flag ?? fieldFlag(field);
+}
+
+export function spellAction({ operation, args, owner, help }: Suggestion, surface: PresentationSurface = 'cli'): string {
+  const { location, as, ...options } = args ?? {};
+  if (surface === 'tool') {
+    if (help) return ''; // Tools expose their help in the schema, not as an invocation.
+    const clean = { location: typeof location === 'string' ? displayPath(location) : undefined, as, ...options };
+    return Object.values(clean).every(value => value === undefined) ? operation : `${operation} ${JSON.stringify(clean)}`;
+  }
+  const cli = CLI_OPERATIONS.find(cli => (cli.operation.name === operation || cli.names.includes(operation))
+    && Object.entries(cli.fixed ?? {}).every(([key, value]) => options[key] === value));
+  const prefix = ['square'];
+  if (typeof location === 'string') {
+    const resolve = as !== undefined && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(location);
+    prefix.push(fieldFlag('location'), quoteShell(resolve ? path.resolve(location) : location));
+  }
+  if (typeof as === 'string') prefix.push(fieldFlag('as'), quoteShell(as));
+  if (owner !== undefined) prefix.push('--owner', quoteShell(owner));
+  const flags: string[] = help ? ['--help'] : [];
+  const positional: string[] = [];
+  for (const [key, value] of Object.entries(options)) {
+    if (value === undefined || value === false || Object.hasOwn(cli?.fixed ?? {}, key)) continue;
+    const field = cli?.fields.find(option => option.key === key);
+    const flag = (field?.preferShort ? field.short : field?.flag) ?? fieldFlag(key);
+    if (value === true) { flags.push(flag); continue; }
+    const values = Array.isArray(value) && field?.repeat ? value : [value];
+    for (const entry of values) {
+      const text = String(entry);
+      const quoted = typeof entry === 'number' || text === '-' || /^(act\/\d+|\d+)$/.test(text)
+        || field?.bare && /^[\p{L}\p{M}\p{N}_.,/@-]+$/u.test(text) ? text : quoteShell(text);
+      const looksLikeFlag = text.startsWith('--') || text === '-h' || cli?.fields.some(option => text === option.short);
+      if (field?.positional) positional.push(...looksLikeFlag ? ['--', quoted] : [quoted]);
+      else flags.push(...looksLikeFlag ? [`${flag}=${quoted}`] : [flag, quoted]);
+    }
+  }
+  const command = cli === undefined || cli.names.includes(operation) ? operation : cli.name;
+  return [...prefix, command, ...flags, ...positional].join(' ');
 }
 
 interface HeaderOptions {
@@ -56,20 +94,6 @@ export function formatRefusal(
 
 export function quoteShell(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-export function commandPrefix(squarePath: string): string {
-  return `square --location ${quoteShell(squarePath)}`;
-}
-
-export function participantCommandPrefix(squarePath: string, name: string, owner?: string): string {
-  return `square --location ${quoteShell(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(squarePath) ? squarePath : path.resolve(squarePath))} --as ${quoteShell(name)}${owner === undefined ? '' : ` --owner ${quoteShell(owner)}`}`;
-}
-
-export function participantAction(surface: PresentationSurface | undefined, squarePath: string, name: string, owner: string | undefined, verb: 'perceive' | 'done' | 'join', options: { wait?: '30m'; takeover?: true } = {}): string {
-  return surface === 'tool'
-    ? formatToolAction(verb, { location: displayPath(squarePath), as: name, ...options })
-    : `${participantCommandPrefix(squarePath, name, owner)} ${verb}${options.wait === undefined ? '' : ` --wait ${options.wait}`}${options.takeover ? ' --takeover' : ''}`;
 }
 
 function formatAge(ms: number | undefined): string {

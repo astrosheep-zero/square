@@ -4,16 +4,13 @@ import { style } from '../surfaces/tty-style.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { isSquareError } from '../core/model.js';
-import { selectOwnSeat, type Square, formatActivityId, parseActivityId } from '../api/square-api.js';
-import type { Owner } from '../api/square-api.js';
-import type { ActivityId, OperationError, OperationControl, ExpressOptions } from '../api/types.js';
-import {
-  formatRefusal,
-  participantCommandPrefix, commandPrefix, quoteShell, withPathOutput,
-} from '../surfaces/presentation.js';
+import { isSquareError, SquareError } from '../core/model.js';
+import { selectOwnSeat, type Square } from '../api/square-api.js';
+import type { ActivityId, OperationError, OperationControl, ExpressOptions, Owner } from '../api/types.js';
+import { formatRefusal, spellAction, quoteShell, withPathOutput } from '../surfaces/presentation.js';
 import { isExpressGate, renderExpression, renderFailureLines } from '../surfaces/operation-presentation.js';
-import { jsonResult } from './json.js';
+import { sendExpression, type ExpressFromCli } from '../surfaces/operations.js';
+import { readStdin } from './context.js';
 
 export interface ActivityOptions extends Omit<ExpressOptions, 'reply'> {
   readonly recoveryOwner?: Owner;
@@ -36,23 +33,20 @@ export function saveActivityDraft(squarePath: string, name: string, body: string
   }
 }
 
-function replyArgument(reply: string | undefined): string {
-  if (reply === undefined) return '';
-  const index = parseActivityId(reply);
-  return ` --reply ${index === undefined ? quoteShell(reply) : formatActivityId(index)}`;
+export function activityRetryCommand(squarePath: string, name: string, opts: ActivityOptions): string {
+  return spellAction({ operation: 'express', owner: opts.recoveryOwner, args: { location: squarePath, as: name,
+    force: opts.force, noWait: opts.noWait, mentions: opts.mentions, noMention: opts.noMention, metadata: opts.metadataJson,
+    reply: opts.reply, body: opts.bodyProvided === false ? undefined : '-' } });
 }
 
-/** Retry choices are transport syntax, never a second admission decision. */
-export function activityRetryCommand(squarePath: string, name: string, opts: ActivityOptions, force = opts.force ?? false): string {
-  const reach = (opts.mentions ?? []).map((target) => ` --mention ${quoteShell(target)}`).join('')
-    + (opts.noMention === true ? ' --no-mention' : '');
-  const metadata = opts.metadataJson === undefined ? '' : ` --metadata ${quoteShell(opts.metadataJson)}`;
-  const body = opts.bodyProvided === false ? '' : ' -';
-  return `${participantCommandPrefix(squarePath, name, opts.recoveryOwner)} express${force ? ' --force' : ''}${opts.noWait ? ' --no-wait' : ''}${reach}${metadata}${replyArgument(opts.reply)}${body}`;
-}
+export const expressFromCli: ExpressFromCli = async (open, { location, as, body, metadata, ...options }, identity, recoveryOwner, invalidReply) =>
+  executeExpression(open, location!, as, body === '-' ? await readStdin() : body, {
+    ...options, metadata: metadata === undefined ? undefined : JSON.parse(metadata), metadataJson: metadata,
+    bodyProvided: body !== undefined, recoveryOwner,
+  }, () => identity().owner, invalidReply);
 
-/** Body adaptation, terminal IO and drafts only; Participant owns every attempt and wait. */
-export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string | undefined, opts: ActivityOptions, json = false, resolveOwner?: Owner | (() => Owner)): Promise<void> {
+/** Terminal IO and drafts only; Participant owns every attempt and wait. */
+export async function executeExpression(open: (control?: OperationControl) => Promise<Square>, squarePath: string, requestedName: string | undefined, rawInput: string | undefined, opts: ActivityOptions, resolveOwner: () => Owner | undefined, invalidReply?: string): Promise<string> {
   let owner: Owner | undefined;
   let square: Square | undefined;
   let attempted = false;
@@ -63,26 +57,26 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
   const interrupt = () => controller.abort();
   process.once('SIGINT', interrupt);
   try {
-    owner = typeof resolveOwner === 'function' ? resolveOwner() : resolveOwner;
+    owner = resolveOwner();
+    if (invalidReply !== undefined) throw new SquareError('invalid_args', invalidReply, { reason: 'invalid_reply', activityUnsent: true });
     square = await open({ signal: controller.signal });
     const participant = await selectOwnSeat(square, owner, requestedName);
     name = participant.name;
     attempted = true;
-    const { metadataJson: _metadataJson, bodyProvided: _bodyProvided, recoveryOwner: _owner, ...expressOptions } = opts;
-    const outcome = await participant.express(rawInput === undefined ? undefined : rawInput.replace(/\r\n/g, '\n').trim(), {
-      ...expressOptions, reply: opts.reply as ActivityId | undefined, ...(json ? {} : { observe: true }),
+    const { metadataJson: _metadataJson, bodyProvided: _bodyProvided, recoveryOwner: _owner, reply, ...expressOptions } = opts;
+    const outcome = await sendExpression(participant, rawInput?.replace(/\r\n/g, '\n').trim(), {
+      ...expressOptions, reply: reply as ActivityId | undefined,
     }, {
       signal: controller.signal,
       onProgress(progress) {
         if (progress.kind !== 'waiting' || announcedWait === progress.reason) return;
-        (json ? process.stderr : process.stdout).write(renderExpressWaiting(progress) + '\n');
+        process.stdout.write(renderExpressWaiting(progress) + '\n');
         announcedWait = progress.reason;
       },
     });
     landedId = outcome.activity.id;
-    if (!json) name = outcome.observation!.participant;
-    const rendered = json ? jsonResult(outcome) : renderExpression(squarePath, outcome, opts.recoveryOwner);
-    if (rendered !== undefined) process.stdout.write(rendered);
+    name = outcome.observation?.participant ?? name;
+    return renderExpression(squarePath, outcome, opts.recoveryOwner) ?? '';
   } catch (error) {
     const detail = (error as OperationError | undefined)?.operation;
     name = detail?.participant ?? name ?? 'participant';
@@ -103,12 +97,12 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
       process.stderr.write(renderActivityUncertain({ ...output, landedId: landedId ?? detail?.landedId,
         detail: error instanceof Error ? error.message : String(error) }));
       exitCode(1);
-      return;
+      return '';
     }
     if (isSquareError(error) && isExpressGate(error.code)) {
-      process.stdout.write(withPathOutput(squarePath, renderFailureLines({ code: error.code, message: error.message, facts: error.facts },
-        { squarePath, name, owner: opts.recoveryOwner, draftPath, retry: retryInput }).join('\n'), output));
-      exitCode(1); return;
+      exitCode(1);
+      return withPathOutput(squarePath, renderFailureLines(error,
+        { squarePath, name, owner: opts.recoveryOwner, draftPath, retry: retryInput }).join('\n'), output);
     }
     const facts = isSquareError(error) ? error.facts : undefined;
     const reason = facts?.reason;
@@ -118,12 +112,13 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     lines.splice(headlineLines, 0, `· draft kept: ${draftPath}`);
     if (reason === 'needs_seat') {
       process.stderr.write(formatRefusal(squarePath, lines, output));
-      exitCode(2); return;
+      exitCode(2); return '';
     }
     if (isSquareError(error) && (error.code === 'invalid_args' || error.code === 'invalid_name')) {
-      if (opts.mentions?.length) lines.push(`${commandPrefix(squarePath)} status`);
-      if (opts.reply !== undefined && reason !== 'invalid_reply') lines.push(`${commandPrefix(squarePath)} history --limit 10`);
+      if (opts.mentions?.length) lines.push(spellAction({ operation: 'status', args: { location: squarePath } }));
+      if (opts.reply !== undefined && reason !== 'invalid_reply') lines.push(spellAction({ operation: 'history', args: { location: squarePath, limit: 10 } }));
     }
+    if (invalidReply !== undefined) lines.unshift(invalidReply);
     if (reason === 'invalid_reply') {
       const withoutReply = { ...opts, reply: undefined };
       lines.push(
@@ -138,6 +133,7 @@ export async function executeExpression(open: (control?: OperationControl) => Pr
     }
     process.stderr.write(formatRefusal(squarePath, lines, output));
     exitCode(2);
+    return '';
   } finally { process.off('SIGINT', interrupt); await square?.close(); }
 }
 
@@ -150,7 +146,8 @@ export function renderActivityUncertain(opts: { squarePath: string; name: string
     ...(opts.detail === undefined ? [] : [`  · ${truncateExternalDiagnostic(opts.detail)}`]),
     style('dim', `· draft kept: ${opts.draftPath}`),
     '  · the draft is a saved copy; sending it again could repeat your activity',
-    `${commandPrefix(opts.squarePath)} history${opts.landedId === undefined ? ' --limit 10' : ` --at ${opts.landedId}`} --full`,
+    spellAction({ operation: 'history', args: { location: opts.squarePath,
+      ...(opts.landedId === undefined ? { limit: 10 } : { at: [opts.landedId] }), full: true } }),
   ], opts);
 }
 

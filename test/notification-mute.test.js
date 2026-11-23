@@ -304,7 +304,7 @@ test('status, participants and discovery expose active deadlines without creatin
   assert.equal(fs.existsSync(absent), false);
 });
 
-test('CLI mute and unmute cover local and ledger-wide modes with JSON and no-location refusal', async (t) => {
+test('CLI mute and unmute cover local and ledger-wide modes and no-location refusal', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'square-mute-cli-'));
   const file = path.join(root, 'CLI.square');
   const ledger = path.join(root, 'delivery.sqlite');
@@ -315,14 +315,6 @@ test('CLI mute and unmute cover local and ledger-wide modes with JSON and no-loc
   const joined = run(withName(file, 'Alice', ['join']), { cwd: root, env });
   assert.equal(joined.status, 0, joined.stdout + joined.stderr);
 
-  const moved = run(['mute', '30m', '--json'], { cwd: root, env });
-  assert.equal(moved.status, 0, moved.stderr);
-  assert.deepEqual(JSON.parse(moved.stdout), { mutedUntil: 5_000 + 30 * 60_000 });
-  const local = run(withName(file, 'Alice', ['mute', '1m', '--json']), { cwd: root, env });
-  assert.equal(local.status, 0, local.stderr);
-  assert.deepEqual(JSON.parse(local.stdout), { mutedUntil: 5_000 + 60_000 });
-  assert.match(run(withName(file, 'Alice', ['status']), { cwd: root, env }).stdout, /muted until/);
-
   const localText = run(withName(file, 'Alice', ['mute', '2m']), { cwd: root, env });
   assert.equal(localText.status, 0, localText.stderr);
   assert.match(localText.stdout, /@Alice steps back from notifications until/);
@@ -330,22 +322,23 @@ test('CLI mute and unmute cover local and ledger-wide modes with JSON and no-loc
   assert.equal(globalText.status, 0, globalText.stderr);
   assert.match(globalText.stdout, /notifications pause until/);
 
-  const unmutedLocal = run(withName(file, 'Alice', ['unmute', '--json']), { cwd: root, env });
+  assert.match(run(withName(file, 'Alice', ['status']), { cwd: root, env }).stdout, /muted until/);
+  const unmutedLocal = run(withName(file, 'Alice', ['unmute']), { cwd: root, env });
   assert.equal(unmutedLocal.status, 0, unmutedLocal.stderr);
-  assert.deepEqual(JSON.parse(unmutedLocal.stdout), { mutedUntil: null });
-  const unmutedGlobal = run(['unmute', '--json'], { cwd: root, env });
+  assert.match(unmutedLocal.stdout, /@Alice ends their notification hold/);
+  const unmutedGlobal = run(['unmute'], { cwd: root, env });
   assert.equal(unmutedGlobal.status, 0, unmutedGlobal.stderr);
-  assert.deepEqual(JSON.parse(unmutedGlobal.stdout), { mutedUntil: null });
+  assert.match(unmutedGlobal.stdout, /the notification hold ends/);
 
   const missing = path.join(root, 'missing.sqlite');
   const refused = run(['--as', 'Alice', 'mute', '1m'], { cwd: root, env: { SQUARE_DELIVERY: missing, SQUARE_NOW_MS: '5000' } });
   assert.equal(refused.status, 2);
-  assert.match(refused.stderr, /needs a square location/);
+  assert.match(refused.stderr, /as needs a square location/);
   assert.equal(fs.existsSync(missing), false);
   const help = run(['mute', '--help'], { cwd: root });
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /Step back from notifications for a while\. Whatever reaches you stays waiting for perceive\./);
-  assert.match(help.stdout, /Without --location, pauses automatic notifications for the entire ledger\./);
+  assert.match(help.stdout, /Omit to mute the entire ledger\./);
 });
 
 test('invalid global mutes refuse before creating a ledger', async (t) => {

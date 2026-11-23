@@ -4,7 +4,7 @@ import { akumaActorFromEnvironment, harnessSessionSources, resolveParticipantIde
 import { codexWakeAddress } from '../hosts/codex-address.js';
 
 import { commandUsageHint } from './help.js';
-import { SquareError, type HardCap, type WakeAddress, parseParticipantList, validateName } from '../core/model.js';
+import { SquareError, type HardCap, type WakeAddress, validateName } from '../core/model.js';
 import { Square } from '../api/square-api.js';
 import type { OperationControl } from '../api/types.js';
 
@@ -24,7 +24,6 @@ export interface CommandContext {
   owner?: Owner;
   homeDir: string;
   command: string;
-  json?: boolean;
 }
 
 export interface CommandSpec<Intent = unknown, Result = void> {
@@ -43,10 +42,6 @@ export async function readStdin(): Promise<string> {
   }
 }
 
-export async function resolveBody(arg: string): Promise<string> {
-  return arg === '-' ? readStdin() : arg;
-}
-
 export function fail(message: string, exitCode = 2): never {
   process.stderr.write(`${message}\n`);
   process.exit(exitCode);
@@ -63,8 +58,6 @@ export function requireValue(args: string[], index: number, flag: string): strin
   if (value === undefined || value.startsWith('--')) fail(`✕ missing value for ${flag}`);
   return value;
 }
-
-export { parseDurationMs } from '../core/time.js';
 
 export function parsePositiveInteger(value: string, flag: string): number {
   if (!/^[1-9]\d*$/.test(value)) fail(`✕ invalid ${flag}: expected a positive integer`);
@@ -97,33 +90,10 @@ export function parseHardCap(value: string): HardCap {
   return parsed;
 }
 
-export function parseNameList(value: string, flag: string): string[] {
-  const names = parseParticipantList(value);
-  if (names.length === 0) fail(`✕ invalid ${flag}: expected at least one participant name`);
-  for (const name of names) validateName(name);
-  return names;
-}
-
-const LOCATION_REQUIRED_COMMANDS = new Set([
-  'build',
-  'stream',
-  'join',
-  'perceive',
-  'express',
-  'listen',
-  'ignore',
-  'unlisten',
-  'done',
-  'history',
-  'status',
-  'doctor',
-  'migrate',
-]);
+const LOCATION_REQUIRED_COMMANDS = new Set(['build', 'stream', 'doctor', 'migrate']);
 
 export interface ParsedGlobalArgs {
   squarePath?: string;
-  explicitSquarePath: boolean;
-  multipleSquares: boolean;
   name?: string;
   owner?: Owner;
   args: string[];
@@ -135,6 +105,7 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
   let name: string | undefined;
   let owner: Owner | undefined;
   for (let index = 0; index < args.length; index++) {
+    if (args[index] === '--') break;
     if (args[index] === '--location') {
       requestedPath = requireValue(args, index, args[index]);
       args.splice(index, 2);
@@ -151,18 +122,8 @@ export async function parseGlobalArgs(rawArgs: string[]): Promise<ParsedGlobalAr
   }
   const command = args[0];
   if (name !== undefined) validateName(name);
-  const explicitSquarePath = requestedPath !== undefined;
-  if (requestedPath === undefined && name !== undefined && (command === 'mute' || command === 'unmute')) {
-    fail(`✕ ${command} with --as needs a square location\nsquare --location <square> --as ${name} ${command}${command === 'mute' ? ' <duration>' : ''}`);
-  }
-  if (command !== undefined && !['--help', '-h'].includes(command) && locationIsRequired(command) && requestedPath === undefined) {
-    fail(`✕ ${command} needs a square location\nsquare ls`);
-  }
-  return { squarePath: requestedPath, explicitSquarePath, multipleSquares: false, name, owner, args };
-}
-
-export function locationIsRequired(command: string): boolean {
-  return LOCATION_REQUIRED_COMMANDS.has(command);
+  if (LOCATION_REQUIRED_COMMANDS.has(command) && requestedPath === undefined) fail(`✕ ${command} needs a square location\nsquare ls`);
+  return { squarePath: requestedPath, name, owner, args };
 }
 
 export function defaultContext(command: string, squarePath?: string, name?: string): CommandContext {
@@ -200,8 +161,6 @@ export async function withSquare<T>(context: CommandContext, run: (square: Squar
 }
 
 export function commandClock(context: CommandContext): () => number { return squareClock(context.env); }
-
-export function now(context: CommandContext): number { return squareClock(context.env)(); }
 
 export function requireSquarePath(context: CommandContext): string {
   if (context.squarePath === undefined) fail(`✕ ${context.command} needs a square location\nsquare ls`);

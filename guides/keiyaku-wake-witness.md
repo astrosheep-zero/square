@@ -169,10 +169,10 @@ A CLI join executed in place of a native tool call does not count.
 
    ```sh
    node "$sq" --location "$file" --as witness-sender express --force --mention "$seat" \
-     "directed-$seat-$nonce" --json
+     "directed-$seat-$nonce"
    ```
 
-   Keep the exact `act/N`. Only that full AkuId gains exactly one new Tell for the coordinate,
+   Keep the exact `act/N` shown in the confirmation. Only that full AkuId gains exactly one new Tell for the coordinate,
    with no nonce body in the Tell itself. Check the focused transport test for the absence of a
    recipient initiator (native public history shows Tell text and delivery, not initiator). The
    successor turn has a different Body sequence and PID from the original. Neither a manual Tell

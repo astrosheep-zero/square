@@ -18,7 +18,8 @@ export const helpCommand: CommandSpec<{ command?: string }, string> = {
 };
 
 export const versionCommand: CommandSpec<undefined, string> = {
-  parse() {
+  parse(argv) {
+    if (argv.length > 0) fail(`✕ version does not know ${argv[0]}\nsquare version --help`);
     return undefined;
   },
   execute() {

@@ -26,29 +26,18 @@ test('inbox is a bounded, ordered snapshot without notification internals', asyn
   const names = ['Alpha', `BRAVO${'z'.repeat(180)}`, 'Charlie'];
   const files = [];
   for (const name of names) files.push(await makeMembership(root, name));
-  const complete = await inbox({ cwd: root }, 'codex:inbox-snapshot');
-  assert.equal(complete.total, names.length * 2);
-  assert.equal(complete.rows.find(row => row.name === names[1])?.pending, 1);
-
-  const result = run(['inbox', '--for-owner', 'codex:inbox-snapshot', '--json'], { env, cwd: root });
-  assert.equal(result.status, 0, result.stderr);
-  const snapshot = JSON.parse(result.stdout);
-  assert.deepEqual(snapshot, await inbox({ cwd: root }, 'codex:inbox-snapshot'));
+  const snapshot = await inbox({ cwd: root }, 'codex:inbox-snapshot');
   assert.equal(snapshot.total, names.length * 2);
-  assert.equal(snapshot.rows.length, names.length * 2);
-  for (const row of snapshot.rows) assert.deepEqual(Object.keys(row).sort(), ['name', 'pending', 'squarePath']);
-  assert.equal(snapshot.rows.some(row => row.name === names[1] && row.squarePath === fs.realpathSync(files[1])), true);
-  assert.doesNotMatch(result.stdout, /notification body|notifications|perceiveLease|route|actIndex/);
+  assert.equal(snapshot.rows.find(row => row.name === names[1] && row.squarePath === fs.realpathSync(files[1]))?.pending, 1);
 
   const text = run(['inbox', '--for-owner', 'codex:inbox-snapshot'], { env, cwd: root });
   assert.equal(text.status, 0, text.stderr);
   const preview = value => [...value].length <= 159 ? value : `${[...value].slice(0, 159).join('').trimEnd()}…`;
   assert.equal(text.stdout, snapshot.rows.map((row) => `${preview(row.name)}\t${preview(row.squarePath)}\t${row.pending}\n`).join(''));
 
-  const overMaximum = run(['inbox', '--limit', '101', '--for-owner', 'codex:inbox-snapshot', '--json'], { env });
+  const overMaximum = run(['inbox', '--limit', '101', '--for-owner', 'codex:inbox-snapshot'], { env });
   assert.equal(overMaximum.status, 2);
-  assert.match(overMaximum.stderr, /✕ --limit is capped at 100/);
-  assert.equal(overMaximum.stderr, "✕ --limit is capped at 100\nsquare inbox --for-owner 'codex:inbox-snapshot' --limit 100 --json\n");
+  assert.equal(overMaximum.stderr, "✕ --limit is capped at 100\nsquare inbox --for-owner 'codex:inbox-snapshot' --limit 100\n");
 
   const duplicateLimit = run(['inbox', '--for-owner', 'codex:inbox-snapshot', '--limit', '2', '--limit', '3'], { env });
   assert.equal(duplicateLimit.status, 2);

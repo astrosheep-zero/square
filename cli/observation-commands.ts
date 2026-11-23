@@ -1,6 +1,3 @@
-import { historyContinuationCommand, renderHistoryResult } from '../surfaces/history-presentation.js';
-import { renderPerceiveOutcome } from '../surfaces/perceive-presentation.js';
-import { renderWatchForceTakeover, renderWatchReplaceMissing } from '../surfaces/perceive-presentation.js';
 import path from 'node:path';
 import { once } from 'node:events';
 import { runClaudeMod } from '../hosts/claude-mod.js';
@@ -8,83 +5,10 @@ import { runCodexHook, runCodexInterrupt } from '../hosts/codex-hook.js';
 import { runCodexWatch } from '../hosts/codex-watch.js';
 import { isSquareError } from '../core/model.js';
 import { truncateChars } from '../core/neutral.js';
-import type { ActivityId, OperationError, ArchiveRecord, PerceiveOptions, DiscoveryOptions, HistoryQuery, StreamStart } from '../api/types.js';
-import {
-  commandPrefix,
-  withPathOutput,
-  quoteShell,
-} from '../surfaces/presentation.js';
-import {
-  renderStatusResult,
-  renderSquareList,
-} from '../surfaces/operation-presentation.js';
-import { formatTimestamp, parseTimeOrRelative } from '../core/time.js';
-import { deliveryLedgerLocation, discover, inbox, formatActivityId, parseActivityId, PERCEIVE_DEFAULT_LIMIT, PERCEIVE_MAX_LIMIT, HISTORY_MAX_LIMIT, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT } from '../api/square-api.js';
-import { selectOwnSeat } from '../api/square-api.js';
-import { jsonResult } from './json.js';
-
-import {
-  type CommandContext,
-  type CommandSpec,
-  withSquare, squareInput, now, commandClock,
-  fail,
-  parseBoundedLimit,
-  parseDurationMs,
-  parseNameList,
-  parseNonNegativeInteger,
-  readStdin,
-  requireSquarePath,
-  requireValue,
-  usage,
-  commandIdentity,
-} from './context.js';
-const INBOX_DEFAULT_LIMIT = 20;
-const INBOX_MAX_LIMIT = 100;
-const INBOX_DISPLAY_CHARS = 160;
-
-function inboxDisplay(value: string): string {
-  const truncated = truncateChars(value, INBOX_DISPLAY_CHARS - 1);
-  return truncated.remaining === 0 ? truncated.text : `${truncated.text}…`;
-}
-
-interface HistoryCommandOptions {
-  query: HistoryQuery;
-  full: boolean;
-  format?: string[];
-  continuationArgs: string[];
-}
-
-export const listCommand: CommandSpec<DiscoveryOptions, string> = {
-  parse(argv, context) {
-    let depth = DEFAULT_LIST_DEPTH;
-    let limit = DEFAULT_LIST_LIMIT;
-    let after: string | undefined;
-    for (let index = 0; index < argv.length; index += 2) {
-      const flag = argv[index], value = argv[index + 1];
-      if (value === undefined || !['--depth', '--limit', '--after'].includes(flag)) usage(context.command);
-      if (flag === '--after') {
-        if (after !== undefined || value.length === 0 || path.isAbsolute(value)) usage(context.command);
-        after = value;
-      } else {
-        if (!/^\d+$/.test(value)) usage(context.command);
-        const number = Number(value);
-        if (!Number.isSafeInteger(number) || (flag === '--depth' ? number > MAX_LIST_DEPTH : number === 0 || number > MAX_LIST_LIMIT)) usage(context.command);
-        if (flag === '--depth') depth = number;
-        else limit = number;
-      }
-    }
-    return { depth, limit, after };
-  },
-  async execute(intent, context) {
-    let owner;
-    try { owner = commandIdentity(context.env, context.owner).owner; }
-    catch { /* Discovery stays available without a complete harness identity. */ }
-    const result = await discover(squareInput(context), { ...intent, owner,
-      ledgerLocation: deliveryLedgerLocation(context.env, context.homeDir), clock: commandClock(context) });
-    return renderSquareList(result, { now: now(context), depth: intent.depth ?? DEFAULT_LIST_DEPTH, limit: intent.limit ?? DEFAULT_LIST_LIMIT });
-  },
-  present: (result) => process.stdout.write(result),
-};
+import type { ActivityId, StreamStart } from '../api/types.js';
+import { quoteShell, spellAction } from '../surfaces/presentation.js';
+import { inbox, formatActivityId, parseActivityId } from '../api/square-api.js';
+import { type CommandSpec, withSquare, squareInput, fail, parseBoundedLimit, parseNonNegativeInteger, readStdin, requireSquarePath, requireValue, usage } from './context.js';
 
 interface StreamIntent { ndjson: boolean; forName?: string; start: StreamStart; }
 
@@ -108,7 +32,9 @@ export const streamCommand: CommandSpec<StreamIntent> = {
         index += 1;
       } else if (argv[index] === '--after') {
         if (hasLast) fail('Invalid stream options: --last and --after cannot be combined.');
-        after = formatActivityId(parseActRef(requireValue(argv, index, argv[index]), '--after'));
+        const cursor = parseActivityId(requireValue(argv, index, argv[index]));
+        if (cursor === undefined) fail('Invalid --after: expected an activity id like act/12');
+        after = formatActivityId(cursor);
         index += 1;
       } else usage(context.command);
     }
@@ -142,235 +68,14 @@ export const streamCommand: CommandSpec<StreamIntent> = {
   present: () => {},
 };
 
-export const perceiveCommand: CommandSpec<PerceiveOptions> = {
-  parse(argv, context) {
-    let wait: number | undefined;
-    let mention: boolean | undefined;
-    let limit: number | undefined;
-    let id: ActivityId | undefined;
-    let takeover = false;
-    const participants: string[] = [];
-    for (let index = 0; index < argv.length; index++) {
-      if (argv[index] === '--id') {
-        if (id !== undefined) fail('✕ perceive accepts one --id\nsquare perceive --help');
-        const value = requireValue(argv, index, '--id');
-        if (parseActivityId(value) === undefined) fail('✕ invalid --id: expected an activity id like act/12\nsquare perceive --help');
-        id = value as ActivityId;
-        index += 1;
-      } else if (argv[index] === '--from') {
-        participants.push(...parseNameList(requireValue(argv, index, argv[index]), argv[index]));
-        index += 1;
-      } else if (argv[index] === '--wait') {
-        wait = parseDurationMs(requireValue(argv, index, argv[index]), argv[index]);
-        index += 1;
-      } else if (argv[index] === '--mention') {
-        mention = true;
-      } else if (argv[index] === '--limit') {
-        limit = parseBoundedLimit(argv[index + 1], '--limit', PERCEIVE_MAX_LIMIT, `${commandPrefix(requireSquarePath(context))} perceive --limit ${PERCEIVE_MAX_LIMIT}`);
-        index += 1;
-      } else if (argv[index] === '--takeover') takeover = true;
-      else if (argv[index] !== '--json') fail(`✕ perceive does not know ${argv[index]}\nsquare perceive --help`);
-    }
-    if (id !== undefined) {
-      if (argv.some((flag) => ['--wait', '--from', '--mention', '--limit', '--takeover'].includes(flag))) {
-        fail('✕ --id cannot be combined with --wait, --from, --mention, --limit or --takeover\nsquare perceive --help');
-      }
-      return { id };
-    }
-    if (takeover && wait === undefined) fail('--takeover can only be used with --wait.');
-    return {
-      ...(participants.length > 0 ? { from: participants } : {}),
-      ...(mention === undefined ? {} : { mention }),
-      limit: limit ?? PERCEIVE_DEFAULT_LIMIT,
-      ...(wait === undefined ? {} : { wait }),
-      ...(takeover ? { takeover } : {}),
-    };
-  },
-  async execute(intent, context) {
-    const squarePath = requireSquarePath(context);
-    const controller = new AbortController();
-    const interrupt = () => controller.abort();
-    process.once('SIGINT', interrupt);
-    try {
-      const outcome = await withSquare(context, async (square) => (await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name)).perceive({ ...intent, ...(context.json ? {} : { observe: true }) }, {
-        signal: controller.signal,
-        onProgress(progress) {
-          if (progress.kind !== 'perceive-started' || !progress.replacementRequested) return;
-          const options = { squarePath, name: progress.participant };
-          process.stderr.write((progress.replaced ? renderWatchForceTakeover(options) : renderWatchReplaceMissing(options)) + '\n');
-        },
-      }), { signal: controller.signal });
-      const exitCode = outcome.reason === 'already-active' || outcome.reason === 'capped' ? 1 : 0;
-      if (context.json) process.stdout.write(jsonResult(outcome));
-      else process.stdout.write(renderPerceiveOutcome(squarePath, outcome, intent, context.owner ?? context.env.SQUARE_OWNER));
-      process.exitCode = exitCode;
-    } catch (error) {
-      if (!controller.signal.aborted) throw error;
-      process.stdout.write(withPathOutput(squarePath, '○ you step back — perceive stopped'));
-      process.exitCode = 130;
-    } finally { process.off('SIGINT', interrupt); }
-  },
-  present: () => {},
-};
+const INBOX_DEFAULT_LIMIT = 20;
+const INBOX_MAX_LIMIT = 100;
+const INBOX_DISPLAY_CHARS = 160;
 
-function parseActRef(value: string, flag: string): number {
-  const index = parseActivityId(value);
-  if (index === undefined) fail(`Invalid ${flag}: expected an activity id like act/12`);
-  return index;
+function inboxDisplay(value: string): string {
+  const truncated = truncateChars(value, INBOX_DISPLAY_CHARS - 1);
+  return truncated.remaining === 0 ? truncated.text : `${truncated.text}…`;
 }
-
-function parseTimestamp(value: string, flag: string, now: number): number {
-  const timestamp = parseTimeOrRelative(value, now);
-  if (!Number.isFinite(timestamp)) fail(`Invalid ${flag} timestamp: ${value}`);
-  return timestamp;
-}
-
-function historyContinuationArgs(argv: string[]): string[] {
-  const result: string[] = [];
-  for (let index = 0; index < argv.length; index++) {
-    const flag = argv[index];
-    if (flag === '--limit' || flag === '--before' || flag === '--after') { index += 1; continue; }
-    result.push(flag);
-    if (flag === '--from' || flag === '--since' || flag === '--at' || flag === '-C' || flag === '--mention' || flag === '--search' || flag === '--order' || flag === '--format') {
-      const value = argv[index + 1];
-      if (value !== undefined) { result.push(value); index += 1; }
-    }
-  }
-  return result;
-}
-
-function parseHistory(argv: string[], context: CommandContext): HistoryCommandOptions {
-  const squarePath = requireSquarePath(context);
-  let limit: number | undefined;
-  let since: number | undefined;
-  let after: ActivityId | undefined;
-  let before: ActivityId | undefined;
-  const at: ActivityId[] = [];
-  let historyContext: number | undefined;
-  let mention: string | undefined;
-  let full = false;
-  let search: string | undefined;
-  let regex = false;
-  let order: 'asc' | 'desc' | undefined;
-  let format: string[] | undefined;
-  const participants: string[] = [];
-  for (let index = 0; index < argv.length; index++) {
-    const flag = argv[index];
-    if (flag === '--limit') {
-      limit = parseBoundedLimit(
-        argv[index + 1],
-        '--limit',
-        HISTORY_MAX_LIMIT,
-        `${commandPrefix(squarePath)} history --limit ${HISTORY_MAX_LIMIT}`,
-      );
-      index += 1;
-    } else if (flag === '--from') {
-      participants.push(...parseNameList(requireValue(argv, index, flag), flag));
-      index += 1;
-    } else if (flag === '--since') {
-      since = parseTimestamp(requireValue(argv, index, flag), flag, now(context));
-      index += 1;
-    } else if (flag === '--after') {
-      after = formatActivityId(parseActRef(requireValue(argv, index, flag), flag));
-      index += 1;
-    } else if (flag === '--before') {
-      before = formatActivityId(parseActRef(requireValue(argv, index, flag), flag));
-      index += 1;
-    } else if (flag === '--at') {
-      const values = requireValue(argv, index, flag).split(',');
-      if (values.some((value) => value === '')) fail(`Invalid ${flag}: expected an activity id like act/12`);
-      at.push(...values.map((value) => formatActivityId(parseActRef(value, flag))));
-      index += 1;
-    } else if (flag === '-C') {
-      historyContext = parseNonNegativeInteger(requireValue(argv, index, flag), flag);
-      index += 1;
-    } else if (flag === '--full') full = true;
-    else if (flag === '--mention') {
-      mention = requireValue(argv, index, flag);
-      index += 1;
-    }
-    else if (flag === '--regex') regex = true;
-    else if (flag === '--search') {
-      search = requireValue(argv, index, flag);
-      index += 1;
-    } else if (flag === '--order') {
-      const value = requireValue(argv, index, flag);
-      if (value !== 'asc' && value !== 'desc') fail('Invalid --order: expected asc or desc.');
-      order = value;
-      index += 1;
-    } else if (flag === '--format') {
-      format = requireValue(argv, index, flag).split(',').map((item) => item.trim()).filter(Boolean);
-      index += 1;
-    } else if (flag !== '--json') fail(`✕ history does not know ${flag}\nsquare history --help`);
-  }
-  if (search === '') fail('--search requires non-empty text.');
-  if (before !== undefined && after !== undefined) fail('--before and --after cannot be combined.');
-  return {
-    query: { limit, from: participants.length === 0 ? undefined : participants, since,
-      cursor: after !== undefined ? { id: after, direction: 'after' } : before === undefined ? undefined : { id: before, direction: 'before' },
-      at: at.length === 0 ? undefined : at,
-      context: historyContext, mention, order,
-      search: search === undefined ? undefined : { text: search, mode: regex ? 'regex' : 'literal' } },
-    full, format,
-    continuationArgs: historyContinuationArgs(argv),
-  };
-}
-
-function renderFields(sayNumbers: Readonly<Record<number, number>>, item: ArchiveRecord, fields: string[]): string {
-  return fields.map((field) => {
-    switch (field) {
-      case 'id': return formatActivityId(item.index);
-      case 'author':
-      case 'actor': return item.actor ?? '';
-      case 'ts':
-      case 'at': return formatTimestamp(item.at);
-      case 'kind': return item.kind;
-      case 'body': return 'body' in item && typeof item.body === 'string' ? item.body.replace(/\s+/g, ' ').trim() : '';
-      case 'number': return item.kind === 'say' ? String(sayNumbers[item.index]) : '';
-      case 'reply': return item.kind === 'say' && item.reply !== undefined ? formatActivityId(item.reply) : '';
-      default: return '';
-    }
-  }).join('\t');
-}
-
-export const historyCommand: CommandSpec<HistoryCommandOptions, string> = {
-  parse(argv, context) { return parseHistory(argv, context); },
-  async execute(options, context) {
-    const squarePath = requireSquarePath(context);
-    let outcome;
-    try { outcome = await withSquare(context, (square) => square.history({ ...options.query, ...(context.json ? {} : { observe: true }) })); }
-    catch (error) {
-      const bounds = (error as OperationError | null)?.operation?.historyBounds;
-      if (bounds !== undefined) fail(`✕ history is capped at ${bounds.maxLimit} activities\n${historyContinuationCommand(squarePath, [...options.continuationArgs, '--limit', String(bounds.maxLimit)])}`);
-      throw error;
-    }
-    if (context.json) return jsonResult(outcome);
-    const projection = outcome.observation!;
-    const events = projection.activities;
-    if (options.format !== undefined && options.format.length > 0) {
-      return events.map((item) => renderFields(projection.sayNumbers, item, options.format!)).join('\n') + (events.length > 0 ? '\n' : '');
-    }
-    return renderHistoryResult(squarePath, outcome, {
-      query: options.query,
-      full: options.full,
-      continuationArgs: options.continuationArgs,
-    })!;
-  },
-  present: (result) => process.stdout.write(result),
-};
-
-export const statusCommand: CommandSpec<undefined, string> = {
-  parse(argv, context) { if (argv.some((arg) => arg !== '--json')) usage(context.command); return undefined; },
-  async execute(_intent, context) {
-    const squarePath = requireSquarePath(context);
-    const result = await withSquare(context, async (square) => {
-      const viewer = (await selectOwnSeat(square, commandIdentity(context.env, context.owner).owner, context.name, { optional: true }))?.name;
-      return square.status({ viewer, ...(context.json ? {} : { observe: true }) });
-    });
-    return context.json ? jsonResult(result) : renderStatusResult(squarePath, result)!;
-  },
-  present: (result) => process.stdout.write(result),
-};
 
 interface InboxIntent { owner: string; limit: number; }
 export const inboxCommand: CommandSpec<InboxIntent, string> = {
@@ -381,7 +86,6 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
     let duplicateLimit = false;
     for (let index = 0; index < argv.length; index++) {
       if (argv[index] === '--for-owner') { owner = requireValue(argv, index, argv[index]); index += 1; }
-      else if (argv[index] === '--json') continue;
       else if (argv[index] === '--limit') {
         if (hasLimit) duplicateLimit = true;
         hasLimit = true;
@@ -391,16 +95,13 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
       else usage(context.command);
     }
     if (!owner) fail('inbox requires --for-owner <owner>.');
-    const retry = `square inbox --for-owner ${quoteShell(owner)} --limit ${INBOX_MAX_LIMIT}${context.json ? ' --json' : ''}`;
+    const retry = spellAction({ operation: 'inbox', args: { forOwner: owner, limit: INBOX_MAX_LIMIT } });
     if (duplicateLimit) fail(`✕ inbox accepts one --limit\n${retry}`);
-    const limit = hasLimit
-      ? parseBoundedLimit(limitValue, '--limit', INBOX_MAX_LIMIT, retry)
-      : INBOX_DEFAULT_LIMIT;
+    const limit = hasLimit ? parseBoundedLimit(limitValue, '--limit', INBOX_MAX_LIMIT, retry) : INBOX_DEFAULT_LIMIT;
     return { owner, limit };
   },
   async execute(intent, context) {
     const data = await inbox(squareInput(context), intent.owner, { limit: intent.limit });
-    if (context.json) return jsonResult(data);
     return [
       ...data.rows.map((row) => `${inboxDisplay(row.name)}\t${inboxDisplay(row.squarePath)}\t${row.pending}\n`),
       ...(data.rows.length < data.total ? [`${data.rows.length} of ${data.total} memberships shown\n`] : []),
@@ -409,19 +110,15 @@ export const inboxCommand: CommandSpec<InboxIntent, string> = {
   present: (result) => process.stdout.write(result),
 };
 
-function hookCommand(runHook: (input: string) => Promise<void>): CommandSpec<undefined, void> {
+function hookCommand(runHook: (input: string) => Promise<unknown>): CommandSpec<undefined, void> {
   return {
     parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
-    execute: async () => runHook(await readStdin()),
+    async execute() { await runHook(await readStdin()); },
     present: () => {},
   };
 }
 
-export const claudeModCommand: CommandSpec<undefined, string> = {
-  parse(argv, context) { if (argv.length > 0) usage(context.command); return undefined; },
-  execute: async () => runClaudeMod(await readStdin(), process.env),
-  present: () => {},
-};
+export const claudeModCommand = hookCommand(input => runClaudeMod(input, process.env));
 export const codexHookCommand = hookCommand(input => runCodexHook(input, process.env, text => new Promise<void>((resolve, reject) => {
   process.stdout.write(text, error => error ? reject(error) : resolve());
 })));

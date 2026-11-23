@@ -208,7 +208,7 @@ test('a failed observation clock cannot prevent raw draft saving or landed recon
         draftAtRecovery = fs.readFileSync(path.join(root, 'drafts', drafts[0]), 'utf8');
         throw clockFailure;
       },
-    }), file, 'Alice', raw, { noMention: true }, false, "test" + ":" + ('draft-clock'));
+    }), file, 'Alice', raw, { noMention: true }, () => 'test:draft-clock');
     assert.equal(process.exitCode, 1);
     assert.equal(draftAtRecovery, raw);
     assert.equal(fs.readFileSync(draftPathFrom(output), 'utf8'), raw);

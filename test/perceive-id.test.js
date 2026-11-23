@@ -79,7 +79,7 @@ test('CLI exact perceive rejects conflicts, explains a miss, and reads the full 
   const { bob, first, second, bare, body } = await setup(t, file);
   const conflict = run(withName(file, 'Bob', ['perceive', '--id', second.id, '--wait', '1s']));
   assert.equal(conflict.status, 2, conflict.stdout + conflict.stderr);
-  assert.match(conflict.stderr, /--id cannot be combined/);
+  assert.match(conflict.stderr, /id cannot be combined with wait/);
   assert.ok(!conflict.stdout.includes(body));
 
   const undirected = run(withName(file, 'Bob', ['perceive', '--id', bare.id]));
