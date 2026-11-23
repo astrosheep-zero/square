@@ -8,7 +8,7 @@ import { nameKey, type Seat } from '../core/model.js';
 import { listPresentation } from '../core/observations.js';
 import { DEFAULT_LIST_DEPTH, DEFAULT_LIST_LIMIT } from '../core/square-core.js';
 import { canonicalPath } from '../storage/canonical-path.js';
-import { parseOperation, type DiscoveryOptions } from '../surfaces/operations.js';
+import { parseOperation, type DiscoveryOptions } from '../core/operation-inputs.js';
 import { readLedgerMutedUntil, readSquareSeatMutes, seatMuteKey } from './square-notification-mute.js';
 
 export interface SquareListItem {

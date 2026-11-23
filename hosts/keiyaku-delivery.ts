@@ -5,7 +5,7 @@ import type { DeliveryCard, DeliveryTransport, DeliveryTransportContext, Transpo
 import { akumaDeliveryOwner, requireAkumaActor } from '../core/owner.js';
 import { formatActivityId } from '../core/square-core.js';
 import { parseSquarePostKey } from '../core/delivery-key.js';
-import { spellAction } from '../surfaces/operations.js';
+import { toolInvocation } from '../core/operation-inputs.js';
 
 interface AkumaTarget {
   readonly id: string;
@@ -46,11 +46,11 @@ export class KeiyakuWakeTransport implements DeliveryTransport {
     const location = card.key[1];
     const post = location && path.isAbsolute(location) ? parseSquarePostKey(location, card.key) : undefined;
     if (post?.kind !== 'activity') return 'not-capable';
-    const args = { location, ids: [formatActivityId(post.index)] };
+    const ids = [formatActivityId(post.index)];
     const prompt = ['A Square mention reached you. Take it in if unread:',
-      spellAction({ operation: 'perceive', args: { ...args, as: post.recipientKey }, absoluteLocation: true }, 'tool'),
+      toolInvocation('perceive', { location, as: post.recipientKey, ids }),
       'To reread the full activity:',
-      spellAction({ operation: 'history', args: { ...args, maxChars: Number.MAX_SAFE_INTEGER }, absoluteLocation: true }, 'tool'),
+      toolInvocation('history', { location, ids, maxChars: Number.MAX_SAFE_INTEGER }),
     ].join('\n');
     const current = () => !context.signal.aborted && Date.now() < context.deadline;
     let sdk: KeiyakuSdk, target: AkumaTarget, akuId: string;

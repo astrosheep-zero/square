@@ -1,7 +1,7 @@
 # Square and Participant API
 
 `Square` is the concrete resource shared by SDK, CLI, MCP and Pi; `square.ts` is the CLI
-entrypoint. `surfaces/operations.ts` declares and validates the shared operation inputs; `api/types.ts`
+entrypoint. `core/operation-inputs.ts` declares and validates the shared operation inputs; `api/types.ts`
 exports the SDK types. See
 [attention-primitive.md](attention-primitive.md) for audience computation and
 [delivery-primitives.md](delivery-primitives.md) for the host delivery ledger.

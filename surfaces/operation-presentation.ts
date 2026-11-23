@@ -13,7 +13,8 @@ import {
 } from './presentation.js';
 import { formatDuration, formatRelativeTime, formatTimestamp } from '../core/time.js';
 import { style } from './tty-style.js';
-import type { AttentionInput, OperationBinding } from './operations.js';
+import type { AttentionInput } from '../core/operation-inputs.js';
+import type { OperationBinding } from './operations.js';
 import { renderHistoryResult } from './history-presentation.js';
 import { renderPerceiveOutcome, renderWatchForceTakeover, renderWatchReplaceMissing } from './perceive-presentation.js';
 

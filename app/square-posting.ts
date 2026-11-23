@@ -12,7 +12,7 @@ import type { SquareArtifactPort, SquarePost, SquareRead } from '../core/ports.j
 import { readSquareHostObservations, seatMuteKey, deliverySessionsForSeats } from './square-notification-mute.js';
 import type { OperationControl } from '../core/neutral.js';
 import { formatActivityId } from '../core/square-core.js';
-import { spellAction } from '../surfaces/operations.js';
+import { toolInvocation } from '../core/operation-inputs.js';
 
 /** Host dispatch capability bound once at the API composition root. */
 export type DispatchPostedCard = (ledger: DeliveryLedger, owner: Owner, key: DeliveryKey, options: {
@@ -116,8 +116,7 @@ function renderPost(location: string, post: SquarePost, replyTo?: string): { tex
     ...(remaining > 0 ? [`truncated="${remaining} more chars"`] : []),
   ];
   const text = [`<square-activity ${attributes.join(' ')}>`, `${activityDescription(post.from, route)}.`, '', escapeSquareTags(preview),
-    ...(full ? [] : ['', 'Find the activity in history:', spellAction({ operation: 'history', absoluteLocation: true,
-      args: { location, ids: [ref], maxChars: rawBody.length } }, 'tool').replaceAll('<', '\\u003c')]),
+    ...(full ? [] : ['', 'Find the activity in history:', toolInvocation('history', { location, ids: [ref], maxChars: rawBody.length }).replaceAll('<', '\\u003c')]),
     '</square-activity>'].join('\n');
   return { text, full, details: { kind: 'presentation', origin, ref, author: post.from, label: 'express',
     body: rawBody, at: post.at, reach: route, recipient: post.recipient, ...(replyTo === undefined ? {} : { replyTo }) } };

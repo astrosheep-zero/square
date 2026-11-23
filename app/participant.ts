@@ -14,7 +14,7 @@ import { assertCurrentSeat } from '../core/square-domain.js';
 import { participantIdentity } from '../core/square-values.js';
 import { parseRequiredActivityId, toPerceivedActivity, toPublicActivity, type Activity, type PerceivedActivity } from '../core/observations.js';
 import { muteDeadline, parseDurationMs } from '../core/time.js';
-import { parseOperation, type AttentionInput, type ExpressInput, type ExpressOptions, type MuteInput, type PerceiveOptions } from '../surfaces/operations.js';
+import { parseOperation, type AttentionInput, type ExpressInput, type ExpressOptions, type MuteInput, type PerceiveOptions } from '../core/operation-inputs.js';
 import { DeliveryLedger } from '../ledger/delivery-ledger.js';
 import { seatMuteId, seatMutePrefix } from './square-notification-mute.js';
 import { flush, reconcile, type SquareResource } from './square-posting.js';

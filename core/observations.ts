@@ -6,7 +6,7 @@ import type { ActivityFilter, SquareRead } from './ports.js';
 import { inSquareCount } from './runtime.js';
 import { historySearch } from './search.js';
 import { parseTimeOrRelative } from './time.js';
-import type { HistoryQuery } from '../surfaces/operations.js';
+import type { HistoryQuery } from './operation-inputs.js';
 
 export interface Activity {
   readonly id: ActivityId;

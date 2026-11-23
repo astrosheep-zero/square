@@ -15,7 +15,7 @@ import { canonicalPath } from '../storage/canonical-path.js';
 import { SeatedParticipant, type Participant } from './participant.js';
 import { ensureInitialDeliverySession, flush, reconcile, withHostPresence, type DispatchPostedCard, type SquareResource } from './square-posting.js';
 import { streamSquare, type StreamOptions, type StreamRecord } from './stream.js';
-import { parseOperation, type HistoryQuery, type JoinOptions, type StatusOptions } from '../surfaces/operations.js';
+import { parseOperation, type HistoryQuery, type JoinOptions, type StatusOptions } from '../core/operation-inputs.js';
 
 export interface HeldSeat { readonly name: string; readonly generation: string }
 export interface OpenOptions {

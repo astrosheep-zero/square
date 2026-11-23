@@ -5,7 +5,7 @@ import { DeliveryLedger, deliveryLedgerLocation } from '../ledger/delivery-ledge
 import { openReadOnlyDeliveryLedger } from '../ledger/delivery-lifetime.js';
 import { dispatchPostedCard } from '../hosts/notifications.js';
 import { muteDeadline, parseDurationMs } from '../core/time.js';
-import { parseOperation, type MuteInput } from '../surfaces/operations.js';
+import { parseOperation, type MuteInput } from '../core/operation-inputs.js';
 import type { OperationControl, Participant, SquareAtInput, SquareBuildInput } from './types.js';
 
 export { migrateDeliveryLedger, type MigrateDeliveryLedgerInput, type MigrateDeliveryLedgerResult } from '../ledger/delivery-ledger.js';

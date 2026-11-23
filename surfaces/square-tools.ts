@@ -1,7 +1,8 @@
 import * as api from '../api/square-api.js';
 import { isSquareError, SquareError } from '../core/model.js';
 import type { OperationControl, OperationError } from '../api/types.js';
-import { OPERATIONS, issueText, type Input, type OperationBinding } from './operations.js';
+import { issueText } from '../core/operation-inputs.js';
+import { OPERATIONS, type Input, type OperationBinding } from './operations.js';
 import { operationText, renderFailureLines, type FailureReport } from './operation-presentation.js';
 
 export const SQUARE_TOOLS = OPERATIONS.map(operation => ({

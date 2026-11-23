@@ -1,5 +1,6 @@
 import * as api from '../api/square-api.js';
-import { type CLI_OPERATIONS, issueText, type Input, type OperationBinding } from '../surfaces/operations.js';
+import { issueText } from '../core/operation-inputs.js';
+import type { CLI_OPERATIONS, Input, OperationBinding } from '../surfaces/operations.js';
 import { spellAction } from '../surfaces/presentation.js';
 import { operationText } from '../surfaces/operation-presentation.js';
 import { type CommandSpec, commandClock, commandIdentity, fail, readStdin } from './context.js';

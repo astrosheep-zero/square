@@ -21,7 +21,7 @@ A shared server needs call-local proof and never derives an Akuma from OpenCode 
 
 Claude's bundled plugin configures this server automatically. Its native mod wraps Square's `tool.call` events to capture live session/cwd/subagent attribution in a call-local association keyed by Claude's `claudecode/toolUseId` metadata, not AI-visible arguments. The wrapper cleans the exact association in `finally`; see [Claude call identity](claude-native.md). Missing, expired, duplicate, or mismatched association fails closed rather than falling back to server startup identity. A valid association without proven actor evidence continues to use its native Claude owner.
 
-Operation definitions in `surfaces/operations.ts` supply CLI help, CLI/MCP/[Pi](pi-tools.md) inputs, and SDK validation. All callers use the [same concrete resource API](square-api.md).
+Operation definitions in `surfaces/operations.ts` supply CLI help and CLI/MCP/[Pi](pi-tools.md) inputs using the shared schemas in `core/operation-inputs.ts`, which also owns SDK validation. All callers use the [same concrete resource API](square-api.md).
 
 Arguments are validated before opening a call-scoped `Square.at` connection. The connection closes when the operation finishes, including failure and cancellation. Discovery and ledger-wide `mute` do not open a square.
 

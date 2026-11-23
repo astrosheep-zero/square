@@ -9,7 +9,7 @@ export type { ParticipantPresence, ParticipantSummary } from '../core/decisions.
 export type { Activity, PerceivedActivity, EntryPresentation, PresenceClassification,
   StatusResult, ParticipantsResult, HistoryContinuation } from '../core/observations.js';
 export type { PerceiveReason } from '../core/perceive-decisions.js';
-export type { AttentionInput, DiscoveryOptions, ExpressOptions, ExpressInput, HistoryQuery, JoinOptions, MuteInput, PerceiveOptions, StatusOptions } from '../surfaces/operations.js';
+export type { AttentionInput, DiscoveryOptions, ExpressOptions, ExpressInput, HistoryQuery, JoinOptions, MuteInput, PerceiveOptions, StatusOptions } from '../core/operation-inputs.js';
 export type { AckResult, ExpressResult, ListenerChangeResult, ListeningResult, MuteResult, LifecycleResult,
   PendingOptions, PendingResult, PerceiveResult, Participant, ExpressContext } from '../app/participant.js';
 export type { HeldSeat, OpenOptions, SquareAtInput, SquareBuildInput, JoinResult, RecoveryResult, HistoryResult } from '../app/square.js';

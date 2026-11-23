@@ -1,11 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod/v4';
-import { parseActivityId, PAGE_CAP, ACTIVITY_ID_PATTERN, DEFAULT_LIST_DEPTH, DEFAULT_LIST_LIMIT, MAX_LIST_DEPTH,
-  PERCEIVE_DEFAULT_LIMIT, type ActivityId } from '../core/square-core.js';
-import { parseDurationMs, parseTimeOrRelative } from '../core/time.js';
-import { compileSearchPattern, historySearch } from '../core/search.js';
-import { SquareError, parseParticipantList, type ActivityMetadata, type Owner, type WakeAddress } from '../core/model.js';
+import { DEFAULT_LIST_DEPTH, DEFAULT_LIST_LIMIT, PERCEIVE_DEFAULT_LIMIT } from '../core/square-core.js';
+import { attentionShape, body, checkReplace, expressShape, historyShape, issueText, joinShape, listShape, location, muteShape,
+  participant, perceiveShape, requiredParticipant, toolInvocation, viewer, type AttentionInput, type ExpressInput, type HistoryQuery, type PerceiveOptions } from '../core/operation-inputs.js';
+import { parseParticipantList, type Owner, type WakeAddress } from '../core/model.js';
 import type { Square } from '../api/square-api.js';
 import type { DiscoveryResult, ExpressResult, HistoryResult, JoinResult, LifecycleResult, ListenerChangeResult, MuteResult, OperationControl, PerceiveResult, StatusResult } from '../api/types.js';
 
@@ -69,100 +68,9 @@ interface Operation extends CliHints {
   run(binding: OperationBinding, args: Input, control: OperationControl): Promise<string>;
 }
 
-const location = z.string().describe('Path to the .square file.');
-const requiredParticipant = z.string().describe('Your name in the square.');
-const participant = requiredParticipant.optional().describe(requiredParticipant.description!);
-const activityId = z.string().regex(ACTIVITY_ID_PATTERN, { error: 'must be an activity id like act/12', abort: true })
-  .refine(id => parseActivityId(id) !== undefined, 'must be a representable activity id') as z.ZodType<ActivityId>;
-const from = z.array(z.string()).optional().describe('Only what these participants said.');
 const fromHint = { split: parseParticipantList, bare: true, value: 'names' };
-const body = z.string().describe('What you say or do. Markdown works; *asterisks* mark an action.');
 const bodyHint = { positional: true, value: 'body | -' };
-const ids = z.array(activityId).optional().describe('Only these activity IDs, like ["act/12"].');
 const idHint = { value: 'activity-ids', bare: true };
-const pageLimit = z.number().int().min(1).max(PAGE_CAP).optional();
-const duration = z.string().refine(value => parseDurationMs(value) !== undefined, 'must be a positive duration like 30s');
-const listShape = {
-  depth: z.number().int().min(0).max(MAX_LIST_DEPTH).optional().describe('How many directory levels to explore (default 4).'),
-  limit: pageLimit.describe('How many squares per page (default 20).'),
-  after: z.string().min(1).refine(value => !path.isAbsolute(value), 'must be a relative path').optional().describe('Continue after this relative square path.'),
-};
-const viewer = z.string().optional().describe('Whose listening to show.');
-const doneBody = z.literal('').optional();
-const joinShape = { takeover: z.boolean().optional().describe('Claim this name from another session.') };
-const expressShape = {
-  body,
-  mentions: z.array(z.string()).optional().describe('Who you are speaking to. If omitted, standing @names in the body count; an empty list leaves them literal.'),
-  reply: activityId.optional().describe('The activity you are answering, like act/12.'),
-  force: z.boolean().optional().describe('Speak now, even if something reached you that you have not perceived yet.'),
-  noWait: z.boolean().optional().describe('If you are speaking too fast, return at once instead of waiting.'),
-};
-const perceiveShape = {
-  ids, from,
-  mention: z.boolean().optional().describe('Only what was addressed to you.'),
-  limit: pageLimit.describe('At most this many at once (default 10).'),
-  wait: duration.optional().describe('If nothing matches, wait this long for new activity, like 30s.'),
-  replace: z.boolean().optional().describe('Replace another perceive already waiting for this participant.'),
-};
-function checkReplace(input: { replace?: boolean; wait?: string }, issue: (field: string, message: string) => void) {
-  if (input.replace !== undefined && input.wait === undefined) issue('replace', 'requires wait');
-}
-const bound = z.string().refine(text => parseActivityId(text) !== undefined || Number.isFinite(parseTimeOrRelative(text, 0)),
-  'must be an activity ID, ISO timestamp or relative duration').optional();
-const historyShape = {
-  from, to: z.string().optional().describe('Only activity that reached this participant.'),
-  search: z.string().min(1).refine(value => {
-    const { text, mode } = historySearch(value);
-    try { compileSearchPattern(text, mode === 'literal'); return true; } catch { return false; }
-  }, 'must be valid search text or a /regular expression/').optional().describe('Match names, IDs or words literally, or wrap a regular expression in slashes.'),
-  ids,
-  after: bound.describe('Read forward after this activity ID, ISO timestamp or lookback duration.'),
-  before: bound.describe('Only activity before this activity ID, ISO timestamp or lookback duration.'),
-  context: z.number().int().min(0).max(PAGE_CAP).optional().describe('Activities before and after each match.'),
-  limit: pageLimit.describe('Matches per page (default 10); ignored with ids.'),
-  maxChars: z.number().int().min(0).optional().describe('Characters per body (default 1000).'),
-};
-const attentionShape = {
-  target: z.string().describe('The participant to turn toward or away from.'),
-  state: z.enum(['listen', 'ignore', 'neutral']).describe('Hear everything, hear nothing, or return to direct attention.'),
-};
-const muteShape = {
-  duration: z.string().refine(value => value === 'off' || parseDurationMs(value) !== undefined,
-    'must be a positive duration or off').describe('Pause for a duration like 30m, or use off to resume.'),
-};
-const sdkSchemas = {
-  list: z.strictObject({ ...listShape, owner: z.custom<Owner>().optional(), ledgerLocation: z.string().optional(), clock: z.custom<() => number>().optional() }),
-  status: z.strictObject({ viewer }),
-  done: z.strictObject({ body: doneBody }),
-  join: z.strictObject({ ...joinShape, owner: z.custom<Owner>(), wakeAddress: z.custom<WakeAddress>().optional() }),
-  express: z.strictObject({ ...expressShape, body: body.optional(), metadata: z.custom<ActivityMetadata>().optional() }),
-  perceive: z.strictObject(perceiveShape).superRefine((input, ctx) =>
-    checkReplace(input, (field, message) => ctx.addIssue({ code: 'custom', path: [field], message }))),
-  history: z.strictObject(historyShape),
-  attention: z.strictObject(attentionShape),
-  mute: z.strictObject(muteShape),
-};
-type SdkInput<K extends keyof typeof sdkSchemas> = z.output<(typeof sdkSchemas)[K]>;
-type ReadonlyInput<T> = { readonly [K in keyof T]: T[K] extends infer V ? V extends unknown[] ? Readonly<V> : V : never };
-export type DiscoveryOptions = Readonly<SdkInput<'list'>>;
-export type StatusOptions = Readonly<SdkInput<'status'>>;
-export type JoinOptions = SdkInput<'join'>;
-export type ExpressInput = ReadonlyInput<SdkInput<'express'>>;
-export type ExpressOptions = Omit<ExpressInput, 'body'>;
-export type PerceiveOptions = ReadonlyInput<SdkInput<'perceive'>>;
-export type HistoryQuery = ReadonlyInput<SdkInput<'history'>>;
-export type AttentionInput = SdkInput<'attention'>;
-export type MuteInput = SdkInput<'mute'>;
-
-export function parseOperation<K extends keyof typeof sdkSchemas>(operation: K, input: unknown): SdkInput<K> {
-  const result = sdkSchemas[operation].safeParse(input);
-  if (!result.success) {
-    if (operation === 'done' && result.error.issues.some(issue => issue.path[0] === 'body'))
-      throw new SquareError('invalid_args', 'done only leaves the square and does not accept a message; use express before leaving', { reason: 'invalid_done_body' });
-    throw new SquareError('invalid_args', issueText(result.error));
-  }
-  return result.data as SdkInput<K>;
-}
 
 function operation<S extends z.ZodRawShape, C extends z.ZodRawShape = {}>(
   name: string, summary: string, shape: S, hints: CliHints & {
@@ -197,20 +105,6 @@ async function inSquare(binding: OperationBinding, args: Coordinates, control: O
   if (trackLocation) binding.opened?.(square.location);
   try { return await work(square, binding.surface === 'cli' ? args.location! : square.location); }
   finally { await square.close(); }
-}
-
-export function issueText(error: z.ZodError): string {
-  return error.issues.map(issue => {
-    const field = issue.path.join('.');
-    switch (issue.code) {
-      case 'invalid_type': return `${field} must be ${issue.expected === 'int' ? 'an integer' : issue.expected === 'array' ? 'an array' : `a ${issue.expected}`}`;
-      case 'too_big': return `${field} must be at most ${issue.maximum}`;
-      case 'too_small': return `${field} must be at least ${issue.minimum}`;
-      case 'invalid_value': return `${field} must be one of ${issue.values.join(', ')}`;
-      case 'unrecognized_keys': return `unknown ${issue.keys.length === 1 ? 'field' : 'fields'}: ${issue.keys.join(', ')}`;
-      default: return `${field} ${issue.message}`;
-    }
-  }).join('\n');
 }
 
 type ExpressionInput = Coordinates & Omit<ExpressInput, 'metadata' | 'reply'> & { metadata?: string; reply?: string };
@@ -318,11 +212,8 @@ export function spellField(operation: string, field: string, surface: Presentati
 
 export function spellAction({ operation, args, owner, help, absoluteLocation }: Suggestion, surface: PresentationSurface = 'cli'): string {
   const { location, as, ...options } = args ?? {};
-  if (surface === 'tool') {
-    if (help) return ''; // Tools expose their help in the schema, not as an invocation.
-    const clean = { location: typeof location === 'string' && !absoluteLocation ? displayPath(location) : location, as, ...options };
-    return Object.values(clean).every(value => value === undefined) ? operation : `${operation} ${JSON.stringify(clean)}`;
-  }
+  if (surface === 'tool') return help ? '' // Tools expose their help in the schema, not as an invocation.
+    : toolInvocation(operation, { location: typeof location === 'string' && !absoluteLocation ? displayPath(location) : location, as, ...options });
   const cli = CLI_OPERATIONS.find(cli => (cli.operation.name === operation || cli.names.includes(operation))
     && Object.entries(cli.fixed ?? {}).every(([key, value]) => options[key] === value));
   const prefix = ['square'];

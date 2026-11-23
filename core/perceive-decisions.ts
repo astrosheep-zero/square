@@ -5,7 +5,7 @@ import { resolveKnownName } from './decisions.js';
 import type { DirectedFilter, SquareRead, SquareWrite } from './ports.js';
 import { toPerceivedActivity, type PerceivedActivity } from './observations.js';
 import { perceiveHint } from './hints.js';
-import type { PerceiveOptions } from '../surfaces/operations.js';
+import type { PerceiveOptions } from './operation-inputs.js';
 
 export type PerceiveReason = 'drained' | 'idle' | 'capped' | 'quorum' | 'replaced' | 'already-active';
 

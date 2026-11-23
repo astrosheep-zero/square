@@ -30,14 +30,7 @@ const ledgerDriver = 'ledger/delivery-ledger-sqlite.ts';
 const sqliteOwners = new Set([ledgerDriver, 'packages/agent-delivery/src/file-lock.ts']);
 const artifactOwner = 'artifact/artifact.ts', artifactPort = 'core/ports.ts';
 const privateApp = new Set(['app/square.ts', 'app/participant.ts']);
-const operationTable = 'surfaces/operations.ts';
-const sharedInput = ({ from, target, typeOnly, names }) => target === operationTable && (
-  (typeOnly && ['core/observations.ts', 'core/perceive-decisions.ts', 'api/types.ts'].includes(from)) ||
-  (['api/square-api.ts', 'app/list.ts'].includes(from) || privateApp.has(from)) && names.every(name => name === 'parseOperation' || typeOnly)
-);
 const artifactPortOwners = new Set([artifactOwner, ...privateApp, 'app/square-posting.ts', 'app/stream.ts', 'core/wakes.ts']);
-const deliverySuggestion = ({ from, target, names }) => target === operationTable
-  && ['app/square-posting.ts', 'hosts/keiyaku-delivery.ts'].includes(from) && names.join() === 'spellAction';
 function layer(file) {
   if (entryFiles.has(file)) return 'entry';
   if (file.startsWith('plugins/paseo/shared/')) return 'paseo-shared';
@@ -161,7 +154,7 @@ function violations(sources, pkg = manifest) {
     const { from, target, specifier, names } = edge, origin = layer(from), destination = layer(target ?? '');
     if (specifier === undefined) issue('dynamic-import', edge);
     if (target === undefined) issue('unresolved-import', edge);
-    if (target && origin && destination && !sharedInput(edge) && !deliverySuggestion(edge) && ((!allowed[origin].includes('*') && !allowed[origin].includes(destination)) || (origin === 'entry' && destination === 'paseo-plugin'))) issue('layer-direction', edge);
+    if (target && origin && destination && ((!allowed[origin].includes('*') && !allowed[origin].includes(destination)) || (origin === 'entry' && destination === 'paseo-plugin'))) issue('layer-direction', edge);
     if (['core/receive.ts', 'core/attention.ts'].includes(from)) issue('leaf-import', edge);
     if (sqlite.test(specifier) && !sqlOwner(from)) issue('raw-sqlite', edge);
     if (origin === 'square-plugin' && from.startsWith('plugins/pi/') && /^(?:node:)?fs(?:\/promises)?$|^(?:node:|bun:)sqlite$/.test(specifier)) issue('pi-raw', edge);
@@ -177,10 +170,6 @@ function violations(sources, pkg = manifest) {
   }
   const sdk = new Set([sdkEntry, 'api/square-api.ts', ...['default', 'types'].map((kind) => packageTarget(pkg.exports?.['.'], kind)).filter(Boolean).map((target) => matchSource(target, sources)).filter(Boolean)]);
   for (const file of sdk) for (const edge of outgoing.get(file) ?? []) if (edge.target) {
-    if (sharedInput(edge) || deliverySuggestion(edge)) {
-      sdk.add(edge.target);
-      continue;
-    }
     if (['cli', 'surfaces'].includes(layer(edge.target)) || edge.target === cliEntry) issue('sdk-direction', edge);
     else sdk.add(edge.target);
   }
@@ -189,7 +178,7 @@ function violations(sources, pkg = manifest) {
     if (visits.get(file) === 'active') { issue('cycle', { from: file }); return; }
     if (visits.has(file)) return;
     visits.set(file, 'active');
-    for (const edge of outgoing.get(file) ?? []) if (edge.target && !(file === operationTable && edge.typeOnly)) visit(edge.target);
+    for (const edge of outgoing.get(file) ?? []) if (edge.target) visit(edge.target);
     visits.set(file, 'done');
   }
   for (const file of sources.keys()) visit(file);
