@@ -85,7 +85,7 @@ test('a plain terminal speaks under its local owner and explicit owner survives 
   const artifact = createArtifactPort(file);
   try {
     const seat = (await artifact.read(facts => facts.seat('me'))).value;
-    assert.equal(seat.owner, localUserOwner());
+    assert.equal(seat.owner, localUserOwner(env.USER || env.LOGNAME));
     assert.equal(seat.wakeAddress, undefined);
   } finally { await artifact.close(); }
   const explicit = "script:owner's copy";

@@ -11,7 +11,7 @@ import { helpRequest, renderSubcommandHelp } from '../dist/cli/help.js';
 import { ROOT, persistSquare, run, tempSquare, testEnv, withName, withPath } from './square-cli-helpers.js';
 
 test('CLI uses a harness identity only when the environment carries one', () => {
-  assert.deepEqual(commandIdentity({}), { owner: localUserOwner() });
+  assert.deepEqual(commandIdentity({ USER: 'terminal' }), { owner: localUserOwner('terminal') });
   assert.deepEqual(commandIdentity({ CODEX_THREAD_ID: ' body ' }).owner, harnessOwner({ channel: 'codex', session: 'body' }));
 });
 

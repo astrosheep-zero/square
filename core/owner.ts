@@ -54,8 +54,8 @@ export function decodeHarnessOwner(owner: Owner): HarnessCoordinate | undefined 
   }
 }
 
-export function localUserOwner(): Owner {
-  return validateOwner(`user:${os.userInfo().username}@${os.hostname()}`);
+export function localUserOwner(login = os.userInfo().username): Owner {
+  return validateOwner(`user:${login}@${os.hostname()}`);
 }
 
 function nonempty(value: string, label: string): string {

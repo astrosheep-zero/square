@@ -146,7 +146,7 @@ export function nativeCommandIdentity(env: NodeJS.ProcessEnv): { owner: Owner; w
   const native = selected.filter(source => source.channel !== 'paseo');
   if (native.length > 1) throw new Error('Multiple harness execution coordinates are present; select one explicit owner.');
   const coordinate = native[0] ?? selected[0];
-  if (coordinate === undefined) return { owner: localUserOwner() };
+  if (coordinate === undefined) return { owner: localUserOwner(env.USER || env.LOGNAME) };
   const owner = harnessOwner({ channel: coordinate.channel, session: coordinate.session });
   const wakeAddress = coordinate.channel === 'codex' ? { ...codexWakeAddress(coordinate.session, env), kind: 'codex-queue' as const }
     : coordinate.channel === 'paseo' ? { kind: 'paseo' as const, address: { agentId: coordinate.session } } : undefined;
